@@ -20,8 +20,8 @@ services:
       POSTGRES_DB: ${POSTGRES_DB}
     volumes:
       - pg_data:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
+    # Postgres NÃO é exposto no host — acesso apenas via rede interna do Compose.
+    # Para acesso pontual via psql, use `docker compose exec postgres psql -U $POSTGRES_USER`.
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 5s
@@ -90,6 +90,11 @@ services:
       LOGWATCH_SERVER_NAME: local-host
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
+    # GID do grupo `docker` do host. Descubra com:
+    #   stat -c '%g' /var/run/docker.sock
+    # e exporte como DOCKER_GID antes de subir o agent.
+    group_add:
+      - "${DOCKER_GID:-999}"
     depends_on:
       - backend
     profiles: ["agent"]

@@ -34,7 +34,7 @@ export class GithubClient {
 
   private async req(method: string, path: string, body?: any) {
     const res = await request(`${this.base}${path}`, {
-      method,
+      method: method as any,
       headers: this.headers(),
       body: body ? JSON.stringify(body) : undefined,
     });

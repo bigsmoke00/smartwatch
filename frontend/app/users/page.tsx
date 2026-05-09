@@ -13,9 +13,13 @@ import { Trash2 } from 'lucide-react';
 interface UserRow {
   id: string;
   email: string;
-  role: 'admin' | 'viewer';
+  role: 'admin' | 'operator' | 'viewer';
   active: boolean;
   createdAt: string;
+}
+interface RoleSummary {
+  id: string;
+  name: string;
 }
 
 export default function UsersPage() {

@@ -22,7 +22,8 @@
 import Docker from 'dockerode';
 import { config } from './config.js';
 import { attachLogs, flushLogs } from './logs.js';
-import { pushMetrics } from './metrics.js';
+import { pushMetrics, warmup as metricsWarmup } from './metrics.js';
+import { startControlChannel } from './control.js';
 import { pushContainerInventory } from './inventory.js';
 
 const docker = new Docker({ socketPath: '/var/run/docker.sock' });
@@ -65,8 +66,14 @@ async function main() {
     `[agent] starting v${config.agentVersion} · server=${config.serverName} · base=${config.ingestUrl}`,
   );
 
+  // Warm-up: estabelece baseline de contadores (rede, CPU)
+  // pra que rxBps/txBps/cpuPct não venham 0 na primeira amostra real.
+  await metricsWarmup();
+  await new Promise((r) => setTimeout(r, 1000));
+
   await discover();
   watchEvents();
+  startControlChannel(docker);
 
   setInterval(flushLogs, config.flushIntervalMs).unref();
   setInterval(discover, 30_000).unref();

@@ -9,6 +9,7 @@ import { DbModule } from './db/db.module';
 import { AuthModule } from './auth/auth.module';
 import { AuditModule } from './audit/audit.module';
 import { UsersModule } from './users/users.module';
+import { RolesModule } from './roles/roles.module';
 import { ServersModule } from './servers/servers.module';
 import { LogsModule } from './logs/logs.module';
 import { MetricsModule } from './metrics/metrics.module';
@@ -24,6 +25,7 @@ import { TerraformModule } from './terraform/terraform.module';
 import { CredentialRotationModule } from './credential-rotation/credential-rotation.module';
 import { SloModule } from './slo/slo.module';
 import { GithubActionsModule } from './github-actions/github-actions.module';
+import { DockerManagerModule } from './docker-manager/docker-manager.module';
 import { HealthModule } from './health/health.module';
 import { BootstrapService } from './bootstrap.service';
 
@@ -59,6 +61,7 @@ import { BootstrapService } from './bootstrap.service';
     AuditModule,
     AuthModule,
     UsersModule,
+    RolesModule,
     ServersModule,
     LogsModule,
     MetricsModule,
@@ -74,6 +77,7 @@ import { BootstrapService } from './bootstrap.service';
     CredentialRotationModule,
     SloModule,
     GithubActionsModule,
+    DockerManagerModule,
     HealthModule,
   ],
   providers: [

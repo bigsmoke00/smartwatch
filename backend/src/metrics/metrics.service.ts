@@ -2,17 +2,32 @@ import { Inject, Injectable } from '@nestjs/common';
 import { Pool } from 'pg';
 import { PG_POOL } from '../db/db.module';
 
+export interface HostDiskSample {
+  mount: string;
+  fs?: string;          // ext4, xfs, ...
+  type?: string;
+  used: number;
+  total: number;
+  usedPct: number;
+}
+export interface HostNetSample {
+  iface: string;
+  rxBps: number;        // throughput por segundo
+  txBps: number;
+  rxBytes?: number;     // contador acumulado
+  txBytes?: number;
+}
 export interface HostMetricSample {
   ts?: string;
   cpuPct?: number;
   memUsedBytes?: number;
   memTotalBytes?: number;
   swapUsedBytes?: number;
-  load1?: number;
+  load1?: number;       // os.loadavg() — não é CPU%
   load5?: number;
   load15?: number;
-  disk?: { mount: string; used: number; total: number; usedPct: number }[];
-  net?: { iface: string; rxBps: number; txBps: number }[];
+  disk?: HostDiskSample[];
+  net?: HostNetSample[];
   procsTotal?: number;
   procsRunning?: number;
   uptimeSec?: number;

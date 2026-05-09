@@ -24,7 +24,7 @@ export class SemaphoreClient {
   private async req(method: string, path: string, body?: any): Promise<any> {
     const url = `${this.base}/api${path}`;
     const res = await request(url, {
-      method,
+      method: method as any,
       headers: this.headers(),
       body: body ? JSON.stringify(body) : undefined,
     });

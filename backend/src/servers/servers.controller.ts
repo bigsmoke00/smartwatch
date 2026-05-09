@@ -33,8 +33,22 @@ class CreateServerDto {
   @IsOptional() @IsArray() tags?: string[];
   @IsOptional() @IsObject() labels?: Record<string, any>;
 }
-class UpdateServerDto extends CreateServerDto {
-  @IsOptional() @IsString() override name?: string;
+/**
+ * UpdateServerDto NÃO herda de CreateServerDto — todos os campos são opcionais
+ * de forma independente. Sem herança, evita conflitos com class-validator e
+ * mantém a tipagem clara para o TypeScript.
+ */
+class UpdateServerDto {
+  @IsOptional() @IsString() @MaxLength(120) name?: string;
+  @IsOptional() @IsString() description?: string;
+  @IsOptional() @IsString() hostname?: string;
+  @IsOptional() @IsIn(['aws', 'oci', 'gcp', 'azure', 'onprem', 'other']) cloud?: string;
+  @IsOptional() @IsString() cloudRegion?: string;
+  @IsOptional() @IsString() cloudAccount?: string;
+  @IsOptional() @IsString() cloudInstanceId?: string;
+  @IsOptional() @IsString() cloudAz?: string;
+  @IsOptional() @IsArray() tags?: string[];
+  @IsOptional() @IsObject() labels?: Record<string, any>;
 }
 class CreateApiKeyDto {
   @IsOptional() @IsArray() ipAllowlist?: string[];

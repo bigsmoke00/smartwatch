@@ -64,7 +64,7 @@ function LogsPageInner() {
 
   useEffect(() => {
     apiFetch<ServerRow[]>('/servers')
-      .then((rows) => setServers(safeArray(rows)))
+      .then((rows) => setServers(safeArray<ServerRow>(rows)))
       .catch(() => setServers([]));
   }, []);
 
@@ -81,7 +81,7 @@ function LogsPageInner() {
       const data = await apiFetch<{ hits: LogHit[]; total: number }>(
         `/logs?${qp.toString()}`,
       );
-      setHits(safeArray(data?.hits));
+      setHits(safeArray<LogHit>(data?.hits));
       setTotal(data?.total ?? 0);
     } catch {
       setHits([]);
@@ -144,7 +144,7 @@ function LogsPageInner() {
     });
 
     s.on('logs', (batch: LogHit[]) => {
-      let filtered = safeArray(batch);
+      let filtered = safeArray<LogHit>(batch);
       if (levels.length)
         filtered = filtered.filter((d) => levels.includes(d.level || 'unknown'));
       if (q.trim()) {
@@ -166,8 +166,10 @@ function LogsPageInner() {
 
   const sortedHits = useMemo(
     () =>
-      safeArray(hits)
+      safeArray<LogHit>(hits)
         .slice()
+        // Backend retorna o campo `ts` (TimescaleDB), NÃO `@timestamp`.
+        // Manter consistência aqui evita regressão silenciosa.
         .sort((a, b) => (b?.ts ?? '').localeCompare(a?.ts ?? '')),
     [hits],
   );
@@ -207,7 +209,7 @@ function LogsPageInner() {
                 className="w-full rounded-md bg-panel2 border border-border px-3 py-2 text-sm"
               >
                 <option value="">Todos</option>
-                {safeArray(servers).map((s) => (
+                {safeArray<ServerRow>(servers).map((s) => (
                   <option key={s.id} value={s.id}>{s.name}</option>
                 ))}
               </select>
