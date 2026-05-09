@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Badge } from '@/components/ui/Badge';
 import { apiFetch } from '@/lib/api';
-import { fmtTime } from '@/lib/utils';
+import { fmtTime, safeArray } from '@/lib/utils';
 
 interface Rule {
   id: string;
@@ -36,9 +36,20 @@ export default function AlertsPage() {
   const [showNew, setShowNew] = useState(false);
 
   async function load() {
-    setRules(await apiFetch('/alerts/rules'));
-    setChannels(await apiFetch('/notifications/channels'));
-    setEvents(await apiFetch('/alerts/events'));
+    try {
+      const [r, c, e] = await Promise.all([
+        apiFetch<Rule[]>('/alerts/rules').catch(() => []),
+        apiFetch<Channel[]>('/notifications/channels').catch(() => []),
+        apiFetch<any[]>('/alerts/events').catch(() => []),
+      ]);
+      setRules(safeArray<Rule>(r));
+      setChannels(safeArray<Channel>(c));
+      setEvents(safeArray<any>(e));
+    } catch {
+      setRules([]);
+      setChannels([]);
+      setEvents([]);
+    }
   }
   useEffect(() => {
     load();
@@ -70,7 +81,7 @@ export default function AlertsPage() {
               </tr>
             </thead>
             <tbody>
-              {rules.map((r) => (
+              {safeArray<Rule>(rules).map((r) => (
                 <tr key={r.id} className="border-t border-border align-top">
                   <td className="px-3 py-2 font-medium">{r.name}</td>
                   <td className="px-3 py-2">
@@ -119,7 +130,7 @@ export default function AlertsPage() {
               </tr>
             </thead>
             <tbody>
-              {events.map((e) => (
+              {safeArray<any>(events).map((e) => (
                 <tr key={e.id} className="border-t border-border">
                   <td className="px-3 py-2 text-xs text-muted">{fmtTime(e.ts)}</td>
                   <td className="px-3 py-2">{e.rule_name}</td>
@@ -216,7 +227,7 @@ function NewRuleForm({
       <div>
         <label className="text-xs text-muted">Canais</label>
         <div className="flex flex-wrap gap-2 mt-1">
-          {channels.map((c) => (
+          {safeArray<Channel>(channels).map((c) => (
             <button
               key={c.id}
               onClick={() =>

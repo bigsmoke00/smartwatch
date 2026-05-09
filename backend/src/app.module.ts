@@ -19,6 +19,11 @@ import { InventoryModule } from './inventory/inventory.module';
 import { PatroniModule } from './patroni/patroni.module';
 import { SecretsModule } from './secrets/secrets.module';
 import { SavedQueriesModule } from './saved-queries/saved-queries.module';
+import { FinopsModule } from './finops/finops.module';
+import { TerraformModule } from './terraform/terraform.module';
+import { CredentialRotationModule } from './credential-rotation/credential-rotation.module';
+import { SloModule } from './slo/slo.module';
+import { GithubActionsModule } from './github-actions/github-actions.module';
 import { HealthModule } from './health/health.module';
 import { BootstrapService } from './bootstrap.service';
 
@@ -64,6 +69,11 @@ import { BootstrapService } from './bootstrap.service';
     PatroniModule,
     SecretsModule,
     SavedQueriesModule,
+    FinopsModule,
+    TerraformModule,
+    CredentialRotationModule,
+    SloModule,
+    GithubActionsModule,
     HealthModule,
   ],
   providers: [

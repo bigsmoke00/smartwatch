@@ -1,14 +1,24 @@
 'use client';
 
-import { useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { Suspense, useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { Auth } from '@/lib/api';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Card } from '@/components/ui/Card';
 
 export default function LoginPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen" />}>
+      <LoginInner />
+    </Suspense>
+  );
+}
+
+function LoginInner() {
   const router = useRouter();
+  const params = useSearchParams();
+  const next = params?.get('next') || '/';
   const [email, setEmail] = useState('admin@logwatch.local');
   const [password, setPassword] = useState('');
   const [totp, setTotp] = useState('');
@@ -22,7 +32,7 @@ export default function LoginPage() {
     setLoading(true);
     try {
       await Auth.login(email, password, totp || undefined);
-      router.replace('/');
+      router.replace(next.startsWith('/') ? next : '/');
     } catch (err: any) {
       const msg = err?.payload?.message || 'Falha no login';
       if (/MFA|totp/i.test(msg)) setNeedsMfa(true);

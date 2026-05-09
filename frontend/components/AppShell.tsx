@@ -17,6 +17,11 @@ import {
   Settings,
   Container,
   Gauge,
+  DollarSign,
+  GitBranch,
+  KeyRound,
+  Target,
+  GitPullRequestArrow,
 } from 'lucide-react';
 import { Auth } from '@/lib/api';
 import { cn } from '@/lib/utils';
@@ -60,7 +65,17 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       title: 'Operações',
       items: [
         { href: '/automation', label: 'Automação', icon: PlayCircle },
+        { href: '/terraform', label: 'Terraform CP', icon: GitBranch },
+        { href: '/pipelines', label: 'Pipelines (GH Actions)', icon: GitPullRequestArrow },
         { href: '/audit', label: 'Audit log', icon: History, admin: true },
+      ],
+    },
+    {
+      title: 'Cloud',
+      items: [
+        { href: '/finops', label: 'FinOps', icon: DollarSign },
+        { href: '/slo', label: 'SLO / Error budget', icon: Target },
+        { href: '/credential-rotations', label: 'Rotação de credenciais', icon: KeyRound, admin: true },
       ],
     },
     {

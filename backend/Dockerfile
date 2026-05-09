@@ -10,6 +10,14 @@ RUN npm run build && npm prune --omit=dev
 FROM node:20-alpine AS runner
 WORKDIR /app
 ENV NODE_ENV=production
+
+# git + terraform (para o Terraform Control Plane)
+RUN apk add --no-cache git curl ca-certificates \
+ && curl -fsSL https://releases.hashicorp.com/terraform/1.9.5/terraform_1.9.5_linux_amd64.zip -o /tmp/tf.zip \
+ && unzip /tmp/tf.zip -d /usr/local/bin/ \
+ && rm /tmp/tf.zip \
+ && terraform -version
+
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/dist ./dist
 COPY package*.json ./

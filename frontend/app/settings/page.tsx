@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Badge } from '@/components/ui/Badge';
 import { apiFetch, Auth } from '@/lib/api';
-import { fmtTime } from '@/lib/utils';
+import { fmtTime, safeArray } from '@/lib/utils';
 
 interface Session {
   id: string;
@@ -27,8 +27,8 @@ export default function SettingsPage() {
   const [success, setSuccess] = useState<string | null>(null);
 
   async function load() {
-    setMe(await apiFetch('/auth/me'));
-    setSessions(await apiFetch<Session[]>('/auth/sessions'));
+    setMe(await apiFetch('/auth/me').catch(() => null));
+    setSessions(safeArray<Session>(await apiFetch<Session[]>('/auth/sessions').catch(() => [])));
   }
   useEffect(() => {
     load();
@@ -118,7 +118,7 @@ export default function SettingsPage() {
         <Card className="p-4">
           <h2 className="text-sm font-medium mb-3">Sessões ativas</h2>
           <div className="divide-y divide-border">
-            {sessions.map((s) => (
+            {safeArray<Session>(sessions).map((s) => (
               <div key={s.id} className="py-2 flex items-center justify-between text-sm">
                 <div>
                   <div className="text-text">{s.userAgent || '—'}</div>

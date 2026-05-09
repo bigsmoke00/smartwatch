@@ -9,7 +9,7 @@ import { Input } from '@/components/ui/Input';
 import { Badge } from '@/components/ui/Badge';
 import { apiFetch, Auth } from '@/lib/api';
 import { Plus, ChevronRight } from 'lucide-react';
-import { fmtTime } from '@/lib/utils';
+import { fmtTime, safeArray } from '@/lib/utils';
 
 interface ServerRow {
   id: string;
@@ -42,7 +42,7 @@ export default function ServersPage() {
     const qp = new URLSearchParams();
     if (filter.cloud) qp.set('cloud', filter.cloud);
     if (filter.tag) qp.set('tag', filter.tag);
-    setServers(await apiFetch<ServerRow[]>(`/servers?${qp.toString()}`));
+    setServers(safeArray<ServerRow>(await apiFetch<ServerRow[]>(`/servers?${qp.toString()}`).catch(() => [])));
   }
   useEffect(() => {
     load();
@@ -151,7 +151,7 @@ export default function ServersPage() {
           {servers.length === 0 && (
             <Card className="p-6 text-sm text-muted">Nenhum servidor para os filtros atuais.</Card>
           )}
-          {servers.map((s) => {
+          {safeArray<ServerRow>(servers).map((s) => {
             const recent =
               s.lastSeenAt &&
               Date.now() - new Date(s.lastSeenAt).getTime() < 5 * 60_000;
@@ -171,7 +171,7 @@ export default function ServersPage() {
                       {s.agentVersion ? `agent v${s.agentVersion}` : 'sem agent'}
                     </div>
                     <div className="flex items-center gap-2">
-                      {(s.tags || []).map((t) => (
+                      {safeArray<string>(s.tags).map((t) => (
                         <Badge key={t}>{t}</Badge>
                       ))}
                       <span className={recent ? 'text-success text-xs' : 'text-muted text-xs'}>

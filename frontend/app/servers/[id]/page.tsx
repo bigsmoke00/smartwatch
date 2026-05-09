@@ -9,7 +9,7 @@ import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';
 import { apiFetch, Auth } from '@/lib/api';
 import { Copy, Key, Trash2 } from 'lucide-react';
-import { fmtTime } from '@/lib/utils';
+import { fmtTime, safeArray } from '@/lib/utils';
 
 interface Detail {
   id: string;
@@ -124,12 +124,12 @@ export default function ServerDetail() {
           )}
 
           <div className="divide-y divide-border">
-            {detail.apiKeys.length === 0 && (
+            {safeArray(detail.apiKeys).length === 0 && (
               <div className="text-sm text-muted py-3">
                 Nenhuma chave criada. Gere uma para conectar o agent.
               </div>
             )}
-            {detail.apiKeys.map((k) => (
+            {safeArray<any>(detail.apiKeys).map((k) => (
               <div
                 key={k.id}
                 className="flex items-center justify-between py-2 text-sm"

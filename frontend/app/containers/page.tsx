@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { AppShell } from '@/components/AppShell';
 import { Card } from '@/components/ui/Card';
 import { apiFetch } from '@/lib/api';
+import { safeArray } from '@/lib/utils';
 import { Badge } from '@/components/ui/Badge';
 
 interface Row {
@@ -17,7 +18,10 @@ interface Row {
 export default function ContainersPage() {
   const [rows, setRows] = useState<Row[]>([]);
   useEffect(() => {
-    const load = () => apiFetch<Row[]>('/inventory/containers/fleet').then(setRows);
+    const load = () =>
+      apiFetch<Row[]>('/inventory/containers/fleet')
+        .then((r) => setRows(safeArray<Row>(r)))
+        .catch(() => setRows([]));
     load();
     const t = setInterval(load, 15_000);
     return () => clearInterval(t);
@@ -45,7 +49,7 @@ export default function ContainersPage() {
                   </td>
                 </tr>
               )}
-              {rows.map((r) => (
+              {safeArray<Row>(rows).map((r) => (
                 <tr key={r.serverId} className="border-t border-border">
                   <td className="px-3 py-2">{r.serverName}</td>
                   <td className="px-3 py-2 text-right">

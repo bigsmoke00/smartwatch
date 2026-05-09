@@ -6,7 +6,7 @@ import { Card } from '@/components/ui/Card';
 import { Input } from '@/components/ui/Input';
 import { Badge } from '@/components/ui/Badge';
 import { apiFetch } from '@/lib/api';
-import { fmtTime } from '@/lib/utils';
+import { fmtTime, safeArray } from '@/lib/utils';
 
 interface AuditRow {
   id: string;
@@ -29,8 +29,12 @@ export default function AuditPage() {
     const qp = new URLSearchParams();
     if (action) qp.set('action', action);
     if (actorId) qp.set('actorId', actorId);
-    const r = await apiFetch<{ hits: AuditRow[] }>(`/audit?${qp.toString()}`);
-    setRows(r.hits);
+    try {
+      const r = await apiFetch<{ hits: AuditRow[] }>(`/audit?${qp.toString()}`);
+      setRows(safeArray<AuditRow>(r?.hits));
+    } catch {
+      setRows([]);
+    }
   }
   useEffect(() => {
     load();
@@ -71,7 +75,7 @@ export default function AuditPage() {
               </tr>
             </thead>
             <tbody>
-              {rows.map((r) => (
+              {safeArray<AuditRow>(rows).map((r) => (
                 <tr key={r.id} className="border-t border-border align-top">
                   <td className="px-3 py-2 text-muted text-xs">{fmtTime(r.ts)}</td>
                   <td className="px-3 py-2">{r.actorEmail || '—'}</td>

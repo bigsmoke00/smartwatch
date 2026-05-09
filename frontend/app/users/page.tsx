@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Badge } from '@/components/ui/Badge';
 import { apiFetch } from '@/lib/api';
+import { safeArray } from '@/lib/utils';
 import { Trash2 } from 'lucide-react';
 
 interface UserRow {
@@ -25,7 +26,7 @@ export default function UsersPage() {
   const [error, setError] = useState<string | null>(null);
 
   async function load() {
-    setUsers(await apiFetch<UserRow[]>('/users'));
+    setUsers(safeArray<UserRow>(await apiFetch<UserRow[]>('/users').catch(() => [])));
   }
   useEffect(() => {
     load();
@@ -112,7 +113,7 @@ export default function UsersPage() {
         </Card>
 
         <Card className="p-0 divide-y divide-border">
-          {users.map((u) => (
+          {safeArray<UserRow>(users).map((u) => (
             <div
               key={u.id}
               className="px-4 py-3 flex items-center justify-between"

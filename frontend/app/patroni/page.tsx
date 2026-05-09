@@ -5,6 +5,7 @@ import { AppShell } from '@/components/AppShell';
 import { Card } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
 import { apiFetch } from '@/lib/api';
+import { safeArray } from '@/lib/utils';
 
 export default function PatroniPage() {
   const [data, setData] = useState<any>(null);
@@ -13,8 +14,8 @@ export default function PatroniPage() {
   useEffect(() => {
     const load = async () => {
       try {
-        setData(await apiFetch('/patroni/cluster'));
-        setHistory(await apiFetch('/patroni/history'));
+        setData(await apiFetch('/patroni/cluster').catch(() => null));
+        setHistory(safeArray<any>(await apiFetch('/patroni/history').catch(() => [])));
       } catch (e) {
         /* silencioso */
       }
@@ -53,7 +54,7 @@ export default function PatroniPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {data.members?.map((m: any) => (
+                  {safeArray<any>(data?.members).map((m: any) => (
                     <tr key={m.name} className="border-t border-border">
                       <td className="px-3 py-2">{m.name}</td>
                       <td className="px-3 py-2">

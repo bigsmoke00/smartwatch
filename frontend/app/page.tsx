@@ -6,7 +6,7 @@ import { AppShell } from '@/components/AppShell';
 import { Card } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
 import { apiFetch } from '@/lib/api';
-import { fmtTime } from '@/lib/utils';
+import { fmtTime, safeArray, sumBy } from '@/lib/utils';
 import {
   ResponsiveContainer,
   BarChart,
@@ -42,11 +42,11 @@ export default function HomePage() {
         apiFetch('/logs/histogram?from=now-1h&to=now&interval=1 minute').catch(() => []),
         apiFetch('/patroni/cluster').catch(() => null),
       ]);
-      setServers(s as any[]);
-      setContainers(c as any[]);
-      setFleet(f as any[]);
-      setAlerts((a as any[]).slice(0, 5));
-      setHist(h as Bucket[]);
+      setServers(safeArray(s));
+      setContainers(safeArray(c));
+      setFleet(safeArray(f));
+      setAlerts(safeArray<any>(a).slice(0, 5));
+      setHist(safeArray<Bucket>(h));
       setPatroni(p);
     };
     load();
@@ -54,16 +54,14 @@ export default function HomePage() {
     return () => clearInterval(t);
   }, []);
 
-  const totalLogs = hist.reduce((a, b) => a + b.total, 0);
-  const errors = hist.reduce((a, b) => a + (b.byLevel?.error ?? 0) + (b.byLevel?.fatal ?? 0), 0);
-  const containersRunning = containers.reduce((a, b) => a + (b.running ?? 0), 0);
-  const containersTotal = containers.reduce((a, b) => a + (b.total ?? 0), 0);
-  const cpuAvg = fleet.length
-    ? fleet.reduce((a, b) => a + (b.cpu ?? 0), 0) / fleet.length
-    : 0;
-  const memAvg = fleet.length
-    ? fleet.reduce((a, b) => a + (b.memPct ?? 0), 0) / fleet.length
-    : 0;
+  const totalLogs = sumBy<Bucket>(hist, (b) => b?.total);
+  const errors = sumBy<Bucket>(hist, (b) =>
+    (b?.byLevel?.error ?? 0) + (b?.byLevel?.fatal ?? 0),
+  );
+  const containersRunning = sumBy<any>(containers, 'running');
+  const containersTotal = sumBy<any>(containers, 'total');
+  const cpuAvg = fleet.length ? sumBy<any>(fleet, 'cpu') / fleet.length : 0;
+  const memAvg = fleet.length ? sumBy<any>(fleet, 'memPct') / fleet.length : 0;
 
   return (
     <AppShell>
@@ -122,7 +120,7 @@ export default function HomePage() {
             </div>
             {patroni?.ok ? (
               <div className="space-y-1.5">
-                {patroni.members?.map((m: any) => (
+                {safeArray<any>(patroni?.members).map((m: any) => (
                   <div
                     key={m.name}
                     className="flex items-center justify-between text-sm"
@@ -158,7 +156,7 @@ export default function HomePage() {
               </Link>
             </div>
             <div className="divide-y divide-border">
-              {servers.slice(0, 6).map((s) => (
+              {safeArray<any>(servers).slice(0, 6).map((s) => (
                 <div key={s.id} className="py-1.5 flex items-center justify-between text-sm">
                   <div>
                     <Link href={`/servers/${s.id}`} className="hover:text-accent">
@@ -201,7 +199,7 @@ export default function HomePage() {
                   Sem alertas recentes — frota saudável.
                 </div>
               )}
-              {alerts.map((e) => (
+              {safeArray<any>(alerts).map((e) => (
                 <div key={e.id} className="py-1.5 text-sm">
                   <div className="flex items-center gap-2">
                     <Badge

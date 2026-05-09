@@ -5,6 +5,7 @@ import { useParams } from 'next/navigation';
 import { AppShell } from '@/components/AppShell';
 import { Card } from '@/components/ui/Card';
 import { apiFetch } from '@/lib/api';
+import { safeArray } from '@/lib/utils';
 import {
   ResponsiveContainer,
   AreaChart,
@@ -24,8 +25,17 @@ export default function ServerMetricsPage() {
 
   useEffect(() => {
     const load = async () => {
-      setSeries(await apiFetch(`/metrics/host/${id}/series?minutes=120&bucket=1 minute`));
-      setLast(await apiFetch(`/metrics/host/${id}/last`));
+      try {
+        const [s, l] = await Promise.all([
+          apiFetch(`/metrics/host/${id}/series?minutes=120&bucket=1 minute`).catch(() => []),
+          apiFetch(`/metrics/host/${id}/last`).catch(() => null),
+        ]);
+        setSeries(safeArray<any>(s));
+        setLast(l);
+      } catch {
+        setSeries([]);
+        setLast(null);
+      }
     };
     load();
     const t = setInterval(load, 10_000);
@@ -104,7 +114,7 @@ export default function ServerMetricsPage() {
                 </tr>
               </thead>
               <tbody>
-                {last.disk.map((d: any) => (
+                {safeArray<any>(last?.disk).map((d: any) => (
                   <tr key={d.mount} className="border-t border-border">
                     <td className="py-1">{d.mount}</td>
                     <td className="py-1 text-right tabular-nums">{fmtBytes(d.used)}</td>

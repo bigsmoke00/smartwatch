@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { AppShell } from '@/components/AppShell';
 import { Card } from '@/components/ui/Card';
 import { apiFetch } from '@/lib/api';
-import { fmtTime } from '@/lib/utils';
+import { fmtTime, safeArray } from '@/lib/utils';
 
 interface FleetRow {
   serverId: string;
@@ -22,7 +22,10 @@ interface FleetRow {
 export default function MetricsPage() {
   const [rows, setRows] = useState<FleetRow[]>([]);
   useEffect(() => {
-    const load = () => apiFetch<FleetRow[]>('/metrics/fleet').then(setRows);
+    const load = () =>
+      apiFetch<FleetRow[]>('/metrics/fleet')
+        .then((r) => setRows(safeArray<FleetRow>(r)))
+        .catch(() => setRows([]));
     load();
     const t = setInterval(load, 10_000);
     return () => clearInterval(t);
@@ -65,7 +68,7 @@ export default function MetricsPage() {
                   </td>
                 </tr>
               )}
-              {rows.map((r) => (
+              {safeArray<FleetRow>(rows).map((r) => (
                 <tr key={r.serverId} className="border-t border-border">
                   <td className="px-3 py-2">
                     <Link href={`/metrics/${r.serverId}`} className="hover:text-accent">

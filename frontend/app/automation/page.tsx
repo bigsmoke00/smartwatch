@@ -6,7 +6,7 @@ import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';
 import { apiFetch } from '@/lib/api';
-import { fmtTime } from '@/lib/utils';
+import { fmtTime, safeArray } from '@/lib/utils';
 import { Play, Square, Eye } from 'lucide-react';
 
 export default function AutomationPage() {
@@ -19,14 +19,14 @@ export default function AutomationPage() {
 
   useEffect(() => {
     apiFetch('/automation/projects')
-      .then(setProjects)
+      .then((p) => setProjects(safeArray<any>(p)))
       .catch((e) => setError(e?.payload?.message || e.message));
   }, []);
 
   async function pickProject(p: any) {
     setProject(p);
-    setTemplates(await apiFetch(`/automation/projects/${p.id}/templates`));
-    setTasks(await apiFetch(`/automation/projects/${p.id}/tasks`));
+    setTemplates(safeArray<any>(await apiFetch(`/automation/projects/${p.id}/templates`).catch(() => [])));
+    setTasks(safeArray<any>(await apiFetch(`/automation/projects/${p.id}/tasks`).catch(() => [])));
   }
 
   async function run(t: any) {
@@ -35,7 +35,7 @@ export default function AutomationPage() {
       method: 'POST',
       body: JSON.stringify({}),
     });
-    setTasks(await apiFetch(`/automation/projects/${project.id}/tasks`));
+    setTasks(safeArray<any>(await apiFetch(`/automation/projects/${project.id}/tasks`).catch(() => [])));
   }
 
   async function stop(taskId: number) {
@@ -43,7 +43,7 @@ export default function AutomationPage() {
       method: 'POST',
       body: '{}',
     });
-    setTasks(await apiFetch(`/automation/projects/${project.id}/tasks`));
+    setTasks(safeArray<any>(await apiFetch(`/automation/projects/${project.id}/tasks`).catch(() => [])));
   }
 
   async function viewOutput(taskId: number) {
@@ -75,7 +75,7 @@ export default function AutomationPage() {
             <Card className="p-3">
               <div className="text-xs uppercase tracking-wider text-muted mb-2">Projetos</div>
               <div className="space-y-1">
-                {projects.map((p) => (
+                {safeArray<any>(projects).map((p) => (
                   <button
                     key={p.id}
                     onClick={() => pickProject(p)}
@@ -102,7 +102,7 @@ export default function AutomationPage() {
                   </div>
                   <table className="w-full text-sm">
                     <tbody>
-                      {templates.map((t) => (
+                      {safeArray<any>(templates).map((t) => (
                         <tr key={t.id} className="border-t border-border">
                           <td className="py-2">{t.name}</td>
                           <td className="py-2 text-muted text-xs">{t.playbook}</td>
@@ -130,7 +130,7 @@ export default function AutomationPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {tasks.map((t) => (
+                      {safeArray<any>(tasks).map((t) => (
                         <tr key={t.id} className="border-t border-border">
                           <td className="py-1">#{t.id}</td>
                           <td className="py-1">{t.template_id}</td>
