@@ -200,6 +200,233 @@ EOF
 git push -u origin feat/phase4-docker-manager
 ```
 
+## Branches dos 5 módulos novos
+
+```bash
+# ============================================================
+# Branch 6: Migration 004 + permissões dos módulos novos
+# ============================================================
+git checkout main && git pull
+git checkout -b feat/m004-permissions-and-schema
+
+git add backend/migrations/004_modules_5.sql .env.example
+
+git commit -m "$(cat <<'EOF'
+feat(rbac): migration 004 — schema dos 5 módulos + 19 permissions novas
+
+- Adiciona coluna `environment` na tabela servers (production/staging/...)
+- Tabelas (todas idempotentes):
+  M1 Scripts:    script_files, script_versions(hyper), script_executions(hyper)
+  M2 Logs:       log_export_schedules, log_export_runs(hyper)
+  M3 Zero Trust: terminal_sessions, terminal_session_events(hyper),
+                 runbooks, runbook_executions(hyper), bastion_sessions(hyper)
+  M4 PG Monitor: pg_clusters, pg_metrics(hyper), pg_top_queries(hyper),
+                 pg_table_health(hyper)
+  M5 Topologia:  topology_nodes, topology_edges
+- 19 permissions novas distribuídas entre os 7 roles padrão
+- Retention/compression por hypertable
+EOF
+)"
+
+git push -u origin feat/m004-permissions-and-schema
+
+# ============================================================
+# Branch 7: M1 — Script Manager
+# ============================================================
+git checkout main && git pull
+git checkout -b feat/m1-script-manager
+
+git add agent/src/fs-ops.ts agent/src/control.ts \
+        backend/src/scripts/ \
+        backend/src/app.module.ts \
+        frontend/app/scripts/ frontend/package.json \
+        .env.example
+
+git commit -m "$(cat <<'EOF'
+feat(scripts): file ops no agent + Monaco editor + aprovação de prod
+
+Agent:
+- fs-ops.ts: listDir/readFile/writeFile/executeScript com guard ALLOWED_PATHS
+- containment check (impede ../ traversal e symlink fora dos paths)
+- max read/write/exec timeout configuráveis
+- spawn (sem shell) pra evitar injection
+- Ops adicionadas ao canal de controle: fs.listDir, fs.readFile,
+  fs.writeFile, fs.execute
+
+Backend:
+- ScriptsService com versionamento (hypertable script_versions, sha256 dedupe)
+- Aprovação de execução obrigatória se servidor.environment='production'
+- Endpoints: GET ls, GET file, POST file, GET versions/:id,
+  POST execute, POST executions/:id/{approve,reject}
+- Permissions granulares: scripts:{read,write,execute,approve}
+
+Frontend /scripts:
+- File tree navegável + Monaco editor (dynamic import, ssr:false)
+- Syntax highlight automático por extensão (sh/py/ts/sql/yaml/...)
+- Diff visual antes de salvar
+- Download/Upload do arquivo aberto
+- Histórico de versões + execuções com aprovação inline
+EOF
+)"
+
+git push -u origin feat/m1-script-manager
+
+# ============================================================
+# Branch 8: M2 — Log Downloader
+# ============================================================
+git checkout main && git pull
+git checkout -b feat/m2-log-downloader
+
+git add agent/src/control.ts \
+        backend/src/log-export/ \
+        backend/src/app.module.ts backend/package.json \
+        frontend/app/exports/
+
+git commit -m "$(cat <<'EOF'
+feat(logs): export multi-formato + bundle ZIP + scheduler
+
+Backend:
+- GET /logs/export?serverId&containerName&q&from&to&format=log|csv|json|gz
+  Streaming direto pra Response, content-disposition correto
+- GET /servers/:id/logs/bundle: ZIP com all.log + 1 arquivo por container
+  + journalctl do host (via agent)
+- POST /logs/schedules: agendamento cron com destino email/S3
+- @nestjs/schedule cron a cada minuto avalia schedules vencidos
+
+Agent:
+- nova op host.journalctl (executa journalctl, fallback /var/log/syslog)
+
+Frontend /exports:
+- modal de período (from/to) + formato + servidor opcional
+- botão ZIP por servidor (bundle)
+- CRUD de schedules (cron, formato, destino)
+EOF
+)"
+
+git push -u origin feat/m2-log-downloader
+
+# ============================================================
+# Branch 9: M3 — Zero Trust (terminal web + runbooks + bastion)
+# ============================================================
+git checkout main && git pull
+git checkout -b feat/m3-zero-trust
+
+git add agent/src/control.ts \
+        backend/src/zero-trust/ \
+        backend/src/docker-manager/control.gateway.ts \
+        backend/src/app.module.ts \
+        frontend/app/terminal/ frontend/app/runbooks/ frontend/app/bastion/ \
+        frontend/components/TerminalView.tsx \
+        frontend/components/AppShell.tsx \
+        frontend/package.json
+
+git commit -m "$(cat <<'EOF'
+feat(zero-trust): terminal web + aprovação N1/N2 + runbooks + bastion log
+
+Agent:
+- term.start: docker exec interativo com Tty, stream bidirecional
+- term.input/term.close: I/O via canal de controle existente
+- output do agent reenviado pro backend como term:output
+
+Backend:
+- TerminalGateway WS (/ws/terminal) autenticado por JWT + sessionId aprovado
+- proxy bidi: agent ⇄ backend ⇄ UI; cada chunk gravado em
+  terminal_session_events (hypertable, retention 180d)
+- Fluxo: usuário com terminal:request POSTa /terminal/sessions com motivo;
+  outro user com terminal:approve aprova; sessão expira em ttlMinutes
+- Runbooks: comandos pré-aprovados com placeholders {{var}}; allowed_envs
+  controla onde podem rodar (bloqueia prod por default)
+- Bastion: POST /bastion/sessions registra qualquer SSH que passou pela
+  plataforma (wrapper sshd ForceCommand)
+
+Frontend:
+- /terminal: lista de sessões + xterm.js conectado via WS
+- /runbooks: catálogo + executor com vars dinâmicas
+- /bastion: tabela de SSH passados pela plataforma
+EOF
+)"
+
+git push -u origin feat/m3-zero-trust
+
+# ============================================================
+# Branch 10: M4 — PostgreSQL Monitor
+# ============================================================
+git checkout main && git pull
+git checkout -b feat/m4-pg-monitor
+
+git add backend/src/pg-monitor/ \
+        backend/src/app.module.ts \
+        frontend/app/databases/
+
+git commit -m "$(cat <<'EOF'
+feat(pg-monitor): poll de pg_stat_*, ações, alertas, dashboard /databases
+
+Backend:
+- pg_clusters CRUD; credenciais armazenadas no vault interno (vault_secret)
+- MonitoredPgClient: tenta cada host do CSV (multi-host pra Patroni),
+  statement_timeout curto pra não travar coleta
+- @Cron a cada 10s: coleta pg_stat_database (delta TPS, cache hit),
+  pg_stat_activity (conexões por estado), pg_stat_bgwriter,
+  pg_stat_statements (top queries), pg_stat_user_tables (bloat),
+  replica lag via pg_wal_lsn_diff
+- Hypertables: pg_metrics, pg_top_queries, pg_table_health (compress 7d)
+- Alertas automáticos: conexões >80%, cache hit <95%, replica lag >100MB,
+  query >2min, lock chain, bloat >20% — notificam canais habilitados
+- Ações: pg_terminate_backend(pid) com audit, EXPLAIN (analyze opcional,
+  validação que é SELECT/WITH), sugestão de índice (seq_scan elevado)
+- Permissions: pg:{read,write,terminate,explain}
+
+Frontend /databases:
+- Lista lateral de clusters; 6 abas:
+  - Visão geral: stats + gráfico conexões/TPS
+  - Queries ativas: live, com botão "matar"
+  - Locks: tabela com pg_blocking_pids, kill da raiz
+  - Top queries: ranking + EXPLAIN inline
+  - Saúde: bloat + autovacuum atrasado + sugestões de índice
+  - Histórico: 24h gráfico de conexões/TPS/cache hit
+EOF
+)"
+
+git push -u origin feat/m4-pg-monitor
+
+# ============================================================
+# Branch 11: M5 — Topologia visual
+# ============================================================
+git checkout main && git pull
+git checkout -b feat/m5-topology
+
+git add backend/src/topology/ \
+        backend/src/app.module.ts \
+        frontend/app/topology/ \
+        frontend/components/TopologyGraph.tsx \
+        frontend/components/AppShell.tsx \
+        frontend/package.json
+
+git commit -m "$(cat <<'EOF'
+feat(topology): mapa visual D3 + auto-discovery a cada 2min
+
+Backend:
+- topology_nodes / topology_edges com unique constraint para upsert
+- @Cron a cada 2min: cria nó pra cada server / container ativo /
+  pg cluster, e edges (server→container = hosts; pg = isolado por ora)
+- Status do nó derivado de last_seen_at e state do container
+- CRUD manual: POST nodes/edges, PATCH position (drag-and-drop persistido),
+  DELETE — protegidos por topology:write
+
+Frontend /topology:
+- D3 force-directed graph com zoom/pan
+- Drag para reposicionar nós (posição salvável)
+- Cor por severidade (healthy/degraded/down/unknown)
+- Filtro por tipo (server/container/database/lb/...)
+- Drawer lateral ao clicar num nó com:
+  - badges, JSON do recurso (servers/inspect, pg dashboard, container inspect)
+  - link "Ver dashboard →" pra rota específica
+EOF
+)"
+
+git push -u origin feat/m5-topology
+```
+
 ## Notas
 
 - **Migrations**: 003 é idempotente (todos os ON CONFLICT). Roda automaticamente

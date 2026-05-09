@@ -24,6 +24,13 @@ import {
   GitPullRequestArrow,
   Shield,
   Boxes,
+  FileCode,
+  Download,
+  Terminal as TerminalIcon,
+  BookOpen,
+  KeySquare,
+  Network,
+  Database as DbIcon,
 } from 'lucide-react';
 import { Auth } from '@/lib/api';
 import { loadMyPermissions, hasPerm } from '@/lib/perms';
@@ -70,6 +77,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         { href: '/servers', label: 'Servidores', icon: Server, perms: ['servers:read'] },
         { href: '/containers', label: 'Containers', icon: Container, perms: ['containers:read'] },
         { href: '/docker', label: 'Docker manager', icon: Boxes, perms: ['docker:control', 'containers:read'] },
+        { href: '/scripts', label: 'Scripts', icon: FileCode, perms: ['scripts:read'] },
+        { href: '/databases', label: 'PostgreSQL', icon: DbIcon, perms: ['pg:read'] },
+        { href: '/topology', label: 'Topologia', icon: Network, perms: ['topology:read'] },
         { href: '/inventory', label: 'Inventário cloud', icon: CloudCog, perms: ['inventory:cloud_sync'] },
         { href: '/patroni', label: 'Cluster Patroni', icon: Database, perms: ['patroni:read'] },
       ],
@@ -80,7 +90,16 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         { href: '/automation', label: 'Automação', icon: PlayCircle, perms: ['automation:read', 'automation:run'] },
         { href: '/terraform', label: 'Terraform CP', icon: GitBranch, perms: ['terraform:read'] },
         { href: '/pipelines', label: 'Pipelines (GH Actions)', icon: GitPullRequestArrow, perms: ['pipelines:read'] },
+        { href: '/runbooks', label: 'Runbooks', icon: BookOpen, perms: ['runbook:read'] },
+        { href: '/exports', label: 'Log exports', icon: Download, perms: ['logs:download'] },
         { href: '/audit', label: 'Audit log', icon: History, perms: ['audit:read'] },
+      ],
+    },
+    {
+      title: 'Acesso (Zero Trust)',
+      items: [
+        { href: '/terminal', label: 'Terminal web', icon: TerminalIcon, perms: ['terminal:request', 'terminal:open'] },
+        { href: '/bastion', label: 'Bastion SSH', icon: KeySquare, perms: ['bastion:read'] },
       ],
     },
     {

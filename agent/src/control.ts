@@ -20,8 +20,10 @@
 import { io as ioClient, Socket } from 'socket.io-client';
 import Docker from 'dockerode';
 import { config } from './config.js';
+import { listDir, readFile, writeFile, executeScript } from './fs-ops.js';
 
 let socket: Socket | null = null;
+const activeTermStreams = new Map<string, NodeJS.ReadWriteStream>();
 
 export function startControlChannel(docker: Docker) {
   // baseUrl ex: https://logwatch.example.com/api → ws base sem /api
@@ -140,6 +142,80 @@ async function dispatch(docker: Docker, op: string, args: any, reqId: string): P
       });
       if (args.start !== false) await c.start();
       return { id: c.id };
+    }
+
+    // ============ FS / Scripts ============
+    case 'fs.listDir':
+      return listDir(args.path);
+
+    case 'fs.readFile':
+      return readFile(args.path);
+
+    case 'fs.writeFile':
+      return writeFile(args.path, args.content ?? '');
+
+    case 'fs.execute':
+      return executeScript({
+        path: args.path,
+        args: args.args,
+        cwd: args.cwd,
+        env: args.env,
+        timeoutMs: args.timeoutMs,
+      });
+
+    // ============ Terminal exec (Zero Trust) ============
+    case 'term.start': {
+      // Inicia exec interativo num container do host.
+      // (host shell direto não disponível pra agent rodando em container; use containerId.)
+      if (!args.containerId) throw new Error('containerId obrigatório (host shell não suportado neste agent)');
+      const c = docker.getContainer(args.containerId);
+      const exec = await c.exec({
+        AttachStdin: true, AttachStdout: true, AttachStderr: true, Tty: true,
+        Cmd: args.command ? args.command.split(/\s+/) : ['/bin/sh'],
+      });
+      const stream: any = await exec.start({ hijack: true, stdin: true, Tty: true });
+      const sessionId: string = args.sessionId;
+      stream.on('data', (chunk: Buffer) => {
+        socket?.emit('term:output', { sessionId, data: chunk.toString('base64') });
+      });
+      stream.on('end', () => {
+        socket?.emit('term:closed', { sessionId, reason: 'eof' });
+        activeTermStreams.delete(sessionId);
+      });
+      activeTermStreams.set(sessionId, stream);
+      return { sessionId, started: true };
+    }
+
+    case 'term.input': {
+      const s = activeTermStreams.get(args.sessionId);
+      if (!s) throw new Error('session not found');
+      s.write(Buffer.from(args.data ?? '', 'base64'));
+      return { ok: true };
+    }
+
+    case 'term.close': {
+      const s = activeTermStreams.get(args.sessionId);
+      if (s) { try { (s as any).end?.(); } catch {} activeTermStreams.delete(args.sessionId); }
+      return { ok: true };
+    }
+
+    case 'host.journalctl': {
+      // Logs do host. journalctl primeiro; fallback /var/log/syslog.
+      const sinceArg = args.since ? ['--since', String(args.since)] : [];
+      const untilArg = args.until ? ['--until', String(args.until)] : [];
+      const unitArg = args.unit ? ['-u', String(args.unit)] : [];
+      const j = await executeScript({
+        path: '/usr/bin/journalctl',
+        args: ['--no-pager', '-o', 'short-iso', ...sinceArg, ...untilArg, ...unitArg],
+        timeoutMs: 60_000,
+      }).catch((e) => ({ exitCode: -1, stdout: '', stderr: e.message, durationMs: 0 } as any));
+      if (j.exitCode === 0) return { kind: 'journalctl', content: j.stdout };
+      const fb = await executeScript({
+        path: '/bin/cat',
+        args: ['/var/log/syslog'],
+        timeoutMs: 30_000,
+      }).catch((e) => ({ exitCode: -1, stdout: '', stderr: e.message, durationMs: 0 } as any));
+      return { kind: 'syslog', content: fb.stdout, fallback: true, error: j.stderr };
     }
 
     default:

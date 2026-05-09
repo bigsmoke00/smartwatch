@@ -26,6 +26,11 @@ import { CredentialRotationModule } from './credential-rotation/credential-rotat
 import { SloModule } from './slo/slo.module';
 import { GithubActionsModule } from './github-actions/github-actions.module';
 import { DockerManagerModule } from './docker-manager/docker-manager.module';
+import { ScriptsModule } from './scripts/scripts.module';
+import { LogExportModule } from './log-export/log-export.module';
+import { ZeroTrustModule } from './zero-trust/zero-trust.module';
+import { PgMonitorModule } from './pg-monitor/pg-monitor.module';
+import { TopologyModule } from './topology/topology.module';
 import { HealthModule } from './health/health.module';
 import { BootstrapService } from './bootstrap.service';
 
@@ -78,6 +83,11 @@ import { BootstrapService } from './bootstrap.service';
     SloModule,
     GithubActionsModule,
     DockerManagerModule,
+    ScriptsModule,
+    LogExportModule,
+    ZeroTrustModule,
+    PgMonitorModule,
+    TopologyModule,
     HealthModule,
   ],
   providers: [

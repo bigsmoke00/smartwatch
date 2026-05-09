@@ -134,4 +134,33 @@ export class ControlGateway implements OnGatewayConnection, OnGatewayDisconnect 
     if (!p?.streams) return;
     for (const cb of p.streams) cb(msg.data);
   }
+
+  // ============ Terminal output forwarding (Zero Trust) ============
+  // O TerminalGateway se registra aqui pra receber output do agent.
+  private termOutputHandler?: (sessionId: string, b64: string) => void;
+  private termClosedHandler?: (sessionId: string, reason: string) => void;
+
+  registerTerminalForwarders(
+    onOutput: (sessionId: string, b64: string) => void,
+    onClosed: (sessionId: string, reason: string) => void,
+  ) {
+    this.termOutputHandler = onOutput;
+    this.termClosedHandler = onClosed;
+  }
+
+  @SubscribeMessage('term:output')
+  onTermOutput(
+    @ConnectedSocket() _client: Socket,
+    @MessageBody() msg: { sessionId: string; data: string },
+  ) {
+    this.termOutputHandler?.(msg.sessionId, msg.data);
+  }
+
+  @SubscribeMessage('term:closed')
+  onTermClosed(
+    @ConnectedSocket() _client: Socket,
+    @MessageBody() msg: { sessionId: string; reason: string },
+  ) {
+    this.termClosedHandler?.(msg.sessionId, msg.reason);
+  }
 }
