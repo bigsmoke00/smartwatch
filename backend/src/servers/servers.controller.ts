@@ -88,8 +88,18 @@ export class ServersController {
   @Roles('admin')
   @Audit('server.delete')
   @Delete(':id')
-  remove(@Param('id') id: string) {
-    return this.service.remove(id);
+  remove(
+    @Param('id') id: string,
+    @Query('soft') soft?: string,
+  ) {
+    return this.service.remove(id, soft === 'true');
+  }
+
+  @Roles('admin')
+  @Audit('server.restore')
+  @Post(':id/restore')
+  restore(@Param('id') id: string) {
+    return this.service.restore(id);
   }
 
   @Roles('admin')

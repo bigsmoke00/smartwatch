@@ -29,6 +29,78 @@ export class PgMonitorService {
     private readonly notif: NotificationsService,
   ) {}
 
+  // ---------- Validação + feature detection ----------
+  /**
+   * Valida credenciais e detecta features. Cacheia resultado em pg_cluster_features.
+   * Chamado: (1) ao criar cluster, (2) sob demanda via UI, (3) quando coleta falha.
+   */
+  async validateAndDetect(opts: { hosts: string; database: string; user: string; password: string; ssl?: boolean })
+  : Promise<{
+    ok: boolean; pgVersion?: string; isInRecovery?: boolean;
+    hasPgStatStatements?: boolean; hasPgBuffercache?: boolean; hasPgRepack?: boolean;
+    error?: string;
+  }> {
+    const c = new (await import('./pg-client')).MonitoredPgClient({
+      hosts: opts.hosts, database: opts.database,
+      user: opts.user, password: opts.password, ssl: opts.ssl,
+      statementTimeoutMs: 5000,
+    });
+    try {
+      const v = await c.query<any>(`SHOW server_version`);
+      const r = await c.query<any>(`SELECT pg_is_in_recovery()::bool AS rec`);
+      const ext = await c.query<any>(`
+        SELECT extname FROM pg_extension WHERE extname IN ('pg_stat_statements','pg_buffercache','pg_repack')
+      `);
+      const exts = new Set(ext.map((e) => e.extname));
+      return {
+        ok: true,
+        pgVersion: v[0]?.server_version,
+        isInRecovery: r[0]?.rec,
+        hasPgStatStatements: exts.has('pg_stat_statements'),
+        hasPgBuffercache: exts.has('pg_buffercache'),
+        hasPgRepack: exts.has('pg_repack'),
+      };
+    } catch (e: any) {
+      return { ok: false, error: e.message };
+    } finally {
+      await c.end();
+    }
+  }
+
+  /** Salva detecção em cache pra UI consultar. */
+  private async saveFeatures(clusterId: string, det: any) {
+    await this.pool.query(
+      `INSERT INTO pg_cluster_features
+        (cluster_id, has_pg_stat_statements, has_pg_buffercache, has_pg_repack,
+         pg_version, is_in_recovery, detected_at, last_error)
+       VALUES ($1,$2,$3,$4,$5,$6, now(), $7)
+       ON CONFLICT (cluster_id) DO UPDATE SET
+         has_pg_stat_statements=EXCLUDED.has_pg_stat_statements,
+         has_pg_buffercache=EXCLUDED.has_pg_buffercache,
+         has_pg_repack=EXCLUDED.has_pg_repack,
+         pg_version=EXCLUDED.pg_version,
+         is_in_recovery=EXCLUDED.is_in_recovery,
+         detected_at=now(), last_error=EXCLUDED.last_error`,
+      [clusterId, !!det.hasPgStatStatements, !!det.hasPgBuffercache, !!det.hasPgRepack,
+       det.pgVersion ?? null, det.isInRecovery ?? null, det.error ?? null],
+    );
+  }
+
+  async getFeatures(clusterId: string) {
+    const r = await this.pool.query(
+      `SELECT has_pg_stat_statements AS "hasPgStatStatements",
+              has_pg_buffercache AS "hasPgBuffercache",
+              has_pg_repack AS "hasPgRepack",
+              pg_version AS "pgVersion",
+              is_in_recovery AS "isInRecovery",
+              detected_at AS "detectedAt",
+              last_error AS "lastError"
+       FROM pg_cluster_features WHERE cluster_id=$1`,
+      [clusterId],
+    );
+    return r.rows[0] ?? null;
+  }
+
   // ---------- CRUD de clusters ----------
   async listClusters() {
     const r = await this.pool.query(
@@ -45,7 +117,28 @@ export class PgMonitorService {
        VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
       [c.name, c.description ?? null, c.vaultSecret, c.hosts, c.database ?? 'postgres', c.pollSeconds ?? 10],
     );
-    return r.rows[0];
+    const id = r.rows[0].id;
+    // Detecta features em background (não bloqueia criação se cluster offline)
+    this.detectByClusterId(id).catch(() => {});
+    return { id };
+  }
+
+  /** Carrega cred do vault e roda detecção pra um cluster existente. */
+  async detectByClusterId(clusterId: string) {
+    const cl = await this.cluster(clusterId);
+    try {
+      const raw = await this.secrets.get(cl.vault_secret);
+      const cred = JSON.parse(raw);
+      const det = await this.validateAndDetect({
+        hosts: cl.hosts, database: cl.database,
+        user: cred.user, password: cred.password, ssl: cred.ssl,
+      });
+      await this.saveFeatures(clusterId, det);
+      return det;
+    } catch (e: any) {
+      await this.saveFeatures(clusterId, { error: e.message });
+      throw e;
+    }
   }
 
   async deleteCluster(id: string) {
@@ -183,7 +276,17 @@ export class PgMonitorService {
           );
         }
       } catch (e: any) {
-        // pg_stat_statements pode não estar habilitado
+        // pg_stat_statements pode não estar habilitado — registra no cache
+        // pra UI mostrar aviso amigável em vez de quebrar.
+        if (/pg_stat_statements|relation .* does not exist/i.test(e.message)) {
+          await this.pool.query(
+            `INSERT INTO pg_cluster_features(cluster_id, has_pg_stat_statements, detected_at, last_error)
+             VALUES ($1, false, now(), $2)
+             ON CONFLICT (cluster_id) DO UPDATE SET
+               has_pg_stat_statements=false, detected_at=now(), last_error=EXCLUDED.last_error`,
+            [c.id, e.message.slice(0, 500)],
+          ).catch(() => {});
+        }
       }
 
       // ---------- pg_stat_user_tables (saúde) ----------

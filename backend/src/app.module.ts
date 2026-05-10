@@ -31,6 +31,7 @@ import { LogExportModule } from './log-export/log-export.module';
 import { ZeroTrustModule } from './zero-trust/zero-trust.module';
 import { PgMonitorModule } from './pg-monitor/pg-monitor.module';
 import { TopologyModule } from './topology/topology.module';
+import { CloudInventoryModule } from './cloud-inventory/cloud-inventory.module';
 import { HealthModule } from './health/health.module';
 import { BootstrapService } from './bootstrap.service';
 
@@ -88,6 +89,7 @@ import { BootstrapService } from './bootstrap.service';
     ZeroTrustModule,
     PgMonitorModule,
     TopologyModule,
+    CloudInventoryModule,
     HealthModule,
   ],
   providers: [

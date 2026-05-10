@@ -7,6 +7,7 @@ import * as archiver from 'archiver';
 import { PG_POOL } from '../db/db.module';
 import { LogsRepository, LogQuery } from '../logs/logs.repository';
 import { ControlGateway } from '../docker-manager/control.gateway';
+import { SecretsService } from '../secrets/secrets.service';
 
 export type ExportFormat = 'log' | 'csv' | 'json' | 'gz';
 
@@ -17,6 +18,7 @@ export class LogExportService {
     @Inject(PG_POOL) private readonly pool: Pool,
     private readonly logs: LogsRepository,
     private readonly ctrl: ControlGateway,
+    private readonly secrets: SecretsService,
   ) {}
 
   /** Stream de logs num formato pra resposta HTTP. */
@@ -152,14 +154,41 @@ export class LogExportService {
   private async runSchedule(s: any) {
     const t0 = Date.now();
     try {
-      // NOTE: o envio real (email/S3) depende de SDK externo.
-      // Aqui marcamos como "executed" com placeholder.
       const r = await this.logs.query({ ...(s.filter ?? {}), pageSize: 50_000 });
-      const bytes = JSON.stringify(r.hits ?? []).length;
+      const txt = (r.hits ?? []).map((h: any) =>
+        `${h.ts} [${h.level ?? '?'}] ${h.serverName ?? ''}${h.containerName ? ' [' + h.containerName + ']' : ''}: ${h.message}`,
+      ).join('\n');
 
-      this.logger.log(
-        `schedule ${s.name}: would send ${bytes} bytes to ${JSON.stringify(s.destination)}`,
-      );
+      let body: Buffer;
+      let mime = 'text/plain';
+      let ext = 'log';
+      if (s.format === 'gz') { body = gzipSync(Buffer.from(txt)); mime = 'application/gzip'; ext = 'log.gz'; }
+      else if (s.format === 'csv') {
+        const safe = (v: any) => '"' + String(v ?? '').replace(/"/g, '""') + '"';
+        const csv = 'ts,server,container,level,message\n' +
+          (r.hits ?? []).map((h: any) => [h.ts, h.serverName, h.containerName, h.level, h.message].map(safe).join(',')).join('\n');
+        body = Buffer.from(csv); mime = 'text/csv'; ext = 'csv';
+      } else if (s.format === 'json') {
+        body = Buffer.from(JSON.stringify(r.hits ?? [], null, 2)); mime = 'application/json'; ext = 'json';
+      } else {
+        body = Buffer.from(txt);
+      }
+
+      const filename = `logwatch-${s.name.replace(/\W+/g, '_')}-${Date.now()}.${ext}`;
+      const dest = s.destination ?? {};
+      let destStr = '';
+
+      if (dest.type === 'email') {
+        await this.sendEmail({ to: dest.email, subject: filename, body, mime, filename });
+        destStr = `email:${dest.email}`;
+      } else if (dest.type === 's3') {
+        await this.uploadS3({ bucket: dest.bucket, key: `${dest.keyPrefix ?? ''}${filename}`, body, mime });
+        destStr = `s3://${dest.bucket}/${dest.keyPrefix ?? ''}${filename}`;
+      } else {
+        // local: salva em /tmp para inspeção (fallback dev)
+        destStr = `local:/tmp/${filename}`;
+        await import('node:fs/promises').then((fs) => fs.writeFile(`/tmp/${filename}`, body));
+      }
 
       await this.pool.query(
         `UPDATE log_export_schedules SET last_run_at=now(), last_status='ok' WHERE id=$1`,
@@ -168,8 +197,9 @@ export class LogExportService {
       await this.pool.query(
         `INSERT INTO log_export_runs(schedule_id, status, bytes, destination)
          VALUES ($1,'ok',$2,$3)`,
-        [s.id, bytes, JSON.stringify(s.destination)],
+        [s.id, body.length, destStr],
       );
+      this.logger.log(`schedule ${s.name} OK → ${destStr} (${body.length} bytes, ${Date.now() - t0}ms)`);
     } catch (e: any) {
       await this.pool.query(
         `UPDATE log_export_schedules SET last_run_at=now(), last_status='error' WHERE id=$1`,
@@ -179,25 +209,67 @@ export class LogExportService {
         `INSERT INTO log_export_runs(schedule_id, status, error) VALUES ($1,'error',$2)`,
         [s.id, e.message],
       );
+      this.logger.error(`schedule ${s.name}: ${e.message}`);
     }
+  }
+
+  /** Envia email via nodemailer. SMTP_* via env. */
+  private async sendEmail(opts: { to: string; subject: string; body: Buffer; mime: string; filename: string }) {
+    const nodemailer: any = await import('nodemailer').catch(() => null);
+    if (!nodemailer) throw new Error('nodemailer não instalado');
+    const transport = nodemailer.createTransport({
+      host: process.env.SMTP_HOST ?? 'mailhog',
+      port: parseInt(process.env.SMTP_PORT ?? '1025', 10),
+      secure: process.env.SMTP_SECURE === 'true',
+      auth: process.env.SMTP_USER ? {
+        user: process.env.SMTP_USER, pass: process.env.SMTP_PASS,
+      } : undefined,
+    });
+    await transport.sendMail({
+      from: process.env.SMTP_FROM ?? 'logwatch@local',
+      to: opts.to,
+      subject: opts.subject,
+      text: 'Logs anexados.',
+      attachments: [{ filename: opts.filename, content: opts.body, contentType: opts.mime }],
+    });
+  }
+
+  /** Upload S3 (credenciais do vault: secret 'aws_logexport' = {accessKeyId, secretAccessKey, region?}). */
+  private async uploadS3(opts: { bucket: string; key: string; body: Buffer; mime: string }) {
+    const s3mod: any = await import('@aws-sdk/client-s3').catch(() => null);
+    if (!s3mod) throw new Error('@aws-sdk/client-s3 não instalado');
+    const credRaw = await this.secrets.get('aws_logexport').catch(() => null);
+    if (!credRaw) throw new Error('secret aws_logexport não encontrado no vault');
+    const cred = JSON.parse(credRaw);
+    const client = new s3mod.S3Client({
+      region: cred.region ?? 'us-east-1',
+      credentials: { accessKeyId: cred.accessKeyId, secretAccessKey: cred.secretAccessKey },
+    });
+    await client.send(new s3mod.PutObjectCommand({
+      Bucket: opts.bucket, Key: opts.key, Body: opts.body, ContentType: opts.mime,
+    }));
   }
 }
 
 /**
- * Trigger simplificado: roda se nunca rodou OR (now - last_run >= 1 min E
- * cron parece ser "*\/N * * * *" com N minutos).
- *
- * Em produção, use cron-parser (`npm i cron-parser`) e calcule .next() —
- * substituir esta função.
+ * Avalia se um schedule deve disparar AGORA, usando cron-parser real.
+ * Lógica: pega o último run (ou created_at se nunca rodou) e calcula o
+ * próximo `next()` a partir dessa âncora; dispara se `next() <= now`.
  */
 function shouldRun(s: any): boolean {
-  if (!s.last_run_at) return true;
-  const last = new Date(s.last_run_at).getTime();
-  const dt = Date.now() - last;
-  // Heurística: "0 * * * *" hourly, "0 0 * * *" daily, etc.
-  if (s.schedule_cron === '*/5 * * * *') return dt > 5 * 60_000;
-  if (s.schedule_cron === '0 * * * *')   return dt > 60 * 60_000;
-  if (s.schedule_cron === '0 2 * * *')   return dt > 24 * 60 * 60_000 && new Date().getUTCHours() >= 2;
-  // default: 1 dia
-  return dt > 24 * 60 * 60_000;
+  try {
+    // dynamic require pra não quebrar testes/import circular
+    const cronParser = require('cron-parser');
+    const anchor = s.last_run_at ? new Date(s.last_run_at) : new Date(s.created_at);
+    const it = cronParser.parseExpression(s.schedule_cron, {
+      currentDate: anchor,
+      tz: process.env.TZ || 'UTC',
+    });
+    const next = it.next().toDate();
+    return next.getTime() <= Date.now();
+  } catch {
+    // Cron malformado: roda 1x por dia como fallback seguro
+    if (!s.last_run_at) return true;
+    return Date.now() - new Date(s.last_run_at).getTime() > 24 * 60 * 60_000;
+  }
 }

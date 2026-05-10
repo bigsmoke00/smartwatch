@@ -104,17 +104,24 @@ export class TerminalGateway implements OnGatewayConnection, OnGatewayDisconnect
       // Para o agent saber em qual container, sess.metadata pode trazer
       // containerId; para simplificar, esperamos que UI já ofereça a escolha.
       const containerId = client.handshake.auth?.containerId as string | undefined;
-      if (!containerId) {
-        client.emit('error', { message: 'containerId required (selecione um container na UI)' });
+      const target = (client.handshake.auth?.target as string) ?? (containerId ? 'container' : 'host');
+      const readonly = client.handshake.auth?.readonly === true || client.handshake.auth?.readonly === 'true';
+      const sudo = client.handshake.auth?.sudo === true || client.handshake.auth?.sudo === 'true';
+
+      if (target === 'container' && !containerId) {
+        client.emit('error', { message: 'containerId required for target=container' });
         client.disconnect(true);
         return;
       }
 
       try {
         await this.ctrl.invoke(sess.server_id, 'term.start', {
-          sessionId, containerId, command: sess.command,
+          sessionId, target, containerId,
+          command: sess.command, shell: sess.command,
+          readonly, sudo,
+          cols: 100, rows: 30,
         }, { timeoutMs: 10_000 });
-        client.emit('ready', { sessionId });
+        client.emit('ready', { sessionId, target });
       } catch (e: any) {
         client.emit('error', { message: e.message });
         client.disconnect(true);
@@ -141,6 +148,16 @@ export class TerminalGateway implements OnGatewayConnection, OnGatewayDisconnect
         [sessionId],
       ).catch(() => {});
     }
+  }
+
+  @SubscribeMessage('resize')
+  async onResize(@ConnectedSocket() client: Socket, @MessageBody() data: { cols: number; rows: number }) {
+    const sessionId = (client.data as any).sessionId;
+    if (!sessionId) return;
+    const r = await this.pool.query(`SELECT server_id FROM terminal_sessions WHERE id=$1`, [sessionId]);
+    const serverId = r.rows[0]?.server_id;
+    if (!serverId) return;
+    this.ctrl.invoke(serverId, 'term.resize', { sessionId, cols: data.cols, rows: data.rows }).catch(() => {});
   }
 
   @SubscribeMessage('input')

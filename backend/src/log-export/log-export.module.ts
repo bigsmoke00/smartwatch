@@ -18,6 +18,7 @@ import { Audit } from '../audit/audit.decorator';
 import { CurrentUser, JwtUserPayload } from '../auth/current-user.decorator';
 import { LogsModule } from '../logs/logs.module';
 import { DockerManagerModule } from '../docker-manager/docker-manager.module';
+import { SecretsModule } from '../secrets/secrets.module';
 
 class CreateScheduleDto {
   @IsString() name!: string;
@@ -82,7 +83,7 @@ class LogExportController {
 }
 
 @Module({
-  imports: [LogsModule, DockerManagerModule],
+  imports: [LogsModule, DockerManagerModule, SecretsModule],
   providers: [LogExportService],
   controllers: [LogExportController],
 })

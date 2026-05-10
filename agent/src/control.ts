@@ -21,6 +21,7 @@ import { io as ioClient, Socket } from 'socket.io-client';
 import Docker from 'dockerode';
 import { config } from './config.js';
 import { listDir, readFile, writeFile, executeScript } from './fs-ops.js';
+import { spawnHostShell } from './host-shell.js';
 
 let socket: Socket | null = null;
 const activeTermStreams = new Map<string, NodeJS.ReadWriteStream>();
@@ -165,16 +166,36 @@ async function dispatch(docker: Docker, op: string, args: any, reqId: string): P
 
     // ============ Terminal exec (Zero Trust) ============
     case 'term.start': {
-      // Inicia exec interativo num container do host.
-      // (host shell direto não disponível pra agent rodando em container; use containerId.)
-      if (!args.containerId) throw new Error('containerId obrigatório (host shell não suportado neste agent)');
+      const sessionId: string = args.sessionId;
+      // ========= MODO HOST =========
+      if (args.target === 'host' || (!args.containerId && args.target !== 'container')) {
+        const sh = await spawnHostShell({
+          shell: args.shell, cwd: args.cwd,
+          cols: args.cols, rows: args.rows,
+          readonly: !!args.readonly, sudo: !!args.sudo,
+        });
+        sh.onData((s) => socket?.emit('term:output', { sessionId, data: Buffer.from(s, 'utf-8').toString('base64') }));
+        sh.onExit((code) => {
+          socket?.emit('term:closed', { sessionId, reason: `exit ${code}` });
+          activeTermStreams.delete(sessionId);
+        });
+        // adapta interface read-write
+        const wrapper: any = {
+          write: (b: Buffer) => sh.write(b.toString('utf-8')),
+          end: () => sh.kill(),
+          resize: (c: number, r: number) => sh.resize(c, r),
+          isHost: true,
+        };
+        activeTermStreams.set(sessionId, wrapper);
+        return { sessionId, started: true, target: 'host' };
+      }
+      // ========= MODO CONTAINER =========
       const c = docker.getContainer(args.containerId);
       const exec = await c.exec({
         AttachStdin: true, AttachStdout: true, AttachStderr: true, Tty: true,
         Cmd: args.command ? args.command.split(/\s+/) : ['/bin/sh'],
       });
       const stream: any = await exec.start({ hijack: true, stdin: true, Tty: true });
-      const sessionId: string = args.sessionId;
       stream.on('data', (chunk: Buffer) => {
         socket?.emit('term:output', { sessionId, data: chunk.toString('base64') });
       });
@@ -183,20 +204,47 @@ async function dispatch(docker: Docker, op: string, args: any, reqId: string): P
         activeTermStreams.delete(sessionId);
       });
       activeTermStreams.set(sessionId, stream);
-      return { sessionId, started: true };
+      return { sessionId, started: true, target: 'container' };
     }
 
     case 'term.input': {
-      const s = activeTermStreams.get(args.sessionId);
+      const s: any = activeTermStreams.get(args.sessionId);
       if (!s) throw new Error('session not found');
       s.write(Buffer.from(args.data ?? '', 'base64'));
       return { ok: true };
     }
 
-    case 'term.close': {
-      const s = activeTermStreams.get(args.sessionId);
-      if (s) { try { (s as any).end?.(); } catch {} activeTermStreams.delete(args.sessionId); }
+    case 'term.resize': {
+      const s: any = activeTermStreams.get(args.sessionId);
+      if (s?.resize) s.resize(args.cols ?? 80, args.rows ?? 24);
       return { ok: true };
+    }
+
+    case 'term.close': {
+      const s: any = activeTermStreams.get(args.sessionId);
+      if (s) { try { s.end?.(); } catch {} activeTermStreams.delete(args.sessionId); }
+      return { ok: true };
+    }
+
+    // ========= TCP discovery / processes =========
+    case 'host.connections': {
+      // ss -tnp state established → parse pra inferir edges container→external
+      const r = await executeScript({
+        path: '/bin/sh',
+        args: ['-c', 'ss -tnp state established 2>/dev/null || netstat -tnp 2>/dev/null'],
+        timeoutMs: 10_000,
+      }).catch((e) => ({ exitCode: -1, stdout: '', stderr: e.message, durationMs: 0 } as any));
+      return { kind: 'tcp', raw: r.stdout };
+    }
+
+    case 'host.processes': {
+      // Top 30 processos por CPU
+      const r = await executeScript({
+        path: '/bin/sh',
+        args: ['-c', 'ps -eo pid,user,pcpu,pmem,rss,etime,comm --sort=-pcpu | head -n 31'],
+        timeoutMs: 5_000,
+      }).catch((e) => ({ exitCode: -1, stdout: '', stderr: e.message, durationMs: 0 } as any));
+      return { content: r.stdout };
     }
 
     case 'host.journalctl': {

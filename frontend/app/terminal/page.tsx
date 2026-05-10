@@ -24,9 +24,12 @@ export default function TerminalPage() {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [serverId, setServerId] = useState('');
   const [reason, setReason] = useState('');
-  const [activeSession, setActiveSession] = useState<{ sessionId: string; serverId: string; containerId: string } | null>(null);
+  const [activeSession, setActiveSession] = useState<{ sessionId: string; serverId: string; target: 'host' | 'container'; containerId?: string; readonly: boolean; sudo: boolean } | null>(null);
   const [containers, setContainers] = useState<any[]>([]);
   const [containerId, setContainerId] = useState('');
+  const [target, setTarget] = useState<'host' | 'container'>('host');
+  const [readonly, setReadonly] = useState(false);
+  const [sudo, setSudo] = useState(false);
 
   async function load() {
     setServers(safeArray<Server>(await apiFetch('/servers').catch(() => [])));
@@ -60,8 +63,13 @@ export default function TerminalPage() {
     load();
   }
   function open(s: Session) {
-    if (!containerId) return alert('selecione um container');
-    setActiveSession({ sessionId: s.id, serverId: s.serverId, containerId });
+    if (target === 'container' && !containerId) return alert('selecione um container');
+    setActiveSession({
+      sessionId: s.id, serverId: s.serverId,
+      target,
+      containerId: target === 'container' ? containerId : undefined,
+      readonly, sudo,
+    });
   }
 
   return (
@@ -85,18 +93,43 @@ export default function TerminalPage() {
                 </select>
               </div>
               <div>
-                <label className="text-xs text-muted">Container</label>
+                <label className="text-xs text-muted">Alvo</label>
                 <select
-                  value={containerId} onChange={(e) => setContainerId(e.target.value)}
+                  value={target}
+                  onChange={(e) => setTarget(e.target.value as any)}
                   className="w-full rounded-md bg-panel2 border border-border px-3 py-2 text-sm"
                 >
-                  {safeArray<any>(containers).map((c) => (
-                    <option key={c.Id} value={c.Id}>
-                      {(c.Names?.[0] ?? c.Id).replace(/^\//, '')} ({c.Image})
-                    </option>
-                  ))}
+                  <option value="host">Host Linux</option>
+                  <option value="container">Container Docker</option>
                 </select>
               </div>
+              {target === 'container' && (
+                <div>
+                  <label className="text-xs text-muted">Container</label>
+                  <select
+                    value={containerId} onChange={(e) => setContainerId(e.target.value)}
+                    className="w-full rounded-md bg-panel2 border border-border px-3 py-2 text-sm"
+                  >
+                    {safeArray<any>(containers).map((c) => (
+                      <option key={c.Id} value={c.Id}>
+                        {(c.Names?.[0] ?? c.Id).replace(/^\//, '')} ({c.Image})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+              {target === 'host' && (
+                <div className="flex flex-col text-xs text-muted gap-1">
+                  <label className="flex items-center gap-1">
+                    <input type="checkbox" checked={readonly} onChange={(e) => setReadonly(e.target.checked)} />
+                    Modo readonly
+                  </label>
+                  <label className="flex items-center gap-1">
+                    <input type="checkbox" checked={sudo} onChange={(e) => setSudo(e.target.checked)} />
+                    sudo
+                  </label>
+                </div>
+              )}
               <div className="md:col-span-2">
                 <label className="text-xs text-muted">Motivo / contexto (auditável)</label>
                 <Input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="ex: investigar memleak no api-1" />
@@ -152,7 +185,10 @@ export default function TerminalPage() {
             <TerminalView
               token={Auth.token() ?? ''}
               sessionId={activeSession.sessionId}
+              target={activeSession.target}
               containerId={activeSession.containerId}
+              readonly={activeSession.readonly}
+              sudo={activeSession.sudo}
             />
           </Card>
         )}

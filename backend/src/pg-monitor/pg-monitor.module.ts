@@ -43,6 +43,26 @@ class PgMonitorController {
 
   // ----- Dashboard / detalhes -----
   @RequirePermission('pg:read')
+  @Get('clusters/:id/features')
+  features(@Param('id') id: string) {
+    return this.svc.getFeatures(id);
+  }
+
+  @RequirePermission('pg:write')
+  @Audit('pg.detect')
+  @Post('clusters/:id/detect')
+  detect(@Param('id') id: string) {
+    return this.svc.detectByClusterId(id);
+  }
+
+  @RequirePermission('pg:write')
+  @Audit('pg.validate')
+  @Post('validate')
+  validate(@Body() body: { hosts: string; database: string; user: string; password: string; ssl?: boolean }) {
+    return this.svc.validateAndDetect(body);
+  }
+
+  @RequirePermission('pg:read')
   @Get('clusters/:id/dashboard')
   dashboard(@Param('id') id: string, @Query('minutes') minutes?: string) {
     return this.svc.dashboard(id, minutes ? parseInt(minutes, 10) : 60);

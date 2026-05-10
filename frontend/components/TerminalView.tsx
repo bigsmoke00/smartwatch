@@ -9,10 +9,13 @@ import '@xterm/xterm/css/xterm.css';
 interface Props {
   token: string;
   sessionId: string;
-  containerId: string;
+  target?: 'host' | 'container';
+  containerId?: string;
+  readonly?: boolean;
+  sudo?: boolean;
 }
 
-export default function TerminalView({ token, sessionId, containerId }: Props) {
+export default function TerminalView({ token, sessionId, target = 'host', containerId, readonly, sudo }: Props) {
   const ref = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<Terminal | null>(null);
   const socketRef = useRef<Socket | null>(null);
@@ -34,7 +37,7 @@ export default function TerminalView({ token, sessionId, containerId }: Props) {
     const wsBase = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:4000';
     const s = io(`${wsBase}/ws/terminal`, {
       transports: ['websocket'],
-      auth: { token, sessionId, containerId },
+      auth: { token, sessionId, target, containerId, readonly, sudo },
     });
     socketRef.current = s;
 
@@ -54,14 +57,19 @@ export default function TerminalView({ token, sessionId, containerId }: Props) {
       s.emit('input', b64);
     });
 
-    const onResize = () => fit.fit();
+    const onResize = () => {
+      fit.fit();
+      s.emit('resize', { cols: term.cols, rows: term.rows });
+    };
     window.addEventListener('resize', onResize);
+    // resize inicial após connect
+    s.on('ready', () => setTimeout(onResize, 100));
     return () => {
       window.removeEventListener('resize', onResize);
       s.disconnect();
       term.dispose();
     };
-  }, [token, sessionId, containerId]);
+  }, [token, sessionId, target, containerId, readonly, sudo]);
 
   return <div ref={ref} className="h-[70vh] rounded border border-border" />;
 }

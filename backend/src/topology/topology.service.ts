@@ -91,6 +91,48 @@ export class TopologyService {
     return { ok: true };
   }
 
+  /**
+   * Parsea saída de `ss -tnp state established` ou `netstat -tnp` e cria
+   * edges container→external com a porta real. Cria nó "external" se IP
+   * destino não corresponde a nenhum nó conhecido.
+   */
+  private async parseAndUpsertConnections(serverId: string, raw: string) {
+    if (!raw) return;
+    // Procura nó "server" deste serverId
+    const srvNode = (await this.pool.query(
+      `SELECT id FROM topology_nodes WHERE kind='server' AND ref_id=$1`, [serverId],
+    )).rows[0];
+    if (!srvNode) return;
+
+    // Sample line ss: "ESTAB 0 0 10.0.1.5:43210 1.2.3.4:5432 users:((\"app\",pid=123,fd=12))"
+    const re = /(\d+\.\d+\.\d+\.\d+):(\d+)\s+(\d+\.\d+\.\d+\.\d+):(\d+)/g;
+    const seen = new Set<string>();
+    for (const line of raw.split('\n')) {
+      const m = re.exec(line);
+      if (!m) continue;
+      const [, , , dstIp, dstPortStr] = m;
+      const dstPort = parseInt(dstPortStr, 10);
+      // ignora loopback e portas efêmeras
+      if (dstIp.startsWith('127.') || dstPort > 49152) continue;
+      const key = `${dstIp}:${dstPort}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+
+      // Cria nó externo se não existir
+      const ext = await this.upsertNode({
+        kind: 'external', name: `${dstIp}:${dstPort}`,
+        refType: 'tcp', refId: key,
+        status: 'unknown',
+        metadata: { ip: dstIp, port: dstPort },
+      });
+      await this.upsertEdge({
+        srcId: srvNode.id, dstId: ext.id,
+        kind: 'connects_to', protocol: 'tcp', port: dstPort,
+        source: 'agent_discovery',
+      });
+    }
+  }
+
   // ========== Auto-discovery ==========
   /**
    * A cada 2 minutos:
@@ -152,10 +194,16 @@ export class TopologyService {
         });
       }
 
-      // 4) Conexões inferidas via agent (TCP outgoing) — best-effort
-      // O agent faz `ss -tnp state established` num intervalo e expõe via op `host.connections`.
-      // Aqui não chamamos por servidor pra não martelar — fica como TODO:
-      //   for each server: invoke('host.connections') → cria edge container→external
+      // 4) Conexões TCP reais via agent (best-effort, ignora erros)
+      const liveServers = await this.pool.query(
+        `SELECT id FROM servers WHERE last_seen_at > now() - interval '5 minutes' AND deleted_at IS NULL`,
+      );
+      for (const s of liveServers.rows) {
+        try {
+          const r: any = await this.ctrl.invoke(s.id, 'host.connections', {}, { timeoutMs: 8000 });
+          await this.parseAndUpsertConnections(s.id, r?.raw ?? '');
+        } catch { /* agent offline ou sem ss/netstat */ }
+      }
     } catch (e: any) {
       this.logger.warn(`discover: ${e.message}`);
     }

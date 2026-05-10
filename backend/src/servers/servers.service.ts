@@ -39,10 +39,11 @@ const COLS = `id, name, description, hostname, ip::text AS ip,
 export class ServersService {
   constructor(@Inject(PG_POOL) private readonly pool: Pool) {}
 
-  async list(filter?: { cloud?: string; tag?: string }) {
+  async list(filter?: { cloud?: string; tag?: string; includeDeleted?: boolean }) {
     const where: string[] = [];
     const params: any[] = [];
     let i = 1;
+    if (!filter?.includeDeleted) where.push(`deleted_at IS NULL`);
     if (filter?.cloud) {
       where.push(`cloud = $${i++}`);
       params.push(filter.cloud);
@@ -131,8 +132,47 @@ export class ServersService {
     return this.get(id);
   }
 
-  async remove(id: string) {
-    await this.pool.query(`DELETE FROM servers WHERE id=$1`, [id]);
+  /**
+   * Remove servidor com cleanup completo. soft=true preserva histórico.
+   * FKs ON DELETE CASCADE (migration 005) limpam api_keys/containers/host_metrics.
+   * Aqui limpamos hypertables sem FK (logs, script_executions, etc).
+   */
+  async remove(id: string, soft = false) {
+    if (soft) {
+      await this.pool.query(
+        `UPDATE servers SET deleted_at=now() WHERE id=$1 AND deleted_at IS NULL`,
+        [id],
+      );
+      return { ok: true, soft: true };
+    }
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query(`DELETE FROM logs WHERE server_id=$1`, [id]);
+      await client.query(`DELETE FROM script_executions WHERE server_id=$1`, [id]);
+      await client.query(`DELETE FROM runbook_executions WHERE server_id=$1`, [id]);
+      await client.query(
+        `DELETE FROM terminal_session_events
+         WHERE session_id IN (SELECT id FROM terminal_sessions WHERE server_id=$1)`,
+        [id],
+      );
+      await client.query(
+        `DELETE FROM topology_nodes WHERE ref_type='servers' AND ref_id=$1`,
+        [id],
+      );
+      await client.query(`DELETE FROM servers WHERE id=$1`, [id]);
+      await client.query('COMMIT');
+      return { ok: true, soft: false };
+    } catch (e) {
+      await client.query('ROLLBACK');
+      throw e;
+    } finally {
+      client.release();
+    }
+  }
+
+  async restore(id: string) {
+    await this.pool.query(`UPDATE servers SET deleted_at=NULL WHERE id=$1`, [id]);
     return { ok: true };
   }
 

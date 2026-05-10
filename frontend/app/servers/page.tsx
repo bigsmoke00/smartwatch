@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Badge } from '@/components/ui/Badge';
 import { apiFetch, Auth } from '@/lib/api';
-import { Plus, ChevronRight } from 'lucide-react';
+import { Plus, ChevronRight, Trash2 } from 'lucide-react';
 import { fmtTime, safeArray } from '@/lib/utils';
 
 interface ServerRow {
@@ -152,6 +152,23 @@ export default function ServersPage() {
             <Card className="p-6 text-sm text-muted">Nenhum servidor para os filtros atuais.</Card>
           )}
           {safeArray<ServerRow>(servers).map((s) => {
+            const onDelete = async (e: React.MouseEvent) => {
+              e.preventDefault(); e.stopPropagation();
+              const hard = confirm(
+                `Excluir servidor "${s.name}"?\n\n` +
+                `OK = exclusão permanente (remove métricas, logs, sessões).\n` +
+                `Cancel = soft delete (preserva histórico, oculta da listagem).`,
+              );
+              const url = hard
+                ? `/servers/${s.id}`
+                : `/servers/${s.id}?soft=true`;
+              try {
+                await apiFetch(url, { method: 'DELETE' });
+                load();
+              } catch (err: any) {
+                alert(`Falha ao excluir: ${err?.payload?.message || err.message}`);
+              }
+            };
             const recent =
               s.lastSeenAt &&
               Date.now() - new Date(s.lastSeenAt).getTime() < 5 * 60_000;
@@ -180,7 +197,18 @@ export default function ServersPage() {
                       </span>
                     </div>
                   </div>
-                  <ChevronRight size={18} className="text-muted" />
+                  <div className="flex items-center gap-2">
+                    {role === 'admin' && (
+                      <button
+                        onClick={onDelete}
+                        title="Excluir servidor"
+                        className="text-muted hover:text-danger p-1"
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    )}
+                    <ChevronRight size={18} className="text-muted" />
+                  </div>
                 </Card>
               </Link>
             );

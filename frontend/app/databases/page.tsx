@@ -266,9 +266,11 @@ function LocksTab({ cluster }: { cluster: Cluster }) {
 
 function TopTab({ cluster }: { cluster: Cluster }) {
   const [items, setItems] = useState<any[]>([]);
+  const [features, setFeatures] = useState<any>(null);
   const [explainOf, setExplainOf] = useState<{ q: string; plan: any } | null>(null);
   useEffect(() => {
     apiFetch(`/pg/clusters/${cluster.id}/top-queries`).then((r) => setItems(safeArray<any>(r))).catch(() => setItems([]));
+    apiFetch(`/pg/clusters/${cluster.id}/features`).then(setFeatures).catch(() => setFeatures(null));
   }, [cluster.id]);
 
   async function runExplain(q: string) {
@@ -283,8 +285,28 @@ function TopTab({ cluster }: { cluster: Cluster }) {
     }
   }
 
+  const noStatStatements = features && features.hasPgStatStatements === false;
+
   return (
     <>
+      {noStatStatements && (
+        <Card className="p-3 border border-warn/40 bg-warn/10 text-sm">
+          <div className="font-medium text-warn">pg_stat_statements não está habilitado</div>
+          <div className="text-muted text-xs mt-1">
+            Para popular esta aba, habilite a extensão no cluster:
+            <pre className="mt-2 bg-bg p-2 rounded text-xs">
+{`# postgresql.conf:
+shared_preload_libraries = 'pg_stat_statements'
+pg_stat_statements.track = all
+# depois reinicie e:
+CREATE EXTENSION pg_stat_statements;`}
+            </pre>
+            <div className="mt-1">
+              Após habilitar, clique em <code>POST /pg/clusters/{cluster.id}/detect</code> para atualizar a detecção.
+            </div>
+          </div>
+        </Card>
+      )}
       <Card className="p-0 overflow-hidden">
         <table className="w-full text-sm">
           <thead className="bg-panel2 text-xs uppercase text-muted">
@@ -308,9 +330,9 @@ function TopTab({ cluster }: { cluster: Cluster }) {
                 </td>
               </tr>
             ))}
-            {items.length === 0 && (
+            {items.length === 0 && !noStatStatements && (
               <tr><td colSpan={5} className="py-4 px-3 text-center text-muted">
-                pg_stat_statements pode não estar habilitado neste cluster.
+                Sem dados ainda — aguarde 1-2 ciclos de coleta.
               </td></tr>
             )}
           </tbody>
