@@ -134,8 +134,8 @@ export class ServersService {
 
   /**
    * Remove servidor com cleanup completo. soft=true preserva histórico.
-   * FKs ON DELETE CASCADE (migration 005) limpam api_keys/containers/host_metrics.
-   * Aqui limpamos hypertables sem FK (logs, script_executions, etc).
+   * Hypertables Timescale comprimidas não recebem FK depois da compressão.
+   * Por isso logs/host_metrics e tabelas relacionadas são limpas manualmente.
    */
   async remove(id: string, soft = false) {
     if (soft) {
@@ -149,6 +149,7 @@ export class ServersService {
     try {
       await client.query('BEGIN');
       await client.query(`DELETE FROM logs WHERE server_id=$1`, [id]);
+      await client.query(`DELETE FROM host_metrics WHERE server_id=$1`, [id]);
       await client.query(`DELETE FROM script_executions WHERE server_id=$1`, [id]);
       await client.query(`DELETE FROM runbook_executions WHERE server_id=$1`, [id]);
       await client.query(

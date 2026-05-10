@@ -5,22 +5,12 @@
 ALTER TABLE servers ADD COLUMN IF NOT EXISTS deleted_at timestamptz;
 CREATE INDEX IF NOT EXISTS servers_deleted_at_idx ON servers(deleted_at);
 
--- ===== FKs faltantes com ON DELETE CASCADE =====
--- host_metrics não tinha FK nem cascade -> métricas órfãs ao deletar server
-DO $$ BEGIN
-  IF NOT EXISTS (SELECT 1 FROM information_schema.table_constraints
-                 WHERE constraint_name='host_metrics_server_fk') THEN
-    ALTER TABLE host_metrics
-      ADD CONSTRAINT host_metrics_server_fk
-      FOREIGN KEY (server_id) REFERENCES servers(id) ON DELETE CASCADE;
-  END IF;
-END $$;
-
--- containers já tem FK CASCADE (ok)
-
--- logs: hypertable, FK não recomendado em hyper. Limpamos via DELETE no service.
-
--- terminal_sessions, script_files, script_executions: já têm FK ou são limpos pelo service.
+-- ===== Limpeza de hypertables =====
+-- IMPORTANTE:
+-- Não adicionar FK em hypertables com compressão ativa.
+-- TimescaleDB bloqueia ALTER TABLE ADD CONSTRAINT nesses casos:
+-- "operation not supported on hypertables that have compression enabled".
+-- Por isso logs/host_metrics são limpos explicitamente no ServersService.remove().
 
 -- ===== Cache de features detectadas em cada cluster PG =====
 CREATE TABLE IF NOT EXISTS pg_cluster_features (
