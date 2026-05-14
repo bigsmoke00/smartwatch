@@ -142,7 +142,7 @@ export class TopologyService {
    *  - cria nó pra cada cluster PostgreSQL configurado
    *  - tenta inferir conexões TCP via `ss`/netstat (best-effort no agent)
    */
-  @Cron(CronExpression.EVERY_2_MINUTES)
+  @Cron('0 */2 * * * *')
   async discover() {
     try {
       // 1) Servers

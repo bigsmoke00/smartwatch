@@ -3,7 +3,7 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { Pool } from 'pg';
 import { gzipSync } from 'zlib';
 import { Response } from 'express';
-import * as archiver from 'archiver';
+import archiver from 'archiver';
 import { PG_POOL } from '../db/db.module';
 import { LogsRepository, LogQuery } from '../logs/logs.repository';
 import { ControlGateway } from '../docker-manager/control.gateway';
