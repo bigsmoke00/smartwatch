@@ -20,9 +20,11 @@ interface ServerRow { id: string; name: string; environment?: string }
 interface FsItem {
   name: string; path: string; type: 'dir' | 'file' | 'symlink';
   size: number | null; mtime: string | null;
+  lastEditor?: string | null; lastEditedAt?: string | null;
 }
 interface FileResp {
   path: string; size: number; sha256: string; mtime: string; content: string;
+  lastEditor?: string | null; lastEditedAt?: string | null; lastComment?: string | null;
 }
 interface Version {
   id: string; ts: string; authorEmail?: string; sha256: string; comment?: string;
@@ -31,7 +33,7 @@ interface Version {
 export default function ScriptsPage() {
   const [servers, setServers] = useState<ServerRow[]>([]);
   const [serverId, setServerId] = useState<string>('');
-  const [path, setPath] = useState<string>('/opt');
+  const [path, setPath] = useState<string>('/');
   const [items, setItems] = useState<FsItem[]>([]);
   const [file, setFile] = useState<FileResp | null>(null);
   const [content, setContent] = useState<string>('');
@@ -198,18 +200,25 @@ export default function ScriptsPage() {
             <div className="max-h-[70vh] overflow-auto">
               {safeArray<FsItem>(items).map((it) => {
                 const Icon = it.type === 'dir' ? Folder : FileText;
+                const editorLabel = it.lastEditor
+                  ? `por ${it.lastEditor}${it.lastEditedAt ? ' em ' + fmtTime(it.lastEditedAt) : ''}`
+                  : '';
                 return (
                   <button
                     key={it.path}
+                    title={editorLabel || (it.mtime ? `mtime: ${fmtTime(it.mtime)}` : '')}
                     onClick={() => it.type === 'dir' ? loadDir(it.path) : openFile(it.path)}
                     className="w-full text-left px-3 py-1.5 text-sm flex items-center gap-2 hover:bg-panel2"
                   >
                     <Icon size={14} className={it.type === 'dir' ? 'text-accent' : 'text-muted'} />
-                    <span className="truncate">{it.name}</span>
-                    {it.size != null && (
-                      <span className="ml-auto text-xs text-muted">
-                        {it.type === 'dir' ? '' : fmtBytes(it.size)}
+                    <span className="truncate flex-1">{it.name}</span>
+                    {it.lastEditor && (
+                      <span className="text-[10px] text-accent shrink-0 truncate max-w-[120px]" title={editorLabel}>
+                        ✎ {it.lastEditor.split('@')[0]}
                       </span>
+                    )}
+                    {it.size != null && it.type !== 'dir' && (
+                      <span className="text-xs text-muted shrink-0">{fmtBytes(it.size)}</span>
                     )}
                   </button>
                 );
@@ -222,10 +231,17 @@ export default function ScriptsPage() {
 
           {/* EDITOR */}
           <Card className="col-span-9 p-0 overflow-hidden">
-            <div className="px-3 py-2 bg-panel2 flex items-center justify-between">
-              <div className="text-sm font-mono truncate">
+            <div className="px-3 py-2 bg-panel2 flex items-center justify-between gap-3">
+              <div className="text-sm font-mono truncate flex-1">
                 {file ? file.path : 'selecione um arquivo'}
-                {dirty && <span className="ml-2 text-warn">●</span>}
+                {dirty && <span className="ml-2 text-warn" title="alterado, não salvo">●</span>}
+                {file?.lastEditor && (
+                  <div className="text-[11px] text-muted font-sans truncate">
+                    Última edição por <span className="text-accent">{file.lastEditor}</span>
+                    {file.lastEditedAt && <> em {fmtTime(file.lastEditedAt)}</>}
+                    {file.lastComment && <> — “{file.lastComment}”</>}
+                  </div>
+                )}
               </div>
               {file && (
                 <div className="flex items-center gap-2">

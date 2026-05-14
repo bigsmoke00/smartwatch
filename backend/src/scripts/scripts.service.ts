@@ -10,6 +10,8 @@ import { createHash } from 'crypto';
 import { PG_POOL } from '../db/db.module';
 import { ControlGateway } from '../docker-manager/control.gateway';
 
+function safeArray<T>(v: unknown): T[] { return Array.isArray(v) ? (v as T[]) : []; }
+
 interface FileStat {
   path: string;
   size: number | null;
@@ -27,14 +29,51 @@ export class ScriptsService {
 
   // ---------- Filesystem proxy ----------
   async listDir(serverId: string, path: string) {
-    return this.ctrl.invoke(serverId, 'fs.listDir', { path });
+    const r: any = await this.ctrl.invoke(serverId, 'fs.listDir', { path });
+    // Anexa "lastEditor" em cada item do tipo file (busca apenas paths
+    // que existem em script_files — overhead irrelevante).
+    const items: any[] = safeArray(r?.items);
+    const filePaths = items.filter((it) => it?.type === 'file').map((it) => it.path);
+    if (filePaths.length) {
+      const editorsQ = await this.pool.query(
+        `SELECT sf.path,
+                v.author_email AS "lastEditor",
+                v.ts           AS "lastEditedAt"
+         FROM script_files sf
+         LEFT JOIN LATERAL (
+           SELECT author_email, ts FROM script_versions
+           WHERE file_id = sf.id ORDER BY ts DESC LIMIT 1
+         ) v ON true
+         WHERE sf.server_id = $1 AND sf.path = ANY($2::text[])`,
+        [serverId, filePaths],
+      );
+      const idx = new Map<string, { lastEditor?: string; lastEditedAt?: string }>(
+        editorsQ.rows.map((row) => [row.path, { lastEditor: row.lastEditor, lastEditedAt: row.lastEditedAt }]),
+      );
+      for (const it of items) {
+        const m = idx.get(it.path);
+        if (m) { it.lastEditor = m.lastEditor; it.lastEditedAt = m.lastEditedAt; }
+      }
+    }
+    return { ...r, items };
   }
 
   async readFile(serverId: string, path: string) {
     const r = await this.ctrl.invoke<FileStat & { content: string }>(serverId, 'fs.readFile', { path });
     // Sincroniza tabela script_files (cache de metadados)
-    await this.upsertFileRecord(serverId, r);
-    return r;
+    const file = await this.upsertFileRecord(serverId, r);
+    // Anexa último editor (autor da versão mais recente)
+    const last = await this.pool.query(
+      `SELECT author_email AS "lastEditor", ts AS "lastEditedAt", comment
+       FROM script_versions WHERE file_id=$1 ORDER BY ts DESC LIMIT 1`,
+      [file.id],
+    );
+    return {
+      ...r,
+      lastEditor: last.rows[0]?.lastEditor ?? null,
+      lastEditedAt: last.rows[0]?.lastEditedAt ?? null,
+      lastComment: last.rows[0]?.comment ?? null,
+    };
   }
 
   async writeFile(input: {

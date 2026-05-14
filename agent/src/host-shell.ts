@@ -16,6 +16,7 @@
  * que parecem destrutivos (rm/mv/dd/...) são bloqueados ANTES de chegar no shell.
  */
 import { config } from './config.js';
+import { existsSync } from 'node:fs';
 
 let ptyMod: any = null;
 async function getPty() {
@@ -42,14 +43,19 @@ const READONLY_BLOCK = /\b(rm|rmdir|mv|dd|mkfs|shutdown|reboot|halt|poweroff|kil
 
 export async function spawnHostShell(opts: HostSessionOpts) {
   const pty = await getPty();
-  const shell = opts.shell ?? (opts.sudo ? 'sudo' : process.env.SHELL ?? '/bin/bash');
-  const args = opts.sudo ? ['-i', '-S', process.env.SHELL ?? '/bin/bash'] : [];
+  const hasHostRoot = !!config.hostRoot && existsSync(`${config.hostRoot}/bin/sh`);
+  const hostShell = existsSync(`${config.hostRoot}/bin/bash`) ? '/bin/bash' : '/bin/sh';
+  const requestedShell = opts.shell && opts.shell !== '/bin/sh' ? opts.shell : hostShell;
+  const shell = hasHostRoot ? (process.env.LOGWATCH_CHROOT_BIN || 'chroot') : (opts.sudo ? 'sudo' : requestedShell);
+  const args = hasHostRoot
+    ? [config.hostRoot, opts.sudo ? '/usr/bin/sudo' : requestedShell, ...(opts.sudo ? ['-i'] : [])]
+    : (opts.sudo ? ['-i', '-S', requestedShell] : []);
 
   const term = pty.spawn(shell, args, {
     name: 'xterm-256color',
     cols: opts.cols ?? 80,
     rows: opts.rows ?? 24,
-    cwd: opts.cwd ?? process.env.HOME ?? '/',
+    cwd: hasHostRoot ? '/' : (opts.cwd ?? process.env.HOME ?? '/'),
     env: { ...process.env, TERM: 'xterm-256color', ...(opts.env ?? {}) },
   });
 

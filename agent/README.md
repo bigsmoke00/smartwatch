@@ -14,14 +14,18 @@ docker run -d \
   --name logwatch-agent \
   --restart unless-stopped \
   --pid host \
+  --network host \
   -v /var/run/docker.sock:/var/run/docker.sock:ro \
+  -v /:/host:rw,rslave \
   -e LOGWATCH_BASE_URL=https://logwatch.suainfra.com/api \
   -e LOGWATCH_API_KEY=sk_xxxxxxxx.yyyyyyyyyyyyyyyyyyyyyyyy \
   -e LOGWATCH_SERVER_NAME=$(hostname) \
+  -e LOGWATCH_HOST_ROOT=/host \
+  -e LOGWATCH_ALLOWED_PATHS=/ \
   ghcr.io/seu-org/logwatch-agent:latest
 ```
 
-> `--pid host` é opcional, melhora a precisão da contagem de processos.
+`-v /:/host:rw,rslave` é obrigatório para Terminal Web em modo host e Script Manager navegarem no Linux host. A UI usa caminhos reais do host (`/opt`, `/etc`, `/var/log`), e o agent traduz internamente para `/host/opt`, `/host/etc`, `/host/var/log`.
 
 ## Variáveis de ambiente
 
@@ -30,6 +34,8 @@ docker run -d \
 | `LOGWATCH_BASE_URL` | `http://backend:4000/api` | URL base do backend (sem `/`) |
 | `LOGWATCH_API_KEY` | — | Chave `sk_<8>.<24>` gerada no painel |
 | `LOGWATCH_SERVER_NAME` | `unknown` | Nome legível do host |
+| `LOGWATCH_HOST_ROOT` | `/host` | Onde o `/` do host foi montado dentro do agent |
+| `LOGWATCH_ALLOWED_PATHS` | `/` | CSV de caminhos do host liberados para Script Manager |
 | `LOGWATCH_BATCH_SIZE` | `200` | Linhas por POST de logs |
 | `LOGWATCH_FLUSH_INTERVAL_MS` | `2000` | Intervalo entre flushes de logs |
 | `LOGWATCH_METRICS_INTERVAL_MS` | `15000` | Intervalo de coleta de métricas |
@@ -76,10 +82,14 @@ Snippet de playbook para rolar o agent na frota:
         image: ghcr.io/seu-org/logwatch-agent:latest
         restart_policy: unless-stopped
         pid_mode: host
+        network_mode: host
         volumes:
           - /var/run/docker.sock:/var/run/docker.sock:ro
+          - /:/host:rw,rslave
         env:
           LOGWATCH_BASE_URL: "{{ logwatch_base_url }}"
           LOGWATCH_API_KEY:  "{{ logwatch_api_key }}"
           LOGWATCH_SERVER_NAME: "{{ inventory_hostname }}"
+          LOGWATCH_HOST_ROOT: /host
+          LOGWATCH_ALLOWED_PATHS: /
 ```

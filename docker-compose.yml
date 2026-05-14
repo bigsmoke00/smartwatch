@@ -85,11 +85,16 @@ services:
       dockerfile: Dockerfile
     restart: unless-stopped
     environment:
-      LOGWATCH_BASE_URL: http://backend:4000/api
+      LOGWATCH_BASE_URL: http://127.0.0.1:4000/api
       LOGWATCH_API_KEY: ${LOGWATCH_DEMO_API_KEY:-}
       LOGWATCH_SERVER_NAME: local-host
+      LOGWATCH_HOST_ROOT: /host
+      LOGWATCH_ALLOWED_PATHS: ${LOGWATCH_ALLOWED_PATHS:-/}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /:/host:rw,rslave
+    pid: "host"
+    network_mode: "host"
     # GID do grupo `docker` do host. Descubra com:
     #   stat -c '%g' /var/run/docker.sock
     # e exporte como DOCKER_GID antes de subir o agent.

@@ -19,6 +19,7 @@ export const config = {
   metricsIntervalMs: parseInt(process.env.LOGWATCH_METRICS_INTERVAL_MS ?? '15000', 10),
   inventoryIntervalMs: parseInt(process.env.LOGWATCH_INVENTORY_INTERVAL_MS ?? '60000', 10),
   excludeSelf: (process.env.LOGWATCH_EXCLUDE_SELF ?? 'true').toLowerCase() === 'true',
+  hostRoot: process.env.LOGWATCH_HOST_ROOT || '/host',
   agentVersion: '0.2.0',
 };
 

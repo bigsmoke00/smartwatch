@@ -179,7 +179,9 @@ export default function TerminalPage() {
         ) : (
           <Card className="p-2">
             <div className="flex justify-between items-center mb-2 px-2">
-              <span className="text-sm font-mono">{activeSession.sessionId.slice(0, 8)} · {activeSession.containerId.slice(0, 12)}</span>
+              <span className="text-sm font-mono">
+                {activeSession.sessionId.slice(0, 8)} · {activeSession.target === 'host' ? 'Host Linux' : activeSession.containerId?.slice(0, 12)}
+              </span>
               <Button variant="secondary" onClick={() => setActiveSession(null)}>Fechar</Button>
             </div>
             <TerminalView
