@@ -25,6 +25,7 @@ import { attachLogs, flushLogs } from './logs.js';
 import { pushMetrics, warmup as metricsWarmup } from './metrics.js';
 import { startControlChannel } from './control.js';
 import { pushContainerInventory } from './inventory.js';
+import { startHostLogTail } from './host-logs.js';
 
 const docker = new Docker({ socketPath: '/var/run/docker.sock' });
 
@@ -74,6 +75,7 @@ async function main() {
   await discover();
   watchEvents();
   startControlChannel(docker);
+  startHostLogTail();
 
   setInterval(flushLogs, config.flushIntervalMs).unref();
   setInterval(discover, 30_000).unref();

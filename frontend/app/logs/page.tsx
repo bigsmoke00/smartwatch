@@ -9,7 +9,8 @@ import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
 import { apiFetch, Auth, handleUnauthorized } from '@/lib/api';
 import { LEVEL_COLOR, fmtTime, safeArray } from '@/lib/utils';
-import { Pause, Play, Search, RefreshCw, Wifi, WifiOff } from 'lucide-react';
+import { Pause, Play, Search, RefreshCw, Wifi, WifiOff, Server as ServerIcon, Container as ContainerIcon, FileText } from 'lucide-react';
+import { TimeRangePicker, DEFAULT_RANGE, TimeRange } from '@/components/ui/TimeRangePicker';
 
 interface LogHit {
   id: string;
@@ -51,8 +52,9 @@ function LogsPageInner() {
   const [serverId, setServerId] = useState<string>(params?.get('serverId') ?? '');
   const [q, setQ] = useState('');
   const [levels, setLevels] = useState<string[]>([]);
-  const [from, setFrom] = useState('now-15m');
-  const [to, setTo] = useState('now');
+  const [range, setRange] = useState<TimeRange>(DEFAULT_RANGE);
+  // 'all' | 'host' | 'container' — host = linhas vindas do agent /var/log; container = docker exec
+  const [source, setSource] = useState<'all' | 'host' | 'container'>('all');
   const [hits, setHits] = useState<LogHit[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
@@ -72,16 +74,26 @@ function LogsPageInner() {
     setLoading(true);
     const qp = new URLSearchParams();
     if (serverId) qp.set('serverId', serverId);
-    if (q) qp.set('q', q);
+    let effectiveQ = q;
+    // Filtro de fonte é traduzido em FTS porque o backend não tem campo
+    // dedicado — usamos container_name prefix "host:" para host log.
+    // Backend já aceita containerName via param ou search no message.
+    if (source === 'host') effectiveQ = `${q ? q + ' ' : ''}"host:"`;
+    if (effectiveQ) qp.set('q', effectiveQ);
     if (levels.length) qp.set('level', levels.join(','));
-    if (from) qp.set('from', from);
-    if (to) qp.set('to', to);
+    qp.set('from', range.from);
+    qp.set('to', range.to);
     qp.set('pageSize', '300');
     try {
       const data = await apiFetch<{ hits: LogHit[]; total: number }>(
         `/logs?${qp.toString()}`,
       );
-      setHits(safeArray<LogHit>(data?.hits));
+      let arr = safeArray<LogHit>(data?.hits);
+      // Container-only: filtra client-side as linhas que NÃO são "host:..."
+      if (source === 'container') {
+        arr = arr.filter((h) => !(h.containerName ?? '').startsWith('host:'));
+      }
+      setHits(arr);
       setTotal(data?.total ?? 0);
     } catch {
       setHits([]);
@@ -94,7 +106,7 @@ function LogsPageInner() {
   useEffect(() => {
     search();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [serverId]);
+  }, [serverId, range.from, range.to, source]);
 
   // ---- WebSocket com reconnect + exponential backoff ----
   useEffect(() => {
@@ -153,6 +165,12 @@ function LogsPageInner() {
           (d.message || '').toLowerCase().includes(needle),
         );
       }
+      // filtro de fonte (host = container_name começa com "host:")
+      if (source === 'host') {
+        filtered = filtered.filter((d) => (d.containerName ?? '').startsWith('host:'));
+      } else if (source === 'container') {
+        filtered = filtered.filter((d) => !(d.containerName ?? '').startsWith('host:'));
+      }
       if (filtered.length === 0) return;
       setHits((prev) => [...filtered, ...prev].slice(0, 1000));
     });
@@ -162,7 +180,7 @@ function LogsPageInner() {
       s.disconnect();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [live, serverId]);
+  }, [live, serverId, source]);
 
   const sortedHits = useMemo(
     () =>
@@ -214,42 +232,62 @@ function LogsPageInner() {
                 ))}
               </select>
             </div>
-            <div className="md:col-span-5">
+            <div className="md:col-span-6">
               <label className="text-xs text-muted">Query</label>
               <div className="relative">
                 <Input
                   value={q}
                   onChange={(e) => setQ(e.target.value)}
                   onKeyDown={(e) => e.key === 'Enter' && search()}
-                  placeholder='ex: "OutOfMemory" OR "panic"'
+                  placeholder='ex: "OutOfMemory" OR "panic" — aceita AND/OR/aspas'
                   className="pl-8"
                 />
                 <Search size={14} className="absolute left-2 top-2.5 text-muted" />
               </div>
             </div>
-            <div className="md:col-span-2">
-              <label className="text-xs text-muted">De</label>
-              <Input value={from} onChange={(e) => setFrom(e.target.value)} />
-            </div>
-            <div className="md:col-span-2">
-              <label className="text-xs text-muted">Até</label>
-              <Input value={to} onChange={(e) => setTo(e.target.value)} />
+            <div className="md:col-span-3">
+              <label className="text-xs text-muted">Janela</label>
+              <TimeRangePicker value={range} onChange={setRange} />
             </div>
           </div>
-          <div className="flex flex-wrap gap-1 mt-3">
-            {LEVELS.map((l) => (
-              <button
-                key={l}
-                onClick={() => toggleLevel(l)}
-                className={`text-xs px-2 py-1 rounded border ${
-                  levels.includes(l)
-                    ? 'border-accent text-accent bg-accent/10'
-                    : 'border-border text-muted hover:text-text'
-                }`}
-              >
-                {l}
-              </button>
-            ))}
+
+          {/* Linha 2: source toggle + level chips */}
+          <div className="flex flex-wrap items-center gap-3 mt-3">
+            <div className="flex items-center gap-1 border border-border rounded-md p-0.5">
+              {([
+                { key: 'all', label: 'Tudo', Icon: FileText },
+                { key: 'host', label: 'Host (/var/log)', Icon: ServerIcon },
+                { key: 'container', label: 'Containers', Icon: ContainerIcon },
+              ] as const).map(({ key, label, Icon }) => (
+                <button
+                  key={key}
+                  onClick={() => setSource(key)}
+                  className={`flex items-center gap-1 text-xs px-2 py-1 rounded ${
+                    source === key ? 'bg-accent text-white' : 'text-muted hover:text-text'
+                  }`}
+                >
+                  <Icon size={11} /> {label}
+                </button>
+              ))}
+            </div>
+
+            <div className="h-5 w-px bg-border" />
+
+            <div className="flex flex-wrap gap-1">
+              {LEVELS.map((l) => (
+                <button
+                  key={l}
+                  onClick={() => toggleLevel(l)}
+                  className={`text-xs px-2 py-1 rounded border ${
+                    levels.includes(l)
+                      ? 'border-accent text-accent bg-accent/10'
+                      : 'border-border text-muted hover:text-text'
+                  }`}
+                >
+                  {l}
+                </button>
+              ))}
+            </div>
           </div>
         </Card>
 
@@ -270,24 +308,35 @@ function LogsPageInner() {
                 Nenhum log encontrado para os filtros selecionados.
               </div>
             )}
-            {sortedHits.map((h) => (
-              <div
-                key={h.id || (h.ts ?? '') + (h.message ?? '')}
-                className="px-3 py-1 border-b border-border/50 hover:bg-panel2 flex gap-3"
-              >
-                <span className="text-muted shrink-0">
-                  {h.ts ? fmtTime(h.ts) : '—'}
-                </span>
-                <span className={`shrink-0 uppercase font-semibold ${LEVEL_COLOR[h.level || 'unknown']}`}>
-                  {(h.level || 'unknown').padEnd(5)}
-                </span>
-                <span className="shrink-0 text-accent">{h.serverName ?? '—'}</span>
-                {h.containerName && (
-                  <span className="shrink-0 text-muted">[{h.containerName}]</span>
-                )}
-                <span className="whitespace-pre-wrap break-all">{h.message ?? ''}</span>
-              </div>
-            ))}
+            {sortedHits.map((h) => {
+              const isHost = (h.containerName ?? '').startsWith('host:');
+              const hostFile = isHost ? h.containerName!.replace(/^host:/, '') : null;
+              return (
+                <div
+                  key={h.id || (h.ts ?? '') + (h.message ?? '')}
+                  className="px-3 py-1 border-b border-border/50 hover:bg-panel2 flex gap-3"
+                >
+                  <span className="text-muted shrink-0">
+                    {h.ts ? fmtTime(h.ts) : '—'}
+                  </span>
+                  <span className={`shrink-0 uppercase font-semibold ${LEVEL_COLOR[h.level || 'unknown']}`}>
+                    {(h.level || 'unknown').padEnd(5)}
+                  </span>
+                  <span className="shrink-0 text-accent">{h.serverName ?? '—'}</span>
+                  {isHost ? (
+                    <span
+                      className="shrink-0 text-warn"
+                      title={`Host /var/log/${hostFile}`}
+                    >
+                      [host:{hostFile}]
+                    </span>
+                  ) : h.containerName ? (
+                    <span className="shrink-0 text-muted">[{h.containerName}]</span>
+                  ) : null}
+                  <span className="whitespace-pre-wrap break-all">{h.message ?? ''}</span>
+                </div>
+              );
+            })}
           </div>
         </Card>
       </div>

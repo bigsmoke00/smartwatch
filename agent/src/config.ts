@@ -20,7 +20,18 @@ export const config = {
   inventoryIntervalMs: parseInt(process.env.LOGWATCH_INVENTORY_INTERVAL_MS ?? '60000', 10),
   excludeSelf: (process.env.LOGWATCH_EXCLUDE_SELF ?? 'true').toLowerCase() === 'true',
   hostRoot: process.env.LOGWATCH_HOST_ROOT || '/host',
-  agentVersion: '0.2.0',
+
+  // ----- Tail de logs do host (/var/log/...) -----
+  // Lista de paths absolutos (no espaço virtual do host) ou diretórios.
+  // Glob simples: termina com / vai expandir *.log. Default cobre o usual.
+  hostLogPaths: (process.env.LOGWATCH_HOST_LOG_PATHS ??
+    '/var/log/syslog,/var/log/auth.log,/var/log/messages,/var/log/kern.log,/var/log/dpkg.log,/var/log/nginx/,/var/log/apache2/'
+  ).split(',').map((s) => s.trim()).filter(Boolean),
+  hostLogEnabled: (process.env.LOGWATCH_HOST_LOG_ENABLED ?? 'true').toLowerCase() === 'true',
+  hostLogPollMs: parseInt(process.env.LOGWATCH_HOST_LOG_POLL_MS ?? '2000', 10),
+  hostLogMaxLine: parseInt(process.env.LOGWATCH_HOST_LOG_MAX_LINE ?? '8192', 10),
+
+  agentVersion: '0.3.0',
 };
 
 function baseUrl(): string {
