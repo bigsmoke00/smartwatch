@@ -21,12 +21,13 @@ export const config = {
   excludeSelf: (process.env.LOGWATCH_EXCLUDE_SELF ?? 'true').toLowerCase() === 'true',
   hostRoot: process.env.LOGWATCH_HOST_ROOT || '/host',
 
-  // ----- Tail de logs do host (/var/log/...) -----
-  // Lista de paths absolutos (no espaço virtual do host) ou diretórios.
-  // Glob simples: termina com / vai expandir *.log. Default cobre o usual.
-  hostLogPaths: (process.env.LOGWATCH_HOST_LOG_PATHS ??
-    '/var/log/syslog,/var/log/auth.log,/var/log/messages,/var/log/kern.log,/var/log/dpkg.log,/var/log/nginx/,/var/log/apache2/'
-  ).split(',').map((s) => s.trim()).filter(Boolean),
+  // ----- Tail de logs do host -----
+  // Default: o diretório /var/log inteiro (até 3 níveis de profundidade).
+  // O agent filtra automaticamente: pega .log e logs clássicos, descarta
+  // .gz/.zip/rotacionados/binários.
+  // Para restringir, defina LOGWATCH_HOST_LOG_PATHS com CSV de paths absolutos.
+  hostLogPaths: (process.env.LOGWATCH_HOST_LOG_PATHS ?? '/var/log')
+    .split(',').map((s) => s.trim()).filter(Boolean),
   hostLogEnabled: (process.env.LOGWATCH_HOST_LOG_ENABLED ?? 'true').toLowerCase() === 'true',
   hostLogPollMs: parseInt(process.env.LOGWATCH_HOST_LOG_POLL_MS ?? '2000', 10),
   hostLogMaxLine: parseInt(process.env.LOGWATCH_HOST_LOG_MAX_LINE ?? '8192', 10),

@@ -33,23 +33,55 @@ interface Cursor {
 const cursors = new Map<string, Cursor>();        // key = realPath
 const pending: any[] = [];
 
-/** Resolve diretórios → lista de arquivos *.log dentro. */
+// Tipos de arquivo que SEMPRE pulamos (comprimidos, rotacionados, sockets, lock files).
+const SKIP_EXT = /\.(gz|bz2|xz|zip|zst|lz4|tar|1|2|3|4|5|6|7|8|9|old|bak|swp|sock|pid|lock)$/i;
+// Rotacionados estilo "auth.log.1" / "syslog.7.gz" / "nginx.access.log-20240514"
+const SKIP_ROTATED = /(\.log\.\d+|-\d{8})/i;
+// Arquivos que reconhecemos como log mesmo sem extensão (classics + journald-ish).
+const KNOWN_NAMES = /^(syslog|messages|auth\.log|kern\.log|dmesg|secure|cron|mail\.(?:log|info|warn|err)|boot\.log|lastlog|wtmp|btmp|debug|user\.log)$/;
+
+function looksLikeLog(filename: string): boolean {
+  if (SKIP_EXT.test(filename)) return false;
+  if (SKIP_ROTATED.test(filename)) return false;
+  if (filename.startsWith('.')) return false;           // hidden
+  // Aceita: termina em .log, ou nome clássico, ou contém ".log" no meio
+  // (cobre "lab-br.access.log", "myapp.error.log", etc)
+  return /\.log(\.[a-z]+)?$|^.+\.log$/.test(filename) || KNOWN_NAMES.test(filename);
+}
+
+/**
+ * Resolve diretórios → lista recursiva de arquivos de log (profundidade max 3).
+ * Pega TUDO que aparenta ser arquivo de log não comprimido, em qualquer
+ * subnível (ex: /var/log/nginx/sites-enabled/foo.access.log).
+ */
 async function expandPaths(items: string[]): Promise<{ virtual: string; real: string }[]> {
   const out: { virtual: string; real: string }[] = [];
+  const MAX_DEPTH = 3;
+
+  async function walk(virtualBase: string, realBase: string, depth: number) {
+    let entries: string[];
+    try { entries = await fs.readdir(realBase); } catch { return; }
+    for (const f of entries) {
+      const realFull = realBase + sep + f;
+      let stf;
+      try { stf = statSync(realFull); } catch { continue; }
+      const virtualFull = virtualBase.replace(/\/$/, '') + '/' + f;
+      if (stf.isDirectory()) {
+        if (depth < MAX_DEPTH) await walk(virtualFull, realFull, depth + 1);
+      } else if (stf.isFile()) {
+        if (!looksLikeLog(f)) continue;
+        if (stf.size > 2 * 1024 * 1024 * 1024) continue; // > 2GB skip por segurança
+        out.push({ virtual: virtualFull, real: realFull });
+      }
+    }
+  }
+
   for (const v of items) {
     const real = toReal(v);
     if (!existsSync(real)) continue;
     const st = statSync(real);
     if (st.isDirectory()) {
-      try {
-        const entries = await fs.readdir(real);
-        for (const f of entries) {
-          if (!/\.log$/.test(f) && !/^syslog|messages|auth\.log|kern\.log/.test(f)) continue;
-          const realFull = real + sep + f;
-          const stf = statSync(realFull);
-          if (stf.isFile()) out.push({ virtual: v.replace(/\/$/, '') + '/' + f, real: realFull });
-        }
-      } catch { /* permissão */ }
+      await walk(v, real, 1);
     } else if (st.isFile()) {
       out.push({ virtual: v, real });
     }
@@ -160,14 +192,41 @@ export async function startHostLogTail() {
     console.warn('[agent] host log tail ignorado: bind /host não encontrado (use -v /:/host:rw,rslave)');
     return;
   }
-  console.log(`[agent] host log tail iniciado: ${config.hostLogPaths.join(', ')}`);
+  console.log(`[agent] host log tail iniciado · paths configurados: ${config.hostLogPaths.join(', ')}`);
 
   // Inicialização: posiciona cursores no EOF
   const initialFiles = await expandPaths(config.hostLogPaths);
   for (const f of initialFiles) await initCursor(f.real, f.virtual);
 
+  // Log de auditoria: quais arquivos serão tailados de fato
+  if (initialFiles.length === 0) {
+    console.warn('[agent] NENHUM arquivo de log detectado nos paths configurados. ' +
+      'Verifique se /var/log/* existe no host e está acessível via /host/var/log.');
+  } else {
+    console.log(`[agent] tailando ${initialFiles.length} arquivos:`);
+    for (const f of initialFiles) console.log(`  - ${f.virtual}`);
+  }
+
   setInterval(() => { pollOnce().catch((e) => console.warn('[agent] hostlog poll', e.message)); },
     config.hostLogPollMs).unref();
   setInterval(() => { flush().catch((e) => console.warn('[agent] hostlog flush', e.message)); },
     config.flushIntervalMs).unref();
+
+  // A cada 60s, re-expande paths pra detectar arquivos novos (ex: vhost novo do nginx).
+  setInterval(async () => {
+    try {
+      const fresh = await expandPaths(config.hostLogPaths);
+      let added = 0;
+      for (const f of fresh) {
+        if (!cursors.has(f.real)) {
+          await initCursor(f.real, f.virtual);
+          added++;
+          console.log(`[agent] novo arquivo de log detectado: ${f.virtual}`);
+        }
+      }
+      if (added > 0) console.log(`[agent] +${added} arquivos adicionados ao tail`);
+    } catch (e: any) {
+      console.warn('[agent] hostlog rescan:', e.message);
+    }
+  }, 60_000).unref();
 }

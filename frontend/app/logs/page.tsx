@@ -74,24 +74,21 @@ function LogsPageInner() {
     setLoading(true);
     const qp = new URLSearchParams();
     if (serverId) qp.set('serverId', serverId);
-    let effectiveQ = q;
-    // Filtro de fonte é traduzido em FTS porque o backend não tem campo
-    // dedicado — usamos container_name prefix "host:" para host log.
-    // Backend já aceita containerName via param ou search no message.
-    if (source === 'host') effectiveQ = `${q ? q + ' ' : ''}"host:"`;
-    if (effectiveQ) qp.set('q', effectiveQ);
+    if (q) qp.set('q', q);
     if (levels.length) qp.set('level', levels.join(','));
     qp.set('from', range.from);
     qp.set('to', range.to);
-    qp.set('pageSize', '300');
+    // Pede mais pra compensar o filtro client-side de fonte
+    qp.set('pageSize', source === 'all' ? '300' : '500');
     try {
       const data = await apiFetch<{ hits: LogHit[]; total: number }>(
         `/logs?${qp.toString()}`,
       );
       let arr = safeArray<LogHit>(data?.hits);
-      // Container-only: filtra client-side as linhas que NÃO são "host:..."
-      if (source === 'container') {
-        arr = arr.filter((h) => !(h.containerName ?? '').startsWith('host:'));
+      if (source === 'host') {
+        arr = arr.filter((h) => (h.containerName ?? '').startsWith('host:'));
+      } else if (source === 'container') {
+        arr = arr.filter((h) => h.containerName && !h.containerName.startsWith('host:'));
       }
       setHits(arr);
       setTotal(data?.total ?? 0);
