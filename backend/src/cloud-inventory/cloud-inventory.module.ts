@@ -3,7 +3,7 @@ import {
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Pool } from 'pg';
-import { IsBoolean, IsOptional, IsString } from 'class-validator';
+import { IsArray, IsBoolean, IsOptional, IsString } from 'class-validator';
 import { PG_POOL, DbModule } from '../db/db.module';
 import { AwsSyncService } from './aws-sync.service';
 import { SecretsService } from '../secrets/secrets.service';
@@ -43,6 +43,60 @@ class CloudInventoryService {
       [c.cloud, c.alias, c.accountId, c.vaultSecret, c.defaultRegion ?? null],
     );
     return r.rows[0];
+  }
+
+  /**
+   * Provisiona AWS em um único call:
+   *   1. valida cred via STS (precisa funcionar antes de salvar)
+   *   2. salva cred no vault (nome derivado: aws_<alias>)
+   *   3. cria/atualiza cloud_accounts
+   *   4. opcionalmente dispara sync
+   *
+   * Retorna sumário pra UI mostrar tudo de uma vez.
+   */
+  async provisionAws(input: {
+    alias: string;
+    accessKeyId: string;
+    secretAccessKey: string;
+    defaultRegion?: string;
+    runSync?: boolean;
+    userId: string;
+  }) {
+    // 1. valida
+    const v = await this.aws.validate({
+      accessKeyId: input.accessKeyId,
+      secretAccessKey: input.secretAccessKey,
+      region: input.defaultRegion,
+    });
+    if (!v.ok) {
+      return { ok: false, step: 'validate', message: v.message };
+    }
+    // 2. vault: nome do segredo padronizado (idempotente)
+    const safeAlias = input.alias.replace(/[^a-zA-Z0-9_]/g, '_').toLowerCase();
+    const vaultName = `aws_${safeAlias}`;
+    await this.secrets.set(vaultName,
+      JSON.stringify({
+        accessKeyId: input.accessKeyId,
+        secretAccessKey: input.secretAccessKey,
+        region: input.defaultRegion ?? 'us-east-1',
+      }),
+      `Credencial AWS para ${input.alias} (account ${v.account})`,
+    );
+    // 3. cloud_accounts
+    const acc = await this.createAccount({
+      cloud: 'aws', alias: input.alias,
+      accountId: v.account, vaultSecret: vaultName,
+      defaultRegion: input.defaultRegion,
+    });
+    // 4. sync opcional
+    let sync: any = null;
+    if (input.runSync) {
+      sync = await this.syncAccount(acc.id, {
+        regions: input.defaultRegion ? [input.defaultRegion] : undefined,
+        userId: input.userId,
+      }).catch((e) => ({ ok: false, message: e.message }));
+    }
+    return { ok: true, account: { id: acc.id, accountId: v.account, arn: v.arn }, sync };
   }
 
   async deleteAccount(id: string) {
@@ -111,6 +165,17 @@ class ValidateAwsDto {
   @IsString() secretAccessKey!: string;
   @IsOptional() @IsString() region?: string;
 }
+class ProvisionAwsDto {
+  @IsString() alias!: string;
+  @IsString() accessKeyId!: string;
+  @IsString() secretAccessKey!: string;
+  @IsOptional() @IsString() defaultRegion?: string;
+  @IsOptional() @IsBoolean() runSync?: boolean;
+}
+class SyncDtoExtended {
+  @IsOptional() @IsArray() regions?: string[];
+  @IsOptional() @IsArray() types?: string[];
+}
 class SyncDto {
   @IsOptional() regions?: string[];
   @IsOptional() types?: string[];
@@ -141,6 +206,24 @@ class CloudInventoryController {
   @Post('aws/validate')
   validateAws(@Body() dto: ValidateAwsDto) {
     return this.svc.validateAws(dto.accessKeyId, dto.secretAccessKey, dto.region);
+  }
+
+  /**
+   * Provisiona AWS num único call: valida cred → salva no vault → cria conta
+   * → opcionalmente dispara primeiro sync. UI usa este endpoint.
+   */
+  @RequirePermission('inventory:cloud_sync')
+  @Audit('cloud.aws_provision')
+  @Post('aws/provision')
+  provisionAws(@Body() dto: ProvisionAwsDto, @CurrentUser() u: JwtUserPayload) {
+    return this.svc.provisionAws({
+      alias: dto.alias,
+      accessKeyId: dto.accessKeyId,
+      secretAccessKey: dto.secretAccessKey,
+      defaultRegion: dto.defaultRegion,
+      runSync: dto.runSync ?? true,
+      userId: u.sub,
+    });
   }
 
   @RequirePermission('inventory:cloud_sync')
