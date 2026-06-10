@@ -14,25 +14,37 @@ export const config = {
   inventoryUrl: process.env.LOGWATCH_INVENTORY_URL || `${baseUrl()}/inventory/containers`,
   heartbeatUrl: process.env.LOGWATCH_HEARTBEAT_URL || `${baseUrl()}/inventory/heartbeat`,
   serverName: process.env.LOGWATCH_SERVER_NAME ?? 'unknown',
-  batchSize: parseInt(process.env.LOGWATCH_BATCH_SIZE ?? '200', 10),
+  batchSize: Math.min(500, parseInt(process.env.LOGWATCH_BATCH_SIZE ?? '200', 10)),
   flushIntervalMs: parseInt(process.env.LOGWATCH_FLUSH_INTERVAL_MS ?? '2000', 10),
+  maxBufferEntries: parseInt(process.env.LOGWATCH_MAX_BUFFER_ENTRIES ?? '5000', 10),
+  maxLineLength: Math.min(
+    8192,
+    parseInt(process.env.LOGWATCH_MAX_LINE_LENGTH ?? '4096', 10),
+  ),
+  maxLinesPerSourcePerSecond: parseInt(
+    process.env.LOGWATCH_MAX_LINES_PER_SOURCE_PER_SECOND ?? '200',
+    10,
+  ),
   metricsIntervalMs: parseInt(process.env.LOGWATCH_METRICS_INTERVAL_MS ?? '15000', 10),
   inventoryIntervalMs: parseInt(process.env.LOGWATCH_INVENTORY_INTERVAL_MS ?? '60000', 10),
   excludeSelf: (process.env.LOGWATCH_EXCLUDE_SELF ?? 'true').toLowerCase() === 'true',
   hostRoot: process.env.LOGWATCH_HOST_ROOT || '/host',
 
   // ----- Tail de logs do host -----
-  // Default: o diretório /var/log inteiro (até 3 níveis de profundidade).
+  // Opt-in: o diretório /var/log pode conter streams muito volumosos.
   // O agent filtra automaticamente: pega .log e logs clássicos, descarta
   // .gz/.zip/rotacionados/binários.
   // Para restringir, defina LOGWATCH_HOST_LOG_PATHS com CSV de paths absolutos.
   hostLogPaths: (process.env.LOGWATCH_HOST_LOG_PATHS ?? '/var/log')
     .split(',').map((s) => s.trim()).filter(Boolean),
-  hostLogEnabled: (process.env.LOGWATCH_HOST_LOG_ENABLED ?? 'true').toLowerCase() === 'true',
+  hostLogEnabled: (process.env.LOGWATCH_HOST_LOG_ENABLED ?? 'false').toLowerCase() === 'true',
   hostLogPollMs: parseInt(process.env.LOGWATCH_HOST_LOG_POLL_MS ?? '2000', 10),
-  hostLogMaxLine: parseInt(process.env.LOGWATCH_HOST_LOG_MAX_LINE ?? '8192', 10),
+  hostLogMaxLine: Math.min(
+    8192,
+    parseInt(process.env.LOGWATCH_HOST_LOG_MAX_LINE ?? '4096', 10),
+  ),
 
-  agentVersion: '0.3.0',
+  agentVersion: '0.4.0',
 };
 
 function baseUrl(): string {

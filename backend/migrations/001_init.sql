@@ -94,63 +94,37 @@ CREATE TABLE IF NOT EXISTS logs (
   stream          text,                          -- stdout|stderr
   level           text        NOT NULL DEFAULT 'unknown',
   message         text        NOT NULL,
-  fts             tsvector,
   meta            jsonb,
+  repeat_count    integer     NOT NULL DEFAULT 1,
   PRIMARY KEY (ts, id)
 );
 
 SELECT create_hypertable('logs', 'ts',
-  chunk_time_interval => interval '1 day',
+  chunk_time_interval => interval '6 hours',
   if_not_exists => true);
 
 CREATE INDEX IF NOT EXISTS logs_server_ts_idx    ON logs(server_id, ts DESC);
-CREATE INDEX IF NOT EXISTS logs_level_ts_idx     ON logs(level, ts DESC);
 CREATE INDEX IF NOT EXISTS logs_container_ts_idx ON logs(container_name, ts DESC);
-CREATE INDEX IF NOT EXISTS logs_fts_idx          ON logs USING gin(fts);
-CREATE INDEX IF NOT EXISTS logs_message_trgm_idx ON logs USING gin(message gin_trgm_ops);
 
--- Mantém fts atualizado automaticamente
-CREATE OR REPLACE FUNCTION logs_fts_trigger() RETURNS trigger AS $$
-BEGIN
-  NEW.fts := to_tsvector('simple',
-    coalesce(NEW.message,'') || ' ' ||
-    coalesce(NEW.container_name,'') || ' ' ||
-    coalesce(NEW.image,''));
-  RETURN NEW;
-END $$ LANGUAGE plpgsql;
-
-DROP TRIGGER IF EXISTS logs_fts_tg ON logs;
-CREATE TRIGGER logs_fts_tg BEFORE INSERT OR UPDATE ON logs
-  FOR EACH ROW EXECUTE FUNCTION logs_fts_trigger();
-
--- Compressão: comprime chunks com mais de 7 dias
+-- Compressao cedo para manter baixo o uso de disco.
 ALTER TABLE logs SET (
   timescaledb.compress,
   timescaledb.compress_segmentby = 'server_id, level',
   timescaledb.compress_orderby   = 'ts DESC'
 );
-SELECT add_compression_policy('logs', interval '7 days', if_not_exists => true);
+SELECT add_compression_policy(
+  'logs',
+  interval '6 hours',
+  schedule_interval => interval '1 hour',
+  if_not_exists => true
+);
 
--- Retention: 90 dias por padrão (configurável)
-SELECT add_retention_policy('logs', interval '90 days', if_not_exists => true);
-
--- Continuous aggregate: volume por minuto
-CREATE MATERIALIZED VIEW IF NOT EXISTS logs_per_min
-WITH (timescaledb.continuous) AS
-SELECT
-  time_bucket('1 minute', ts) AS bucket,
-  server_id,
-  level,
-  count(*) AS n
-FROM logs
-GROUP BY bucket, server_id, level
-WITH NO DATA;
-
-SELECT add_continuous_aggregate_policy('logs_per_min',
-  start_offset => interval '7 days',
-  end_offset   => interval '1 minute',
-  schedule_interval => interval '1 minute',
-  if_not_exists => true);
+SELECT add_retention_policy(
+  'logs',
+  interval '14 days',
+  schedule_interval => interval '1 hour',
+  if_not_exists => true
+);
 
 -- ============================================================
 -- Métricas de host (hypertable)

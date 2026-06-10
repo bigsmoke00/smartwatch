@@ -13,6 +13,7 @@ export interface LogDoc {
   level?: string;
   message: string;
   meta?: Record<string, any>;
+  repeatCount?: number;
 }
 
 export interface LogQuery {
@@ -61,19 +62,20 @@ export class LogsRepository {
     const image = docs.map((d) => d.image ?? null);
     const stream = docs.map((d) => d.stream ?? null);
     const level = docs.map((d) => d.level ?? 'unknown');
-    const msg = docs.map((d) => d.message.slice(0, 64_000));
+    const msg = docs.map((d) => d.message.slice(0, 8192));
     const meta = docs.map((d) => (d.meta ? JSON.stringify(d.meta) : null));
+    const repeatCount = docs.map((d) => d.repeatCount ?? 1);
 
     await this.pool.query(
       `INSERT INTO logs(ts, server_id, server_name, container_id, container_name,
-                        image, stream, level, message, meta)
+                        image, stream, level, message, meta, repeat_count)
        SELECT *
        FROM UNNEST(
          $1::timestamptz[], $2::uuid[], $3::text[],
          $4::text[], $5::text[], $6::text[],
-         $7::text[], $8::text[], $9::text[], $10::jsonb[]
+         $7::text[], $8::text[], $9::text[], $10::jsonb[], $11::integer[]
        )`,
-      [ts, sid, sname, cid, cname, image, stream, level, msg, meta],
+      [ts, sid, sname, cid, cname, image, stream, level, msg, meta, repeatCount],
     );
   }
 
@@ -112,8 +114,7 @@ export class LogsRepository {
       params.push(filters.level);
     }
     if (filters.q && filters.q.trim()) {
-      // Mistura FTS + trigram para fuzzy. Aceita aspas e operadores básicos.
-      where.push(`(fts @@ websearch_to_tsquery('simple', $${i}) OR message ILIKE '%' || $${i} || '%')`);
+      where.push(`message ILIKE '%' || $${i} || '%'`);
       params.push(filters.q);
       i++;
     }
@@ -126,13 +127,17 @@ export class LogsRepository {
     const sql = `
       SELECT id, ts, server_id AS "serverId", server_name AS "serverName",
              container_id AS "containerId", container_name AS "containerName",
-             image, stream, level, message, meta
+             image, stream, level, message, meta,
+             repeat_count AS "repeatCount"
       FROM logs
       ${w}
       ORDER BY ts DESC
       LIMIT ${pageSize} OFFSET ${offset}`;
 
-    const countSql = `SELECT count(*)::bigint AS total FROM logs ${w}`;
+    const countSql = `
+      SELECT count(*)::bigint AS total,
+             coalesce(sum(repeat_count), 0)::bigint AS occurrences
+      FROM logs ${w}`;
 
     const [rows, count] = await Promise.all([
       this.pool.query(sql, params),
@@ -141,6 +146,7 @@ export class LogsRepository {
 
     return {
       total: Number(count.rows[0].total),
+      occurrences: Number(count.rows[0].occurrences),
       page,
       pageSize,
       hits: rows.rows,
@@ -168,7 +174,7 @@ export class LogsRepository {
       params.push(filters.serverId);
     }
     if (filters.q?.trim()) {
-      where.push(`(fts @@ websearch_to_tsquery('simple', $${i}) OR message ILIKE '%' || $${i} || '%')`);
+      where.push(`message ILIKE '%' || $${i} || '%'`);
       params.push(filters.q);
       i++;
     }
@@ -177,7 +183,7 @@ export class LogsRepository {
     const sql = `
       SELECT time_bucket('${intervalSql}', ts) AS bucket,
              level,
-             count(*)::int AS n
+             sum(repeat_count)::bigint AS n
       FROM logs ${w}
       GROUP BY 1, 2
       ORDER BY 1 ASC`;
@@ -215,12 +221,13 @@ export class LogsRepository {
       params.push(filter.level);
     }
     if (filter.q?.trim()) {
-      where.push(`(fts @@ websearch_to_tsquery('simple', $${i}) OR message ILIKE '%' || $${i} || '%')`);
+      where.push(`message ILIKE '%' || $${i} || '%'`);
       params.push(filter.q);
       i++;
     }
     const r = await this.pool.query(
-      `SELECT count(*)::int AS n FROM logs WHERE ${where.join(' AND ')}`,
+      `SELECT coalesce(sum(repeat_count), 0)::bigint AS n
+       FROM logs WHERE ${where.join(' AND ')}`,
       params,
     );
     return r.rows[0].n;

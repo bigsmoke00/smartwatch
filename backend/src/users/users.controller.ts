@@ -8,16 +8,29 @@ import {
   Post,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import { IsEmail, IsIn, IsString, MinLength } from 'class-validator';
+import {
+  IsArray,
+  IsEmail,
+  IsIn,
+  IsOptional,
+  IsString,
+  IsUUID,
+  MinLength,
+} from 'class-validator';
 import { UsersService } from './users.service';
-import { Roles } from '../auth/roles.decorator';
 import { UserRole } from './user.entity';
 import { Audit } from '../audit/audit.decorator';
+import { RequirePermission } from '../auth/permissions.decorator';
+import {
+  CurrentUser,
+  JwtUserPayload,
+} from '../auth/current-user.decorator';
 
 class CreateUserDto {
   @IsEmail() email!: string;
   @IsString() @MinLength(10) password!: string;
-  @IsIn(['admin', 'operator', 'viewer']) role!: UserRole;
+  @IsOptional() @IsIn(['admin', 'operator', 'viewer']) role?: UserRole;
+  @IsOptional() @IsArray() @IsUUID('4', { each: true }) roleIds?: string[];
 }
 class UpdateRoleDto {
   @IsIn(['admin', 'operator', 'viewer']) role!: UserRole;
@@ -32,34 +45,47 @@ class ChangePasswordDto {
 export class UsersController {
   constructor(private readonly users: UsersService) {}
 
-  @Roles('admin')
+  @RequirePermission('users:read')
   @Get()
   list() {
     return this.users.list();
   }
 
-  @Roles('admin')
+  @RequirePermission('users:write')
   @Audit('user.create')
   @Post()
-  create(@Body() dto: CreateUserDto) {
-    return this.users.create(dto.email, dto.password, dto.role);
+  create(
+    @Body() dto: CreateUserDto,
+    @CurrentUser() actor: JwtUserPayload,
+  ) {
+    return this.users.create({
+      email: dto.email,
+      password: dto.password,
+      role: dto.role,
+      roleIds: dto.roleIds,
+      grantedBy: actor.sub,
+    });
   }
 
-  @Roles('admin')
+  @RequirePermission('users:write')
   @Audit('user.role_change')
   @Patch(':id/role')
-  updateRole(@Param('id') id: string, @Body() dto: UpdateRoleDto) {
-    return this.users.updateRole(id, dto.role);
+  updateRole(
+    @Param('id') id: string,
+    @Body() dto: UpdateRoleDto,
+    @CurrentUser() actor: JwtUserPayload,
+  ) {
+    return this.users.updateRole(id, dto.role, actor.sub);
   }
 
-  @Roles('admin')
+  @RequirePermission('users:write')
   @Audit('user.password_reset')
   @Patch(':id/password')
   changePassword(@Param('id') id: string, @Body() dto: ChangePasswordDto) {
     return this.users.changePassword(id, dto.newPassword).then(() => ({ ok: true }));
   }
 
-  @Roles('admin')
+  @RequirePermission('users:write')
   @Audit('user.delete')
   @Delete(':id')
   remove(@Param('id') id: string) {

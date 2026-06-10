@@ -13,6 +13,39 @@ interface PendingEntry {
 
 const buffer: PendingEntry[] = [];
 const tracking = new Set<string>();
+const sourceRates = new Map<string, { second: number; accepted: number; dropped: number }>();
+let bufferDrops = 0;
+let flushing = false;
+
+function canAccept(source: string): boolean {
+  const second = Math.floor(Date.now() / 1000);
+  const current = sourceRates.get(source);
+  if (!current || current.second !== second) {
+    if (current?.dropped) {
+      console.warn(`[agent] ${source}: dropped ${current.dropped} lines by source rate limit`);
+    }
+    sourceRates.set(source, { second, accepted: 1, dropped: 0 });
+    return true;
+  }
+  if (current.accepted >= config.maxLinesPerSourcePerSecond) {
+    current.dropped++;
+    return false;
+  }
+  current.accepted++;
+  return true;
+}
+
+function enqueue(entry: PendingEntry) {
+  if (!canAccept(entry.containerName)) return;
+  if (buffer.length >= config.maxBufferEntries) {
+    bufferDrops++;
+    if (bufferDrops === 1 || bufferDrops % 1000 === 0) {
+      console.warn(`[agent] log buffer full; dropped ${bufferDrops} lines`);
+    }
+    return;
+  }
+  buffer.push(entry);
+}
 
 export async function attachLogs(docker: Docker, container: Docker.Container) {
   const id = container.id;
@@ -46,13 +79,17 @@ export async function attachLogs(docker: Docker, container: Docker.Container) {
         const idx = line.indexOf(' ');
         const ts = idx > 0 ? line.slice(0, idx) : new Date().toISOString();
         const msg = idx > 0 ? line.slice(idx + 1) : line;
-        buffer.push({
+        const cleanMessage = msg
+          .replace(/\u0000/g, '')
+          .slice(0, config.maxLineLength);
+        if (!cleanMessage) continue;
+        enqueue({
           ts,
           containerId: id,
           containerName: name,
           image,
           stream: type === 2 ? 'stderr' : 'stdout',
-          message: msg,
+          message: cleanMessage,
         });
         if (buffer.length >= config.batchSize) void flushLogs();
       }
@@ -63,8 +100,13 @@ export async function attachLogs(docker: Docker, container: Docker.Container) {
 }
 
 export async function flushLogs() {
-  if (buffer.length === 0) return;
-  const batch = buffer.splice(0, config.batchSize);
-  const ok = await postJson(config.ingestUrl, { entries: batch });
-  if (!ok) console.warn(`[agent] dropped ${batch.length} log lines after retries`);
+  if (flushing || buffer.length === 0) return;
+  flushing = true;
+  try {
+    const batch = buffer.splice(0, config.batchSize);
+    const ok = await postJson(config.ingestUrl, { entries: batch });
+    if (!ok) console.warn(`[agent] dropped ${batch.length} log lines after retries`);
+  } finally {
+    flushing = false;
+  }
 }

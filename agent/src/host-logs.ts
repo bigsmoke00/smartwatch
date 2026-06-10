@@ -32,6 +32,7 @@ interface Cursor {
 
 const cursors = new Map<string, Cursor>();        // key = realPath
 const pending: any[] = [];
+let droppedByBuffer = 0;
 
 // Tipos de arquivo que SEMPRE pulamos (comprimidos, rotacionados, sockets, lock files).
 const SKIP_EXT = /\.(gz|bz2|xz|zip|zst|lz4|tar|1|2|3|4|5|6|7|8|9|old|bak|swp|sock|pid|lock)$/i;
@@ -143,12 +144,19 @@ async function pollOnce() {
     const c = cursors.get(f.real)!;
     const lines = await readNew(c);
     for (const line of lines) {
+      if (pending.length >= config.maxBufferEntries) {
+        droppedByBuffer++;
+        if (droppedByBuffer === 1 || droppedByBuffer % 1000 === 0) {
+          console.warn(`[agent] host log buffer full; dropped ${droppedByBuffer} lines`);
+        }
+        continue;
+      }
       pending.push({
         ts: extractTs(line) ?? new Date().toISOString(),
         containerName: `host:${basename(c.virtual)}`,
         image: 'host',
         stream: 'stdout',
-        message: line,
+        message: line.replace(/\u0000/g, '').slice(0, config.hostLogMaxLine),
         meta: { hostLog: true, path: c.virtual },
       });
     }

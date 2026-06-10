@@ -4,9 +4,10 @@ import {
   ConflictException,
   NotFoundException,
 } from '@nestjs/common';
-import { Pool } from 'pg';
+import { Pool, PoolClient } from 'pg';
 import * as bcrypt from 'bcrypt';
 import { PG_POOL } from '../db/db.module';
+import { RolesService } from '../roles/roles.service';
 
 export type UserRole = 'admin' | 'operator' | 'viewer';
 
@@ -28,7 +29,10 @@ const SELECT = `id, email, password_hash AS "passwordHash", role, active,
 
 @Injectable()
 export class UsersService {
-  constructor(@Inject(PG_POOL) private readonly pool: Pool) {}
+  constructor(
+    @Inject(PG_POOL) private readonly pool: Pool,
+    private readonly roles: RolesService,
+  ) {}
 
   async findByEmail(email: string): Promise<User | null> {
     const r = await this.pool.query(
@@ -48,32 +52,114 @@ export class UsersService {
 
   async list() {
     const r = await this.pool.query(
-      `SELECT id, email, role, active, totp_secret IS NOT NULL AS "mfaEnabled",
-              created_at AS "createdAt"
-       FROM users ORDER BY created_at ASC`,
+      `SELECT u.id, u.email, u.role, u.active,
+              u.totp_secret IS NOT NULL AS "mfaEnabled",
+              u.created_at AS "createdAt",
+              coalesce(
+                jsonb_agg(
+                  jsonb_build_object('id', r.id, 'name', r.name)
+                  ORDER BY r.name
+                ) FILTER (WHERE r.id IS NOT NULL),
+                '[]'::jsonb
+              ) AS roles
+       FROM users u
+       LEFT JOIN user_roles ur ON ur.user_id = u.id
+       LEFT JOIN roles r ON r.id = ur.role_id
+       GROUP BY u.id
+       ORDER BY u.created_at ASC`,
     );
     return r.rows;
   }
 
-  async create(email: string, password: string, role: UserRole = 'viewer') {
+  async create(input: {
+    email: string;
+    password: string;
+    role?: UserRole;
+    roleIds?: string[];
+    grantedBy?: string;
+  }) {
+    const email = input.email.toLowerCase();
     const exists = await this.findByEmail(email);
     if (exists) throw new ConflictException('Email already in use');
-    const hash = await bcrypt.hash(password, 12);
-    const r = await this.pool.query(
-      `INSERT INTO users(email, password_hash, role)
-       VALUES ($1,$2,$3) RETURNING id, email, role, created_at AS "createdAt"`,
-      [email.toLowerCase(), hash, role],
-    );
-    return r.rows[0];
+    const hash = await bcrypt.hash(input.password, 12);
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const roleIds = input.roleIds?.length
+        ? await this.validateRoleIds(client, input.roleIds)
+        : await this.legacyRoleIds(client, input.role ?? 'viewer');
+      const legacyRole = await this.roles.legacyRoleForIds(roleIds, client);
+      const r = await client.query(
+        `INSERT INTO users(email, password_hash, role)
+         VALUES ($1,$2,$3)
+         RETURNING id, email, role, active, created_at AS "createdAt"`,
+        [email, hash, legacyRole],
+      );
+      const user = r.rows[0];
+      for (const roleId of roleIds) {
+        await client.query(
+          `INSERT INTO user_roles(user_id, role_id, granted_by)
+           VALUES ($1,$2,$3)`,
+          [user.id, roleId, input.grantedBy ?? null],
+        );
+      }
+      const assigned = await client.query(
+        `SELECT r.id, r.name
+         FROM user_roles ur
+         JOIN roles r ON r.id = ur.role_id
+         WHERE ur.user_id=$1
+         ORDER BY r.name`,
+        [user.id],
+      );
+      await client.query('COMMIT');
+      return {
+        ...user,
+        roles: assigned.rows,
+      };
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
-  async updateRole(id: string, role: UserRole) {
-    const r = await this.pool.query(
-      `UPDATE users SET role=$2, updated_at=now() WHERE id=$1 RETURNING id, role`,
-      [id, role],
+  async updateRole(id: string, role: UserRole, grantedBy: string) {
+    const roleIds = await this.legacyRoleIds(this.pool, role);
+    await this.roles.setUserRoles(id, roleIds, grantedBy);
+    return { id, role, roles: await this.roles.listUserRoles(id) };
+  }
+
+  private async validateRoleIds(
+    client: Pool | PoolClient,
+    roleIds: string[],
+  ): Promise<string[]> {
+    const unique = Array.from(new Set(roleIds));
+    if (!unique.length) return [];
+    const r = await client.query(
+      `SELECT id FROM roles WHERE id = ANY($1::uuid[])`,
+      [unique],
     );
-    if (!r.rowCount) throw new NotFoundException();
-    return r.rows[0];
+    if (r.rowCount !== unique.length) {
+      throw new NotFoundException('One or more profiles do not exist');
+    }
+    return unique;
+  }
+
+  private async legacyRoleIds(
+    client: Pool | PoolClient,
+    role: UserRole,
+  ): Promise<string[]> {
+    const name = role === 'admin'
+      ? 'Super Admin'
+      : role === 'operator'
+        ? 'DevOps Engineer'
+        : 'Viewer';
+    const r = await client.query(`SELECT id FROM roles WHERE name=$1`, [name]);
+    if (!r.rowCount) {
+      throw new NotFoundException(`System profile "${name}" does not exist`);
+    }
+    return [r.rows[0].id];
   }
 
   async setMfaSecret(id: string, secret: string | null) {

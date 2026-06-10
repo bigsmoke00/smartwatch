@@ -7,6 +7,7 @@ import {
 import { Reflector } from '@nestjs/core';
 import { ROLES_KEY } from './roles.decorator';
 import { UserRole } from '../users/user.entity';
+import { PERMISSIONS_KEY } from './permissions.decorator';
 
 const RANK: Record<UserRole, number> = { viewer: 0, operator: 1, admin: 2 };
 
@@ -15,6 +16,13 @@ export class RolesGuard implements CanActivate {
   constructor(private readonly reflector: Reflector) {}
 
   canActivate(context: ExecutionContext): boolean {
+    const granularPermissions = this.reflector.getAllAndOverride<string[]>(
+      PERMISSIONS_KEY,
+      [context.getHandler(), context.getClass()],
+    );
+    // Endpoints migrated to granular RBAC are decided by PermissionsGuard.
+    if (granularPermissions?.length) return true;
+
     const required = this.reflector.getAllAndOverride<UserRole[]>(ROLES_KEY, [
       context.getHandler(),
       context.getClass(),

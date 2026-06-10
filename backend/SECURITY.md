@@ -71,7 +71,7 @@
 - Conexão via pool dedicado (configurável via `PG_POOL_MAX`)
 - Schema com `pgcrypto` (UUIDs), `pg_trgm` (fuzzy), `btree_gin` (composição)
 - Sem `synchronize` — schema controlado por migrations idempotentes em `migrations/*.sql`
-- Hypertables com **compressão** (após 7d) e **retention** (logs 90d, métricas 180d, audit 365d)
+- Hypertables com **compressão** (logs após 6h) e **retention** (logs 14d, métricas 180d, audit 365d)
 - Para Patroni próprio: use usuário dedicado + `pg_hba.conf` restrito + TLS
 
 ## 9. Patroni (read-only)

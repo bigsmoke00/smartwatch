@@ -22,6 +22,7 @@ interface LogHit {
   stream?: string;
   level?: string;
   message: string;
+  repeatCount?: number;
 }
 
 interface ServerRow {
@@ -57,6 +58,7 @@ function LogsPageInner() {
   const [source, setSource] = useState<'all' | 'host' | 'container'>('all');
   const [hits, setHits] = useState<LogHit[]>([]);
   const [total, setTotal] = useState(0);
+  const [occurrences, setOccurrences] = useState(0);
   const [loading, setLoading] = useState(false);
   const [live, setLive] = useState(true);
   const [wsStatus, setWsStatus] = useState<'connected' | 'connecting' | 'offline'>('offline');
@@ -81,7 +83,11 @@ function LogsPageInner() {
     // Pede mais pra compensar o filtro client-side de fonte
     qp.set('pageSize', source === 'all' ? '300' : '500');
     try {
-      const data = await apiFetch<{ hits: LogHit[]; total: number }>(
+      const data = await apiFetch<{
+        hits: LogHit[];
+        total: number;
+        occurrences: number;
+      }>(
         `/logs?${qp.toString()}`,
       );
       let arr = safeArray<LogHit>(data?.hits);
@@ -92,9 +98,11 @@ function LogsPageInner() {
       }
       setHits(arr);
       setTotal(data?.total ?? 0);
+      setOccurrences(data?.occurrences ?? data?.total ?? 0);
     } catch {
       setHits([]);
       setTotal(0);
+      setOccurrences(0);
     } finally {
       setLoading(false);
     }
@@ -236,7 +244,7 @@ function LogsPageInner() {
                   value={q}
                   onChange={(e) => setQ(e.target.value)}
                   onKeyDown={(e) => e.key === 'Enter' && search()}
-                  placeholder='ex: "OutOfMemory" OR "panic" — aceita AND/OR/aspas'
+                  placeholder="ex: OutOfMemory, timeout, panic"
                   className="pl-8"
                 />
                 <Search size={14} className="absolute left-2 top-2.5 text-muted" />
@@ -289,7 +297,9 @@ function LogsPageInner() {
         </Card>
 
         <div className="text-xs text-muted">
-          {total > 0 && `${total.toLocaleString()} resultados — exibindo ${sortedHits.length}`}
+          {total > 0 && (
+            `${occurrences.toLocaleString()} ocorrências em ${total.toLocaleString()} linhas armazenadas — exibindo ${sortedHits.length}`
+          )}
           {live && wsStatus === 'connected' && (
             <span className="ml-3 text-accent">● tail ativo</span>
           )}
@@ -330,6 +340,9 @@ function LogsPageInner() {
                   ) : h.containerName ? (
                     <span className="shrink-0 text-muted">[{h.containerName}]</span>
                   ) : null}
+                  {(h.repeatCount ?? 1) > 1 && (
+                    <span className="shrink-0 text-warn">×{h.repeatCount}</span>
+                  )}
                   <span className="whitespace-pre-wrap break-all">{h.message ?? ''}</span>
                 </div>
               );

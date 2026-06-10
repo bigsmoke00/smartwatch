@@ -170,11 +170,11 @@ O agent envia automaticamente:
 
 ## Por dentro do TimescaleDB
 
-- **Hypertables**: `logs` (1d chunks), `host_metrics` (1d), `audit_events` (7d), `alert_events`, `automation_runs`.
-- **Compressão automática** após 7 dias (segmentado por `server_id` + `level`).
-- **Retention policies**: logs 90d, métricas 180d, audit 365d (configurável).
-- **Continuous aggregate** `logs_per_min` pré-calcula contagens.
-- FTS via `tsvector` + trigger; busca fuzzy via `pg_trgm`.
+- **Hypertables**: `logs` (chunks de 6h), `host_metrics` (1d), `audit_events` (7d), `alert_events`, `automation_runs`.
+- **Compressão automática** dos logs após 6 horas.
+- **Retention policies**: logs 14d, métricas 180d, audit 365d.
+- Linhas idênticas no mesmo segundo são consolidadas em `repeat_count`.
+- Busca textual por período sem índices GIN, priorizando baixo uso de disco.
 
 ## Segurança em profundidade
 

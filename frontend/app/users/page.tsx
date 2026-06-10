@@ -8,32 +8,55 @@ import { Input } from '@/components/ui/Input';
 import { Badge } from '@/components/ui/Badge';
 import { apiFetch } from '@/lib/api';
 import { safeArray } from '@/lib/utils';
-import { Trash2 } from 'lucide-react';
+import { Save, ShieldCheck, Trash2, X } from 'lucide-react';
 
+interface AssignedRole {
+  id: string;
+  name: string;
+}
 interface UserRow {
   id: string;
   email: string;
   role: 'admin' | 'operator' | 'viewer';
   active: boolean;
   createdAt: string;
+  roles: AssignedRole[];
 }
 interface RoleSummary {
   id: string;
   name: string;
+  description?: string;
+  permissions: string[];
 }
 
 export default function UsersPage() {
   const [users, setUsers] = useState<UserRow[]>([]);
+  const [roles, setRoles] = useState<RoleSummary[]>([]);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [role, setRole] = useState<'admin' | 'viewer'>('viewer');
+  const [selectedRoleIds, setSelectedRoleIds] = useState<string[]>([]);
+  const [editingUserId, setEditingUserId] = useState<string | null>(null);
+  const [editingRoleIds, setEditingRoleIds] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   async function load() {
-    setUsers(safeArray<UserRow>(await apiFetch<UserRow[]>('/users').catch(() => [])));
+    const [loadedUsers, loadedRoles] = await Promise.all([
+      apiFetch<UserRow[]>('/users'),
+      apiFetch<RoleSummary[]>('/roles'),
+    ]);
+    const nextRoles = safeArray<RoleSummary>(loadedRoles);
+    setUsers(safeArray<UserRow>(loadedUsers));
+    setRoles(nextRoles);
+    setSelectedRoleIds((current) => {
+      if (current.length) return current;
+      const viewer = nextRoles.find((item) => item.name === 'Viewer');
+      return viewer ? [viewer.id] : nextRoles[0] ? [nextRoles[0].id] : [];
+    });
   }
   useEffect(() => {
-    load();
+    load().catch((err: any) => {
+      setError(err?.payload?.message || 'Erro ao carregar usuários e perfis');
+    });
   }, []);
 
   async function create(e: React.FormEvent) {
@@ -42,11 +65,11 @@ export default function UsersPage() {
     try {
       await apiFetch('/users', {
         method: 'POST',
-        body: JSON.stringify({ email, password, role }),
+        body: JSON.stringify({ email, password, roleIds: selectedRoleIds }),
       });
       setEmail('');
       setPassword('');
-      load();
+      await load();
     } catch (err: any) {
       setError(err?.payload?.message || 'Erro ao criar usuário');
     }
@@ -55,29 +78,82 @@ export default function UsersPage() {
   async function remove(id: string) {
     if (!confirm('Remover este usuário?')) return;
     await apiFetch(`/users/${id}`, { method: 'DELETE' });
-    load();
+    await load();
   }
 
-  async function toggleRole(u: UserRow) {
-    await apiFetch(`/users/${u.id}/role`, {
-      method: 'PATCH',
-      body: JSON.stringify({
-        role: u.role === 'admin' ? 'viewer' : 'admin',
-      }),
-    });
-    load();
+  function startEditing(user: UserRow) {
+    setEditingUserId(user.id);
+    setEditingRoleIds(safeArray<AssignedRole>(user.roles).map((item) => item.id));
+  }
+
+  async function saveRoles(userId: string) {
+    setError(null);
+    try {
+      await apiFetch(`/users/${userId}/roles`, {
+        method: 'PUT',
+        body: JSON.stringify({ roleIds: editingRoleIds }),
+      });
+      setEditingUserId(null);
+      await load();
+    } catch (err: any) {
+      setError(err?.payload?.message || 'Erro ao atualizar perfis');
+    }
+  }
+
+  function toggleRoleId(
+    roleId: string,
+    selected: string[],
+    update: (value: string[]) => void,
+  ) {
+    update(
+      selected.includes(roleId)
+        ? selected.filter((id) => id !== roleId)
+        : [...selected, roleId],
+    );
+  }
+
+  function RoleSelector({
+    selected,
+    onChange,
+  }: {
+    selected: string[];
+    onChange: (value: string[]) => void;
+  }) {
+    return (
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+        {roles.map((item) => (
+          <label
+            key={item.id}
+            className="flex items-start gap-2 rounded-md border border-border bg-panel2 px-3 py-2 cursor-pointer hover:border-accent/60"
+          >
+            <input
+              type="checkbox"
+              checked={selected.includes(item.id)}
+              onChange={() => toggleRoleId(item.id, selected, onChange)}
+              className="mt-0.5"
+            />
+            <span className="min-w-0">
+              <span className="block text-sm">{item.name}</span>
+              <span className="block text-xs text-muted">
+                {item.permissions.length} permissões
+              </span>
+            </span>
+          </label>
+        ))}
+      </div>
+    );
   }
 
   return (
     <AppShell>
-      <div className="p-6 space-y-4 max-w-3xl">
+      <div className="p-6 space-y-4 max-w-5xl">
         <h1 className="text-2xl font-semibold">Usuários</h1>
 
         <Card className="p-4">
           <h2 className="text-sm font-medium mb-3">Criar usuário</h2>
           <form
             onSubmit={create}
-            className="grid grid-cols-1 md:grid-cols-4 gap-2 items-end"
+            className="grid grid-cols-1 md:grid-cols-3 gap-3 items-start"
           >
             <div className="md:col-span-2">
               <label className="text-xs text-muted">Email</label>
@@ -94,59 +170,87 @@ export default function UsersPage() {
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                minLength={8}
+                minLength={10}
                 required
               />
             </div>
-            <div>
-              <label className="text-xs text-muted">Papel</label>
-              <select
-                value={role}
-                onChange={(e) => setRole(e.target.value as any)}
-                className="w-full rounded-md bg-panel2 border border-border px-3 py-2 text-sm"
-              >
-                <option value="viewer">viewer</option>
-                <option value="admin">admin</option>
-              </select>
+            <div className="md:col-span-3">
+              <label className="text-xs text-muted block mb-1.5">Perfis</label>
+              <RoleSelector
+                selected={selectedRoleIds}
+                onChange={setSelectedRoleIds}
+              />
             </div>
-            <div className="md:col-span-4">
+            <div className="md:col-span-3">
               {error && <div className="text-sm text-danger mb-2">{error}</div>}
-              <Button type="submit">Criar</Button>
+              <Button type="submit" disabled={!selectedRoleIds.length}>
+                Criar
+              </Button>
             </div>
           </form>
         </Card>
 
         <Card className="p-0 divide-y divide-border">
-          {safeArray<UserRow>(users).map((u) => (
-            <div
-              key={u.id}
-              className="px-4 py-3 flex items-center justify-between"
-            >
-              <div>
-                <div className="text-sm">{u.email}</div>
-                <div className="text-xs text-muted">
-                  desde {new Date(u.createdAt).toLocaleDateString()}
+          {safeArray<UserRow>(users).map((user) => {
+            const editing = editingUserId === user.id;
+            return (
+              <div key={user.id} className="px-4 py-3">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="min-w-0">
+                    <div className="text-sm truncate">{user.email}</div>
+                    <div className="text-xs text-muted">
+                      desde {new Date(user.createdAt).toLocaleDateString()}
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    {safeArray<AssignedRole>(user.roles).map((item) => (
+                      <Badge key={item.id} className="border-accent text-accent">
+                        {item.name}
+                      </Badge>
+                    ))}
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      onClick={() => startEditing(user)}
+                    >
+                      <ShieldCheck size={14} /> Perfis
+                    </Button>
+                    <button
+                      onClick={() => remove(user.id)}
+                      className="text-danger hover:underline flex items-center gap-1 text-sm"
+                    >
+                      <Trash2 size={14} /> remover
+                    </button>
+                  </div>
                 </div>
+
+                {editing && (
+                  <div className="mt-3 border-t border-border pt-3">
+                    <RoleSelector
+                      selected={editingRoleIds}
+                      onChange={setEditingRoleIds}
+                    />
+                    <div className="flex justify-end gap-2 mt-3">
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        onClick={() => setEditingUserId(null)}
+                      >
+                        <X size={14} /> Cancelar
+                      </Button>
+                      <Button
+                        type="button"
+                        onClick={() => saveRoles(user.id)}
+                        disabled={!editingRoleIds.length}
+                      >
+                        <Save size={14} /> Salvar perfis
+                      </Button>
+                    </div>
+                  </div>
+                )}
               </div>
-              <div className="flex items-center gap-3">
-                <button onClick={() => toggleRole(u)}>
-                  <Badge
-                    className={
-                      u.role === 'admin' ? 'border-accent text-accent' : ''
-                    }
-                  >
-                    {u.role}
-                  </Badge>
-                </button>
-                <button
-                  onClick={() => remove(u.id)}
-                  className="text-danger hover:underline flex items-center gap-1 text-sm"
-                >
-                  <Trash2 size={14} /> remover
-                </button>
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </Card>
       </div>
     </AppShell>

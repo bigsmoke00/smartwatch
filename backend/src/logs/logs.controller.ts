@@ -17,6 +17,7 @@ import {
   IsObject,
   IsOptional,
   IsString,
+  MaxLength,
   ValidateNested,
 } from 'class-validator';
 import { Type } from 'class-transformer';
@@ -28,19 +29,19 @@ import { Public } from '../auth/public.decorator';
 
 class IngestEntryDto implements IngestEntry {
   @IsOptional() @IsString() ts?: string;
-  @IsOptional() @IsString() containerId?: string;
-  @IsOptional() @IsString() containerName?: string;
-  @IsOptional() @IsString() image?: string;
+  @IsOptional() @IsString() @MaxLength(128) containerId?: string;
+  @IsOptional() @IsString() @MaxLength(255) containerName?: string;
+  @IsOptional() @IsString() @MaxLength(512) image?: string;
   @IsOptional() @IsString() stream?: 'stdout' | 'stderr';
-  @IsOptional() @IsString() level?: string;
-  @IsString() message!: string;
+  @IsOptional() @IsString() @MaxLength(16) level?: string;
+  @IsString() @MaxLength(8192) message!: string;
   @IsOptional() @IsObject() meta?: Record<string, any>;
 }
 
 class IngestDto {
   @IsArray()
   @ArrayMinSize(1)
-  @ArrayMaxSize(2000)
+  @ArrayMaxSize(500)
   @ValidateNested({ each: true })
   @Type(() => IngestEntryDto)
   entries!: IngestEntryDto[];
@@ -120,12 +121,19 @@ export class LogsController {
       'Content-Disposition',
       `attachment; filename="logwatch-${Date.now()}.csv"`,
     );
-    res.write('ts,server,container,level,message\n');
+    res.write('ts,server,container,level,occurrences,message\n');
     for (const h of r.hits) {
       const safe = (s: any) =>
         '"' + String(s ?? '').replace(/"/g, '""').replace(/\n/g, ' ') + '"';
       res.write(
-        [h.ts, h.serverName, h.containerName, h.level, h.message]
+        [
+          h.ts,
+          h.serverName,
+          h.containerName,
+          h.level,
+          h.repeatCount ?? 1,
+          h.message,
+        ]
           .map(safe)
           .join(',') + '\n',
       );
