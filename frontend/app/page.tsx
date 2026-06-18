@@ -16,7 +16,7 @@ import {
   Tooltip,
   CartesianGrid,
 } from 'recharts';
-import { AlertTriangle, Server, Container, Activity } from 'lucide-react';
+import { AlertTriangle, Server, Activity } from 'lucide-react';
 
 interface Bucket {
   ts: string;
@@ -27,23 +27,20 @@ interface Bucket {
 export default function HomePage() {
   const [hist, setHist] = useState<Bucket[]>([]);
   const [servers, setServers] = useState<any[]>([]);
-  const [containers, setContainers] = useState<any[]>([]);
   const [fleet, setFleet] = useState<any[]>([]);
   const [alerts, setAlerts] = useState<any[]>([]);
   const [patroni, setPatroni] = useState<any>(null);
 
   useEffect(() => {
     const load = async () => {
-      const [s, c, f, a, h, p] = await Promise.all([
+      const [s, f, a, h, p] = await Promise.all([
         apiFetch('/servers').catch(() => []),
-        apiFetch('/inventory/containers/fleet').catch(() => []),
         apiFetch('/metrics/fleet').catch(() => []),
         apiFetch('/alerts/events').catch(() => []),
         apiFetch('/logs/histogram?from=now-1h&to=now&interval=1 minute').catch(() => []),
         apiFetch('/patroni/cluster').catch(() => null),
       ]);
       setServers(safeArray(s));
-      setContainers(safeArray(c));
       setFleet(safeArray(f));
       setAlerts(safeArray<any>(a).slice(0, 5));
       setHist(safeArray<Bucket>(h));
@@ -58,8 +55,6 @@ export default function HomePage() {
   const errors = sumBy<Bucket>(hist, (b) =>
     (b?.byLevel?.error ?? 0) + (b?.byLevel?.fatal ?? 0),
   );
-  const containersRunning = sumBy<any>(containers, 'running');
-  const containersTotal = sumBy<any>(containers, 'total');
   const cpuAvg = fleet.length ? sumBy<any>(fleet, 'cpu') / fleet.length : 0;
   const memAvg = fleet.length ? sumBy<any>(fleet, 'memPct') / fleet.length : 0;
 
@@ -70,7 +65,6 @@ export default function HomePage() {
 
         <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
           <Stat icon={<Server size={14} />} label="Servidores" value={servers.length} />
-          <Stat icon={<Container size={14} />} label="Containers" value={`${containersRunning}/${containersTotal}`} />
           <Stat icon={<Activity size={14} />} label="Logs (1h)" value={totalLogs.toLocaleString()} />
           <Stat
             icon={<AlertTriangle size={14} />}

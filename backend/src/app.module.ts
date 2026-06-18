@@ -15,23 +15,16 @@ import { LogsModule } from './logs/logs.module';
 import { MetricsModule } from './metrics/metrics.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { AlertsModule } from './alerts/alerts.module';
-import { AutomationModule } from './automation/automation.module';
-import { InventoryModule } from './inventory/inventory.module';
 import { PatroniModule } from './patroni/patroni.module';
 import { SecretsModule } from './secrets/secrets.module';
 import { SavedQueriesModule } from './saved-queries/saved-queries.module';
 import { FinopsModule } from './finops/finops.module';
-import { TerraformModule } from './terraform/terraform.module';
 import { CredentialRotationModule } from './credential-rotation/credential-rotation.module';
-import { SloModule } from './slo/slo.module';
-import { GithubActionsModule } from './github-actions/github-actions.module';
 import { DockerManagerModule } from './docker-manager/docker-manager.module';
 import { ScriptsModule } from './scripts/scripts.module';
 import { LogExportModule } from './log-export/log-export.module';
 import { ZeroTrustModule } from './zero-trust/zero-trust.module';
 import { PgMonitorModule } from './pg-monitor/pg-monitor.module';
-import { TopologyModule } from './topology/topology.module';
-import { CloudInventoryModule } from './cloud-inventory/cloud-inventory.module';
 import { HealthModule } from './health/health.module';
 import { BootstrapService } from './bootstrap.service';
 
@@ -73,23 +66,16 @@ import { BootstrapService } from './bootstrap.service';
     MetricsModule,
     NotificationsModule,
     AlertsModule,
-    AutomationModule,
-    InventoryModule,
     PatroniModule,
     SecretsModule,
     SavedQueriesModule,
     FinopsModule,
-    TerraformModule,
     CredentialRotationModule,
-    SloModule,
-    GithubActionsModule,
     DockerManagerModule,
     ScriptsModule,
     LogExportModule,
     ZeroTrustModule,
     PgMonitorModule,
-    TopologyModule,
-    CloudInventoryModule,
     HealthModule,
   ],
   providers: [
