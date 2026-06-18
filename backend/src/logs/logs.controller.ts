@@ -42,7 +42,7 @@ class IngestEntryDto implements IngestEntry {
   @IsOptional() @IsString() @MaxLength(512) image?: string;
   @IsOptional() @IsString() stream?: 'stdout' | 'stderr';
   @IsOptional() @IsString() @MaxLength(16) level?: string;
-  @IsString() @MaxLength(8192) message!: string;
+  @IsString() @MaxLength(32768) message!: string;
   @IsOptional() @IsObject() meta?: Record<string, any>;
 }
 
