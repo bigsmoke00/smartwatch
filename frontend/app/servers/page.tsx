@@ -154,9 +154,10 @@ export default function ServersPage() {
           {safeArray<ServerRow>(servers).map((s) => {
             const onDelete = async (e: React.MouseEvent) => {
               e.preventDefault(); e.stopPropagation();
+              if (!confirm(`Deseja excluir o servidor "${s.name}"?`)) return;
               const hard = confirm(
-                `Excluir servidor "${s.name}"?\n\n` +
-                `OK = exclusão permanente (remove métricas, logs, sessões).\n` +
+                `Exclusão permanente?\n\n` +
+                `OK = remove permanentemente (métricas, logs, sessões).\n` +
                 `Cancel = soft delete (preserva histórico, oculta da listagem).`,
               );
               const url = hard

@@ -148,7 +148,7 @@ export class ServersService {
     );
     for (const row of r.rows) {
       await client.query(
-        `SELECT decompress_chunk(format('%I.%I', $1::text, $2::text)::regclass, if_not_compressed => true)`,
+        `SELECT decompress_chunk(format('%I.%I', $1::text, $2::text)::regclass, if_compressed => true)`,
         [row.chunk_schema, row.chunk_name],
       );
     }
