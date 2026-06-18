@@ -4,7 +4,7 @@ import {
   NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
-import { Pool } from 'pg';
+import { Pool, PoolClient } from 'pg';
 import * as bcrypt from 'bcrypt';
 import { randomBytes } from 'crypto';
 import { PG_POOL } from '../db/db.module';
@@ -133,6 +133,28 @@ export class ServersService {
   }
 
   /**
+   * Decomprime os chunks comprimidos de uma hypertable antes de um DELETE/UPDATE.
+   * Necessário porque o TimescaleDB recusa DML direto em chunks comprimidos quando
+   * a tabela tem PK/UNIQUE com colunas fora do `segmentby` (ex: logs PK é (ts,id),
+   * mas o segmentby é só server_id,level). Sem isso, apagar um servidor com logs
+   * mais antigos que a política de compressão (6h) falha com 500 genérico.
+   */
+  private async decompressChunks(client: PoolClient, hypertable: string) {
+    const r = await client.query(
+      `SELECT chunk_schema, chunk_name
+       FROM timescaledb_information.chunks
+       WHERE hypertable_name = $1 AND is_compressed`,
+      [hypertable],
+    );
+    for (const row of r.rows) {
+      await client.query(
+        `SELECT decompress_chunk(format('%I.%I', $1::text, $2::text)::regclass, if_not_compressed => true)`,
+        [row.chunk_schema, row.chunk_name],
+      );
+    }
+  }
+
+  /**
    * Remove servidor com cleanup completo. soft=true preserva histórico.
    * Hypertables Timescale comprimidas não recebem FK depois da compressão.
    * Por isso logs/host_metrics e tabelas relacionadas são limpas manualmente.
@@ -148,7 +170,9 @@ export class ServersService {
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
+      await this.decompressChunks(client, 'logs');
       await client.query(`DELETE FROM logs WHERE server_id=$1`, [id]);
+      await this.decompressChunks(client, 'host_metrics');
       await client.query(`DELETE FROM host_metrics WHERE server_id=$1`, [id]);
       await client.query(`DELETE FROM script_executions WHERE server_id=$1`, [id]);
       await client.query(`DELETE FROM runbook_executions WHERE server_id=$1`, [id]);
