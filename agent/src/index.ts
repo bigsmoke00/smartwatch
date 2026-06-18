@@ -4,7 +4,6 @@
  * O que coleta:
  *   - Logs de TODOS os containers do host (via Docker socket)
  *   - Métricas do host (CPU, mem, disco, rede, load, uptime)
- *   - Inventário de containers (estado, image, ports, labels)
  *   - Heartbeat com hostname/os/arch/versão do agent
  *
  * Variáveis principais:
@@ -16,7 +15,6 @@
  *   LOGWATCH_BATCH_SIZE                 default 200
  *   LOGWATCH_FLUSH_INTERVAL_MS          default 2000
  *   LOGWATCH_METRICS_INTERVAL_MS        default 15000
- *   LOGWATCH_INVENTORY_INTERVAL_MS      default 60000
  *   LOGWATCH_EXCLUDE_SELF=true          default true
  */
 import Docker from 'dockerode';
@@ -24,7 +22,6 @@ import { config } from './config.js';
 import { attachLogs, flushLogs } from './logs.js';
 import { pushMetrics, warmup as metricsWarmup } from './metrics.js';
 import { startControlChannel } from './control.js';
-import { pushContainerInventory } from './inventory.js';
 import { startHostLogTail } from './host-logs.js';
 
 const docker = new Docker({ socketPath: '/var/run/docker.sock' });
@@ -80,11 +77,9 @@ async function main() {
   setInterval(flushLogs, config.flushIntervalMs).unref();
   setInterval(discover, 30_000).unref();
   setInterval(pushMetrics, config.metricsIntervalMs).unref();
-  setInterval(() => pushContainerInventory(docker), config.inventoryIntervalMs).unref();
 
   // Push inicial
   void pushMetrics();
-  void pushContainerInventory(docker);
 }
 
 process.on('SIGTERM', async () => {

@@ -11,7 +11,6 @@ export const config = {
   apiKey: mustEnv('LOGWATCH_API_KEY'),
   ingestUrl: process.env.LOGWATCH_INGEST_URL || `${baseUrl()}/ingest`,
   metricsUrl: process.env.LOGWATCH_METRICS_URL || `${baseUrl()}/metrics/host`,
-  inventoryUrl: process.env.LOGWATCH_INVENTORY_URL || `${baseUrl()}/inventory/containers`,
   heartbeatUrl: process.env.LOGWATCH_HEARTBEAT_URL || `${baseUrl()}/inventory/heartbeat`,
   serverName: process.env.LOGWATCH_SERVER_NAME ?? 'unknown',
   batchSize: Math.min(500, parseInt(process.env.LOGWATCH_BATCH_SIZE ?? '200', 10)),
@@ -26,7 +25,6 @@ export const config = {
     10,
   ),
   metricsIntervalMs: parseInt(process.env.LOGWATCH_METRICS_INTERVAL_MS ?? '15000', 10),
-  inventoryIntervalMs: parseInt(process.env.LOGWATCH_INVENTORY_INTERVAL_MS ?? '60000', 10),
   excludeSelf: (process.env.LOGWATCH_EXCLUDE_SELF ?? 'true').toLowerCase() === 'true',
   hostRoot: process.env.LOGWATCH_HOST_ROOT || '/host',
 

@@ -26,6 +26,14 @@ import { Request, Response } from 'express';
 import { LogsService, IngestEntry } from './logs.service';
 import { ApiKeyGuard } from './api-key.guard';
 import { Public } from '../auth/public.decorator';
+import { ServersService } from '../servers/servers.service';
+
+class HeartbeatDto {
+  @IsOptional() @IsString() @MaxLength(255) hostname?: string;
+  @IsOptional() @IsString() @MaxLength(255) os?: string;
+  @IsOptional() @IsString() @MaxLength(64) arch?: string;
+  @IsOptional() @IsString() @MaxLength(64) agentVersion?: string;
+}
 
 class IngestEntryDto implements IngestEntry {
   @IsOptional() @IsString() ts?: string;
@@ -50,7 +58,10 @@ class IngestDto {
 @ApiTags('logs')
 @Controller()
 export class LogsController {
-  constructor(private readonly logs: LogsService) {}
+  constructor(
+    private readonly logs: LogsService,
+    private readonly servers: ServersService,
+  ) {}
 
   @Public()
   @UseGuards(ApiKeyGuard)
@@ -59,6 +70,21 @@ export class LogsController {
   @HttpCode(202)
   ingest(@Req() req: Request & { server: any }, @Body() dto: IngestDto) {
     return this.logs.ingest(req.server, dto.entries);
+  }
+
+  /**
+   * Heartbeat do agent: hostname/os/arch/versão + last_seen_at.
+   * Mantido no mesmo path (/inventory/heartbeat) que os agents já deployados
+   * usam, para não exigir redeploy deles. Endpoints de inventário de
+   * containers foram removidos junto com a tela de containers.
+   */
+  @Public()
+  @UseGuards(ApiKeyGuard)
+  @ApiSecurity('api-key')
+  @Post('inventory/heartbeat')
+  @HttpCode(204)
+  async heartbeat(@Req() req: Request & { server: any }, @Body() dto: HeartbeatDto) {
+    await this.servers.heartbeat(req.server.id, dto);
   }
 
   @ApiBearerAuth()
