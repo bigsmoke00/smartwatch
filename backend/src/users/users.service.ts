@@ -3,9 +3,12 @@ import {
   Injectable,
   ConflictException,
   NotFoundException,
+  UnauthorizedException,
 } from '@nestjs/common';
 import { Pool, PoolClient } from 'pg';
 import * as bcrypt from 'bcrypt';
+import { randomBytes } from 'crypto';
+import { JwtService } from '@nestjs/jwt';
 import { PG_POOL } from '../db/db.module';
 import { RolesService } from '../roles/roles.service';
 
@@ -20,18 +23,24 @@ export interface User {
   totpSecret: string | null;
   failedLogins: number;
   lockedUntil: Date | null;
+  mustChangePassword: boolean;
   createdAt: Date;
 }
 
 const SELECT = `id, email, password_hash AS "passwordHash", role, active,
                 totp_secret AS "totpSecret", failed_logins AS "failedLogins",
-                locked_until AS "lockedUntil", created_at AS "createdAt"`;
+                locked_until AS "lockedUntil",
+                must_change_password AS "mustChangePassword",
+                created_at AS "createdAt"`;
+
+const SET_PASSWORD_PURPOSE = 'set-password';
 
 @Injectable()
 export class UsersService {
   constructor(
     @Inject(PG_POOL) private readonly pool: Pool,
     private readonly roles: RolesService,
+    private readonly jwt: JwtService,
   ) {}
 
   async findByEmail(email: string): Promise<User | null> {
@@ -54,6 +63,7 @@ export class UsersService {
     const r = await this.pool.query(
       `SELECT u.id, u.email, u.role, u.active,
               u.totp_secret IS NOT NULL AS "mfaEnabled",
+              u.must_change_password AS "mustChangePassword",
               u.created_at AS "createdAt",
               coalesce(
                 jsonb_agg(
@@ -71,9 +81,15 @@ export class UsersService {
     return r.rows;
   }
 
+  /**
+   * password é opcional: se não vier, o usuário é criado com um hash
+   * aleatório/inutilizável e must_change_password=true — o acesso real só
+   * passa a existir quando o usuário define a própria senha pelo link
+   * enviado por email (ver signSetPasswordToken/consumeSetPasswordToken).
+   */
   async create(input: {
     email: string;
-    password: string;
+    password?: string;
     role?: UserRole;
     roleIds?: string[];
     grantedBy?: string;
@@ -81,7 +97,11 @@ export class UsersService {
     const email = input.email.toLowerCase();
     const exists = await this.findByEmail(email);
     if (exists) throw new ConflictException('Email already in use');
-    const hash = await bcrypt.hash(input.password, 12);
+    const mustChangePassword = !input.password;
+    const hash = await bcrypt.hash(
+      input.password ?? randomBytes(32).toString('hex'),
+      12,
+    );
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
@@ -90,10 +110,12 @@ export class UsersService {
         : await this.legacyRoleIds(client, input.role ?? 'viewer');
       const legacyRole = await this.roles.legacyRoleForIds(roleIds, client);
       const r = await client.query(
-        `INSERT INTO users(email, password_hash, role)
-         VALUES ($1,$2,$3)
-         RETURNING id, email, role, active, created_at AS "createdAt"`,
-        [email, hash, legacyRole],
+        `INSERT INTO users(email, password_hash, role, must_change_password)
+         VALUES ($1,$2,$3,$4)
+         RETURNING id, email, role, active,
+                   must_change_password AS "mustChangePassword",
+                   created_at AS "createdAt"`,
+        [email, hash, legacyRole, mustChangePassword],
       );
       const user = r.rows[0];
       for (const roleId of roleIds) {
@@ -203,11 +225,68 @@ export class UsersService {
     return true;
   }
 
+  /**
+   * Usado tanto pelo admin (PATCH /users/:id/password) quanto pelo fluxo de
+   * autoatendimento (consumeSetPasswordToken). Sempre limpa
+   * must_change_password — uma vez definida a senha, o acesso normal abre.
+   */
   async changePassword(id: string, newPassword: string) {
     const hash = await bcrypt.hash(newPassword, 12);
     await this.pool.query(
-      `UPDATE users SET password_hash=$2, password_changed_at=now() WHERE id=$1`,
+      `UPDATE users
+         SET password_hash=$2, password_changed_at=now(), must_change_password=false
+       WHERE id=$1`,
       [id, hash],
     );
+  }
+
+  /**
+   * Token de uso único (JWT, sem tabela própria) para o usuário definir a
+   * própria senha. Expira em JWT_INVITE_EXPIRES (default 3 dias).
+   */
+  async signSetPasswordToken(userId: string, email: string): Promise<string> {
+    return this.jwt.signAsync(
+      { sub: userId, email, purpose: SET_PASSWORD_PURPOSE },
+      {
+        secret: process.env.JWT_INVITE_SECRET ?? process.env.JWT_SECRET ?? 'dev-secret',
+        expiresIn: process.env.JWT_INVITE_EXPIRES ?? '3d',
+      },
+    );
+  }
+
+  /** Valida o token sem consumi-lo (usado pra UI mostrar o form ou um erro). */
+  async verifySetPasswordToken(token: string): Promise<{ email: string }> {
+    let payload: any;
+    try {
+      payload = await this.jwt.verifyAsync(token, {
+        secret: process.env.JWT_INVITE_SECRET ?? process.env.JWT_SECRET ?? 'dev-secret',
+      });
+    } catch {
+      throw new UnauthorizedException('Link inválido ou expirado');
+    }
+    if (payload.purpose !== SET_PASSWORD_PURPOSE) {
+      throw new UnauthorizedException('Token inválido');
+    }
+    const user = await this.findById(payload.sub);
+    if (!user) throw new UnauthorizedException('Usuário não encontrado');
+    return { email: payload.email };
+  }
+
+  async consumeSetPasswordToken(token: string, newPassword: string) {
+    let payload: any;
+    try {
+      payload = await this.jwt.verifyAsync(token, {
+        secret: process.env.JWT_INVITE_SECRET ?? process.env.JWT_SECRET ?? 'dev-secret',
+      });
+    } catch {
+      throw new UnauthorizedException('Link inválido ou expirado');
+    }
+    if (payload.purpose !== SET_PASSWORD_PURPOSE) {
+      throw new UnauthorizedException('Token inválido');
+    }
+    const user = await this.findById(payload.sub);
+    if (!user) throw new UnauthorizedException('Usuário não encontrado');
+    await this.changePassword(user.id, newPassword);
+    return { ok: true };
   }
 }

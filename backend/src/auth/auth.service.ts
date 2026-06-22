@@ -35,6 +35,11 @@ export class AuthService {
     if (!user) throw new UnauthorizedException('Invalid credentials');
 
     if (!user.active) throw new ForbiddenException('User disabled');
+    if (user.mustChangePassword) {
+      throw new ForbiddenException(
+        'Defina sua senha pelo link enviado por email antes de entrar.',
+      );
+    }
     if (user.lockedUntil && user.lockedUntil > new Date()) {
       throw new ForbiddenException(
         `Account locked until ${user.lockedUntil.toISOString()}`,

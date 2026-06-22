@@ -18,6 +18,7 @@ import {
   MinLength,
 } from 'class-validator';
 import { UsersService } from './users.service';
+import { MailService } from '../mail/mail.service';
 import { UserRole } from './user.entity';
 import { Audit } from '../audit/audit.decorator';
 import { RequirePermission } from '../auth/permissions.decorator';
@@ -28,7 +29,12 @@ import {
 
 class CreateUserDto {
   @IsEmail() email!: string;
-  @IsString() @MinLength(10) password!: string;
+  /**
+   * Opcional: se omitido, o usuário recebe um email com link para definir a
+   * própria senha. Se informado, o admin está definindo a senha manualmente
+   * e nenhum email é enviado.
+   */
+  @IsOptional() @IsString() @MinLength(10) password?: string;
   @IsOptional() @IsIn(['admin', 'operator', 'viewer']) role?: UserRole;
   @IsOptional() @IsArray() @IsUUID('4', { each: true }) roleIds?: string[];
 }
@@ -43,7 +49,10 @@ class ChangePasswordDto {
 @ApiBearerAuth()
 @Controller('users')
 export class UsersController {
-  constructor(private readonly users: UsersService) {}
+  constructor(
+    private readonly users: UsersService,
+    private readonly mail: MailService,
+  ) {}
 
   @RequirePermission('users:read')
   @Get()
@@ -54,17 +63,39 @@ export class UsersController {
   @RequirePermission('users:write')
   @Audit('user.create')
   @Post()
-  create(
+  async create(
     @Body() dto: CreateUserDto,
     @CurrentUser() actor: JwtUserPayload,
   ) {
-    return this.users.create({
+    const user = await this.users.create({
       email: dto.email,
       password: dto.password,
       role: dto.role,
       roleIds: dto.roleIds,
       grantedBy: actor.sub,
     });
+    if (!dto.password) {
+      await this.sendInvite(user.id, user.email);
+    }
+    return user;
+  }
+
+  /** Reenvia o convite de definição de senha (gera um novo link/token). */
+  @RequirePermission('users:write')
+  @Audit('user.invite_resend')
+  @Post(':id/resend-invite')
+  async resendInvite(@Param('id') id: string) {
+    const user = await this.users.findById(id);
+    if (!user) return { ok: false, message: 'Usuário não encontrado' };
+    const sent = await this.sendInvite(user.id, user.email);
+    return { ok: sent };
+  }
+
+  private async sendInvite(userId: string, email: string): Promise<boolean> {
+    const token = await this.users.signSetPasswordToken(userId, email);
+    const base = process.env.FRONTEND_URL ?? 'http://localhost:3000';
+    const link = `${base.replace(/\/$/, '')}/set-password?token=${token}`;
+    return this.mail.sendPasswordSetupEmail(email, link);
   }
 
   @RequirePermission('users:write')

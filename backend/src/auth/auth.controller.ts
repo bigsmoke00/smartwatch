@@ -6,9 +6,11 @@ import {
   HttpCode,
   Param,
   Post,
+  Query,
   Req,
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
+import { IsString, MinLength } from 'class-validator';
 import { Request } from 'express';
 import { authenticator } from 'otplib';
 import * as QRCode from 'qrcode';
@@ -18,6 +20,11 @@ import { Public } from './public.decorator';
 import { CurrentUser, JwtUserPayload } from './current-user.decorator';
 import { UsersService } from '../users/users.service';
 import { Audit } from '../audit/audit.decorator';
+
+class SetPasswordDto {
+  @IsString() token!: string;
+  @IsString() @MinLength(10) password!: string;
+}
 
 @ApiTags('auth')
 @Controller('auth')
@@ -46,6 +53,21 @@ export class AuthController {
       ip: req.ip,
       userAgent: req.headers['user-agent'],
     });
+  }
+
+  /** Usado pela tela /set-password pra mostrar o form só se o token for válido. */
+  @Public()
+  @Get('set-password/verify')
+  verifySetPasswordToken(@Query('token') token: string) {
+    return this.users.verifySetPasswordToken(token);
+  }
+
+  @Public()
+  @Audit('user.password_self_set')
+  @Post('set-password')
+  @HttpCode(200)
+  setPassword(@Body() dto: SetPasswordDto) {
+    return this.users.consumeSetPasswordToken(dto.token, dto.password);
   }
 
   @Audit('auth.logout')

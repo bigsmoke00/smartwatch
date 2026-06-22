@@ -29,6 +29,7 @@
     "@aws-sdk/client-iam": "^3.633.0",
     "@aws-sdk/client-rds": "^3.633.0",
     "@aws-sdk/client-s3": "^3.633.0",
+    "@aws-sdk/client-ses": "^3.633.0",
     "@aws-sdk/client-sts": "^3.633.0",
     "archiver": "^7.0.1",
     "cron-parser": "^4.9.0",

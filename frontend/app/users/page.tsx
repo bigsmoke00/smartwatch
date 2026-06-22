@@ -8,7 +8,7 @@ import { Input } from '@/components/ui/Input';
 import { Badge } from '@/components/ui/Badge';
 import { apiFetch } from '@/lib/api';
 import { safeArray } from '@/lib/utils';
-import { Save, ShieldCheck, Trash2, X } from 'lucide-react';
+import { Mail, Save, ShieldCheck, Trash2, X } from 'lucide-react';
 
 interface AssignedRole {
   id: string;
@@ -19,6 +19,7 @@ interface UserRow {
   email: string;
   role: 'admin' | 'operator' | 'viewer';
   active: boolean;
+  mustChangePassword: boolean;
   createdAt: string;
   roles: AssignedRole[];
 }
@@ -34,10 +35,12 @@ export default function UsersPage() {
   const [roles, setRoles] = useState<RoleSummary[]>([]);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [passwordMode, setPasswordMode] = useState<'invite' | 'manual'>('invite');
   const [selectedRoleIds, setSelectedRoleIds] = useState<string[]>([]);
   const [editingUserId, setEditingUserId] = useState<string | null>(null);
   const [editingRoleIds, setEditingRoleIds] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [info, setInfo] = useState<string | null>(null);
 
   async function load() {
     const [loadedUsers, loadedRoles] = await Promise.all([
@@ -62,16 +65,43 @@ export default function UsersPage() {
   async function create(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
+    setInfo(null);
     try {
       await apiFetch('/users', {
         method: 'POST',
-        body: JSON.stringify({ email, password, roleIds: selectedRoleIds }),
+        body: JSON.stringify({
+          email,
+          password: passwordMode === 'manual' ? password : undefined,
+          roleIds: selectedRoleIds,
+        }),
       });
       setEmail('');
       setPassword('');
+      setInfo(
+        passwordMode === 'invite'
+          ? `Convite enviado por email para ${email}.`
+          : `Usuário ${email} criado com senha definida manualmente.`,
+      );
       await load();
     } catch (err: any) {
       setError(err?.payload?.message || 'Erro ao criar usuário');
+    }
+  }
+
+  async function resendInvite(user: UserRow) {
+    setError(null);
+    setInfo(null);
+    try {
+      const r = await apiFetch<{ ok: boolean }>(`/users/${user.id}/resend-invite`, {
+        method: 'POST',
+      });
+      setInfo(
+        r.ok
+          ? `Convite reenviado para ${user.email}.`
+          : `Falha ao reenviar convite para ${user.email}.`,
+      );
+    } catch (err: any) {
+      setError(err?.payload?.message || 'Erro ao reenviar convite');
     }
   }
 
@@ -164,16 +194,53 @@ export default function UsersPage() {
                 required
               />
             </div>
-            <div>
-              <label className="text-xs text-muted">Senha</label>
-              <Input
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                minLength={10}
-                required
-              />
+            <div className="md:col-span-3">
+              <label className="text-xs text-muted block mb-1.5">Como definir a senha</label>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setPasswordMode('invite')}
+                  className={`flex-1 text-left rounded-md border px-3 py-2 text-sm ${
+                    passwordMode === 'invite'
+                      ? 'border-accent text-accent bg-accent/10'
+                      : 'border-border text-muted hover:text-text'
+                  }`}
+                >
+                  <div className="flex items-center gap-1.5 font-medium">
+                    <Mail size={14} /> Enviar convite por email
+                  </div>
+                  <div className="text-xs mt-0.5 opacity-80">
+                    O usuário recebe um link e cria a própria senha.
+                  </div>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPasswordMode('manual')}
+                  className={`flex-1 text-left rounded-md border px-3 py-2 text-sm ${
+                    passwordMode === 'manual'
+                      ? 'border-accent text-accent bg-accent/10'
+                      : 'border-border text-muted hover:text-text'
+                  }`}
+                >
+                  <div className="font-medium">Definir senha manualmente</div>
+                  <div className="text-xs mt-0.5 opacity-80">
+                    Você escolhe a senha agora, nenhum email é enviado.
+                  </div>
+                </button>
+              </div>
             </div>
+            {passwordMode === 'manual' && (
+              <div className="md:col-span-3">
+                <label className="text-xs text-muted">Senha</label>
+                <Input
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  minLength={10}
+                  required
+                />
+              </div>
+            )}
             <div className="md:col-span-3">
               <label className="text-xs text-muted block mb-1.5">Perfis</label>
               <RoleSelector
@@ -183,6 +250,7 @@ export default function UsersPage() {
             </div>
             <div className="md:col-span-3">
               {error && <div className="text-sm text-danger mb-2">{error}</div>}
+              {info && <div className="text-sm text-success mb-2">{info}</div>}
               <Button type="submit" disabled={!selectedRoleIds.length}>
                 Criar
               </Button>
@@ -197,7 +265,12 @@ export default function UsersPage() {
               <div key={user.id} className="px-4 py-3">
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                   <div className="min-w-0">
-                    <div className="text-sm truncate">{user.email}</div>
+                    <div className="text-sm truncate flex items-center gap-2">
+                      {user.email}
+                      {user.mustChangePassword && (
+                        <Badge className="border-warn text-warn">convite pendente</Badge>
+                      )}
+                    </div>
                     <div className="text-xs text-muted">
                       desde {new Date(user.createdAt).toLocaleDateString()}
                     </div>
@@ -208,6 +281,15 @@ export default function UsersPage() {
                         {item.name}
                       </Badge>
                     ))}
+                    {user.mustChangePassword && (
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        onClick={() => resendInvite(user)}
+                      >
+                        <Mail size={14} /> Reenviar convite
+                      </Button>
+                    )}
                     <Button
                       type="button"
                       variant="secondary"
