@@ -143,10 +143,18 @@ export class AuthService {
        VALUES ($1,$2,$3,$4, now() + ($5 || ' days')::interval)`,
       [user.id, sha256(refreshToken), meta.userAgent, meta.ip, refreshDays],
     );
+    const mfaEnabled = !!user.totpSecret;
     return {
       accessToken,
       refreshToken,
-      user: { id: user.id, email: user.email, role: user.role, mfaEnabled: !!user.totpSecret },
+      user: {
+        id: user.id,
+        email: user.email,
+        role: user.role,
+        mfaEnabled,
+        mfaRequired: !!user.mfaRequired,
+        mfaSetupRequired: !!user.mfaRequired && !mfaEnabled,
+      },
     };
   }
 }

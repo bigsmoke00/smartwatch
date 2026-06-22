@@ -49,7 +49,10 @@ export default function SettingsPage() {
       setSetup(null);
       setCode('');
       setSuccess('2FA habilitado com sucesso.');
-      load();
+      await load();
+      // Atualiza o cache local (mfaEnabled/mfaSetupRequired) usado pelo
+      // AppShell pra liberar a navegação imediatamente.
+      window.location.reload();
     } else {
       setError(r.message || 'Código inválido');
     }
@@ -58,7 +61,8 @@ export default function SettingsPage() {
     if (!confirm('Desabilitar 2FA?')) return;
     await apiFetch('/auth/mfa', { method: 'DELETE' });
     setSuccess('2FA desabilitado.');
-    load();
+    await load();
+    window.location.reload();
   }
   async function revokeSession(id: string) {
     if (!confirm('Encerrar esta sessão?')) return;
@@ -73,6 +77,12 @@ export default function SettingsPage() {
 
         <Card className="p-4">
           <h2 className="text-sm font-medium mb-3">Autenticação de dois fatores (TOTP)</h2>
+          {me?.mfaSetupRequired && (
+            <div className="mb-3 text-sm rounded-md border border-warn bg-warn/10 text-warn px-3 py-2">
+              O administrador exige 2FA para esta conta. Configure abaixo para continuar
+              usando a plataforma.
+            </div>
+          )}
           {me?.mfaEnabled ? (
             <div className="flex items-center justify-between">
               <div className="text-sm">

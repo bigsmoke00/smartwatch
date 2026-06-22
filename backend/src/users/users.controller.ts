@@ -10,6 +10,7 @@ import {
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import {
   IsArray,
+  IsBoolean,
   IsEmail,
   IsIn,
   IsOptional,
@@ -37,12 +38,17 @@ class CreateUserDto {
   @IsOptional() @IsString() @MinLength(10) password?: string;
   @IsOptional() @IsIn(['admin', 'operator', 'viewer']) role?: UserRole;
   @IsOptional() @IsArray() @IsUUID('4', { each: true }) roleIds?: string[];
+  /** Se true, o usuário é obrigado a configurar 2FA a partir do 1º login. */
+  @IsOptional() @IsBoolean() mfaRequired?: boolean;
 }
 class UpdateRoleDto {
   @IsIn(['admin', 'operator', 'viewer']) role!: UserRole;
 }
 class ChangePasswordDto {
   @IsString() @MinLength(10) newPassword!: string;
+}
+class SetMfaRequiredDto {
+  @IsBoolean() required!: boolean;
 }
 
 @ApiTags('users')
@@ -73,6 +79,7 @@ export class UsersController {
       role: dto.role,
       roleIds: dto.roleIds,
       grantedBy: actor.sub,
+      mfaRequired: dto.mfaRequired,
     });
     if (!dto.password) {
       await this.sendInvite(user.id, user.email);
@@ -114,6 +121,14 @@ export class UsersController {
   @Patch(':id/password')
   changePassword(@Param('id') id: string, @Body() dto: ChangePasswordDto) {
     return this.users.changePassword(id, dto.newPassword).then(() => ({ ok: true }));
+  }
+
+  /** Admin marca/desmarca o usuário como obrigado a configurar 2FA. */
+  @RequirePermission('users:write')
+  @Audit('user.mfa_required_change')
+  @Patch(':id/mfa-required')
+  setMfaRequired(@Param('id') id: string, @Body() dto: SetMfaRequiredDto) {
+    return this.users.setMfaRequired(id, dto.required);
   }
 
   @RequirePermission('users:write')

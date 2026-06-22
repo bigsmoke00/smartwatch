@@ -23,7 +23,7 @@ import {
   Terminal as TerminalIcon,
   Database as DbIcon,
 } from 'lucide-react';
-import { Auth } from '@/lib/api';
+import { Auth, apiFetch } from '@/lib/api';
 import { loadMyPermissions, hasPerm } from '@/lib/perms';
 import { cn } from '@/lib/utils';
 
@@ -39,6 +39,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const [user, setUser] = useState<ReturnType<typeof Auth.user>>(null);
   const [perms, setPerms] = useState<Set<string> | null>(null);
+  const [mfaSetupRequired, setMfaSetupRequired] = useState(false);
 
   useEffect(() => {
     const u = Auth.user();
@@ -47,8 +48,28 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       return;
     }
     setUser(u);
+    setMfaSetupRequired(!!u.mfaSetupRequired);
     loadMyPermissions().then(setPerms);
+    // /auth/me reflete o estado real do banco (a sessão pode ter sido aberta
+    // antes do admin marcar mfa_required, ou antes do usuário configurar o
+    // 2FA), então atualizamos o cache local com o valor atual.
+    apiFetch<{ mfaEnabled: boolean; mfaRequired: boolean; mfaSetupRequired: boolean }>(
+      '/auth/me',
+    )
+      .then((me) => {
+        const merged = { ...u, ...me };
+        localStorage.setItem('lw_user', JSON.stringify(merged));
+        setUser(merged);
+        setMfaSetupRequired(!!me.mfaSetupRequired);
+      })
+      .catch(() => {});
   }, [router]);
+
+  useEffect(() => {
+    if (mfaSetupRequired && pathname !== '/settings') {
+      router.replace('/settings');
+    }
+  }, [mfaSetupRequired, pathname, router]);
 
   if (!user) return null;
 
@@ -159,7 +180,14 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <LogOut size={16} /> Sair
         </button>
       </aside>
-      <main className="flex-1 overflow-auto">{children}</main>
+      <main className="flex-1 overflow-auto flex flex-col">
+        {mfaSetupRequired && (
+          <div className="bg-warn/10 border-b border-warn text-warn text-sm px-4 py-2 text-center">
+            Sua conta exige autenticação de dois fatores. Configure o 2FA abaixo antes de continuar.
+          </div>
+        )}
+        <div className="flex-1">{children}</div>
+      </main>
     </div>
   );
 }

@@ -8,7 +8,7 @@ import { Input } from '@/components/ui/Input';
 import { Badge } from '@/components/ui/Badge';
 import { apiFetch } from '@/lib/api';
 import { safeArray } from '@/lib/utils';
-import { Mail, Save, ShieldCheck, Trash2, X } from 'lucide-react';
+import { Mail, Save, ShieldCheck, Trash2, X, Lock, Unlock } from 'lucide-react';
 
 interface AssignedRole {
   id: string;
@@ -20,6 +20,8 @@ interface UserRow {
   role: 'admin' | 'operator' | 'viewer';
   active: boolean;
   mustChangePassword: boolean;
+  mfaEnabled: boolean;
+  mfaRequired: boolean;
   createdAt: string;
   roles: AssignedRole[];
 }
@@ -36,6 +38,7 @@ export default function UsersPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [passwordMode, setPasswordMode] = useState<'invite' | 'manual'>('invite');
+  const [mfaRequired, setMfaRequired] = useState(false);
   const [selectedRoleIds, setSelectedRoleIds] = useState<string[]>([]);
   const [editingUserId, setEditingUserId] = useState<string | null>(null);
   const [editingRoleIds, setEditingRoleIds] = useState<string[]>([]);
@@ -73,10 +76,12 @@ export default function UsersPage() {
           email,
           password: passwordMode === 'manual' ? password : undefined,
           roleIds: selectedRoleIds,
+          mfaRequired,
         }),
       });
       setEmail('');
       setPassword('');
+      setMfaRequired(false);
       setInfo(
         passwordMode === 'invite'
           ? `Convite enviado por email para ${email}.`
@@ -102,6 +107,19 @@ export default function UsersPage() {
       );
     } catch (err: any) {
       setError(err?.payload?.message || 'Erro ao reenviar convite');
+    }
+  }
+
+  async function toggleMfaRequired(user: UserRow) {
+    setError(null);
+    try {
+      await apiFetch(`/users/${user.id}/mfa-required`, {
+        method: 'PATCH',
+        body: JSON.stringify({ required: !user.mfaRequired }),
+      });
+      await load();
+    } catch (err: any) {
+      setError(err?.payload?.message || 'Erro ao atualizar exigência de 2FA');
     }
   }
 
@@ -249,6 +267,22 @@ export default function UsersPage() {
               />
             </div>
             <div className="md:col-span-3">
+              <label className="flex items-start gap-2 rounded-md border border-border bg-panel2 px-3 py-2 cursor-pointer hover:border-accent/60 w-fit">
+                <input
+                  type="checkbox"
+                  checked={mfaRequired}
+                  onChange={(e) => setMfaRequired(e.target.checked)}
+                  className="mt-0.5"
+                />
+                <span className="min-w-0">
+                  <span className="block text-sm">Exigir 2FA</span>
+                  <span className="block text-xs text-muted">
+                    O usuário será obrigado a configurar 2FA a partir do 1º login.
+                  </span>
+                </span>
+              </label>
+            </div>
+            <div className="md:col-span-3">
               {error && <div className="text-sm text-danger mb-2">{error}</div>}
               {info && <div className="text-sm text-success mb-2">{info}</div>}
               <Button type="submit" disabled={!selectedRoleIds.length}>
@@ -270,6 +304,17 @@ export default function UsersPage() {
                       {user.mustChangePassword && (
                         <Badge className="border-warn text-warn">convite pendente</Badge>
                       )}
+                      {user.mfaRequired && (
+                        <Badge
+                          className={
+                            user.mfaEnabled
+                              ? 'border-success text-success'
+                              : 'border-warn text-warn'
+                          }
+                        >
+                          2FA {user.mfaEnabled ? 'ativo' : 'obrigatório (pendente)'}
+                        </Badge>
+                      )}
                     </div>
                     <div className="text-xs text-muted">
                       desde {new Date(user.createdAt).toLocaleDateString()}
@@ -281,6 +326,14 @@ export default function UsersPage() {
                         {item.name}
                       </Badge>
                     ))}
+                    <button
+                      onClick={() => toggleMfaRequired(user)}
+                      className="text-muted hover:text-text flex items-center gap-1 text-xs"
+                      title={user.mfaRequired ? 'Tornar 2FA opcional' : 'Exigir 2FA'}
+                    >
+                      {user.mfaRequired ? <Unlock size={13} /> : <Lock size={13} />}
+                      {user.mfaRequired ? 'Tornar 2FA opcional' : 'Exigir 2FA'}
+                    </button>
                     {user.mustChangePassword && (
                       <Button
                         type="button"

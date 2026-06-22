@@ -24,6 +24,7 @@ export interface User {
   failedLogins: number;
   lockedUntil: Date | null;
   mustChangePassword: boolean;
+  mfaRequired: boolean;
   createdAt: Date;
 }
 
@@ -31,6 +32,7 @@ const SELECT = `id, email, password_hash AS "passwordHash", role, active,
                 totp_secret AS "totpSecret", failed_logins AS "failedLogins",
                 locked_until AS "lockedUntil",
                 must_change_password AS "mustChangePassword",
+                mfa_required AS "mfaRequired",
                 created_at AS "createdAt"`;
 
 const SET_PASSWORD_PURPOSE = 'set-password';
@@ -64,6 +66,7 @@ export class UsersService {
       `SELECT u.id, u.email, u.role, u.active,
               u.totp_secret IS NOT NULL AS "mfaEnabled",
               u.must_change_password AS "mustChangePassword",
+              u.mfa_required AS "mfaRequired",
               u.created_at AS "createdAt",
               coalesce(
                 jsonb_agg(
@@ -93,6 +96,7 @@ export class UsersService {
     role?: UserRole;
     roleIds?: string[];
     grantedBy?: string;
+    mfaRequired?: boolean;
   }) {
     const email = input.email.toLowerCase();
     const exists = await this.findByEmail(email);
@@ -110,12 +114,13 @@ export class UsersService {
         : await this.legacyRoleIds(client, input.role ?? 'viewer');
       const legacyRole = await this.roles.legacyRoleForIds(roleIds, client);
       const r = await client.query(
-        `INSERT INTO users(email, password_hash, role, must_change_password)
-         VALUES ($1,$2,$3,$4)
+        `INSERT INTO users(email, password_hash, role, must_change_password, mfa_required)
+         VALUES ($1,$2,$3,$4,$5)
          RETURNING id, email, role, active,
                    must_change_password AS "mustChangePassword",
+                   mfa_required AS "mfaRequired",
                    created_at AS "createdAt"`,
-        [email, hash, legacyRole, mustChangePassword],
+        [email, hash, legacyRole, mustChangePassword, !!input.mfaRequired],
       );
       const user = r.rows[0];
       for (const roleId of roleIds) {
@@ -189,6 +194,15 @@ export class UsersService {
       id,
       secret,
     ]);
+  }
+
+  /** Admin marca/desmarca o usuário como obrigado a usar 2FA. */
+  async setMfaRequired(id: string, required: boolean) {
+    await this.pool.query(`UPDATE users SET mfa_required=$2 WHERE id=$1`, [
+      id,
+      required,
+    ]);
+    return { id, mfaRequired: required };
   }
 
   async noteLoginFailure(id: string, lockMinutes: number) {

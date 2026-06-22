@@ -139,6 +139,8 @@ export const Auth = {
         email: string;
         role: 'admin' | 'operator' | 'viewer';
         mfaEnabled: boolean;
+        mfaRequired?: boolean;
+        mfaSetupRequired?: boolean;
       };
     }>('/auth/login', {
       method: 'POST',
@@ -166,6 +168,8 @@ export const Auth = {
     email: string;
     role: 'admin' | 'operator' | 'viewer';
     mfaEnabled?: boolean;
+    mfaRequired?: boolean;
+    mfaSetupRequired?: boolean;
   } | null {
     if (typeof window === 'undefined') return null;
     const raw = localStorage.getItem('lw_user');

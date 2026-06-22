@@ -80,11 +80,14 @@ export class AuthController {
   @Get('me')
   async me(@CurrentUser() user: JwtUserPayload) {
     const u = await this.users.findById(user.sub);
+    const mfaEnabled = !!u?.totpSecret;
     return {
       id: user.sub,
       email: user.email,
       role: user.role,
-      mfaEnabled: !!u?.totpSecret,
+      mfaEnabled,
+      mfaRequired: !!u?.mfaRequired,
+      mfaSetupRequired: !!u?.mfaRequired && !mfaEnabled,
     };
   }
 
