@@ -228,14 +228,45 @@ export class UsersService {
     return { ok: true };
   }
 
+  /**
+   * Cria o admin inicial quando a tabela `users` está vazia. Sempre vincula
+   * o usuário criado à role `Super Admin` em `user_roles` — sem isso o
+   * usuário fica com `role='admin'` (coluna legada) mas sem nenhuma
+   * permissão real, já que a autorização consulta role_permissions via
+   * user_roles. A migration 003 só faz esse backfill para admins que já
+   * existiam no momento em que ela rodou, então em qualquer ambiente
+   * novo/resetado (onde o admin só é criado depois, no boot) isso precisa
+   * ser feito aqui também.
+   */
   async ensureAdmin(email: string, password: string): Promise<boolean> {
     const c = await this.pool.query(`SELECT count(*)::int n FROM users`);
     if (c.rows[0].n > 0) return false;
     const hash = await bcrypt.hash(password, 12);
-    await this.pool.query(
-      `INSERT INTO users(email, password_hash, role) VALUES ($1,$2,'admin')`,
-      [email.toLowerCase(), hash],
-    );
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const r = await client.query(
+        `INSERT INTO users(email, password_hash, role) VALUES ($1,$2,'admin') RETURNING id`,
+        [email.toLowerCase(), hash],
+      );
+      const userId = r.rows[0].id;
+      const role = await client.query(
+        `SELECT id FROM roles WHERE name='Super Admin'`,
+      );
+      if (role.rowCount) {
+        await client.query(
+          `INSERT INTO user_roles(user_id, role_id) VALUES ($1,$2)
+           ON CONFLICT DO NOTHING`,
+          [userId, role.rows[0].id],
+        );
+      }
+      await client.query('COMMIT');
+    } catch (e) {
+      await client.query('ROLLBACK');
+      throw e;
+    } finally {
+      client.release();
+    }
     return true;
   }
 
