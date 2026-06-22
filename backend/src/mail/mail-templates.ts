@@ -18,6 +18,14 @@ const ISO_NOTICE = `
   segurança da SmartSpace.
 `;
 
+const VPN_NOTICE = `
+  <p style="font-size:12px;line-height:1.6;background:#fff7ed;border:1px solid #fdba74;border-radius:6px;padding:10px 14px;color:#9a3412;margin:0 0 24px;">
+    <strong>Atenção:</strong> o acesso a esta plataforma só funciona com a VPN da SmartSpace
+    conectada. Conecte-se à VPN antes de clicar no link acima — caso contrário, a página não vai
+    carregar.
+  </p>
+`;
+
 function layout(opts: { title: string; bodyHtml: string }): string {
   return `<!doctype html>
 <html lang="pt-BR">
@@ -72,6 +80,7 @@ export function passwordSetupTemplate(link: string, email: string): string {
         Se o botão não funcionar, copie e cole este link no navegador:<br/>
         <a href="${link}" style="color:#2563eb;">${link}</a>
       </p>
+      ${VPN_NOTICE}
     `,
   });
 }
@@ -94,6 +103,7 @@ export function passwordResetTemplate(link: string, email: string): string {
         Se o botão não funcionar, copie e cole este link no navegador:<br/>
         <a href="${link}" style="color:#2563eb;">${link}</a>
       </p>
+      ${VPN_NOTICE}
     `,
   });
 }
