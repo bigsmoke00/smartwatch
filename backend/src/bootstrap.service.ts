@@ -43,5 +43,36 @@ export class BootstrapService implements OnApplicationBootstrap {
         `Initial admin created (${email}). CHANGE THE PASSWORD NOW.`,
       );
     }
+
+    await this.seedLegacyPatroniCluster();
+  }
+
+  /**
+   * Migra o PATRONI_NODES/PATRONI_BASIC_AUTH (env, cluster único e fixo) para
+   * um registro em patroni_clusters na primeira vez que o backend sobe com a
+   * tabela vazia, para não perder a config já existente em produção.
+   * Depois disso, clusters são cadastrados/removidos pela UI.
+   */
+  private async seedLegacyPatroniCluster(): Promise<void> {
+    const nodes = (process.env.PATRONI_NODES || '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (!nodes.length) return;
+    try {
+      const r = await this.pool.query(`SELECT count(*)::int n FROM patroni_clusters`);
+      if (r.rows[0].n > 0) return;
+      await this.pool.query(
+        `INSERT INTO patroni_clusters(name, description, nodes, basic_auth)
+         VALUES ('legacy', 'Migrado automaticamente de PATRONI_NODES', $1, $2)`,
+        [nodes, process.env.PATRONI_BASIC_AUTH || null],
+      );
+      this.logger.warn(
+        `Cluster Patroni "legacy" criado a partir de PATRONI_NODES. ` +
+          `Pode remover essa env var e gerenciar pela tela de Cluster Patroni.`,
+      );
+    } catch (e) {
+      this.logger.error('Falha ao migrar PATRONI_NODES para patroni_clusters', e as Error);
+    }
   }
 }
