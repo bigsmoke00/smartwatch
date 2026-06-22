@@ -37,6 +37,18 @@ import { BootstrapService } from './bootstrap.service';
         transport: process.env.NODE_ENV !== 'production'
           ? { target: 'pino-pretty', options: { singleLine: true } }
           : undefined,
+        /**
+         * Loga requisições bem-sucedidas (2xx/3xx) em "debug" — só aparecem
+         * se LOG_LEVEL=debug. Erros (4xx/5xx) continuam visíveis em "warn"/
+         * "error" mesmo com LOG_LEVEL=info (padrão), pra não esconder
+         * problemas reais (ex.: 401 de login, payload too large) no meio do
+         * tráfego de rotina dos agents (ingest/heartbeat/metrics).
+         */
+        customLogLevel: (_req, res, err) => {
+          if (err || res.statusCode >= 500) return 'error';
+          if (res.statusCode >= 400) return 'warn';
+          return 'debug';
+        },
         redact: {
           paths: [
             'req.headers.authorization',
