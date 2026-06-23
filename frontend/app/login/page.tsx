@@ -35,8 +35,17 @@ function LoginInner() {
       router.replace(next.startsWith('/') ? next : '/');
     } catch (err: any) {
       const msg = err?.payload?.message || 'Falha no login';
-      if (/MFA|totp/i.test(msg)) setNeedsMfa(true);
-      setError(msg);
+      const isMfaError = /MFA|totp/i.test(msg);
+      if (isMfaError) {
+        setNeedsMfa(true);
+        // Na primeira vez (ainda sem código digitado) isso não é um erro do
+        // usuário, é só o sistema pedindo o segundo fator — não mostra como
+        // "credenciais inválidas". Só exibe erro de verdade se o código que
+        // a pessoa digitou estava errado.
+        setError(totp ? msg : null);
+      } else {
+        setError(msg);
+      }
     } finally {
       setLoading(false);
     }
@@ -61,6 +70,7 @@ function LoginInner() {
               onChange={(e) => setEmail(e.target.value)}
               required
               autoComplete="username"
+              disabled={needsMfa}
             />
           </div>
           <div>
@@ -71,12 +81,30 @@ function LoginInner() {
               onChange={(e) => setPassword(e.target.value)}
               required
               autoComplete="current-password"
+              disabled={needsMfa}
             />
           </div>
-          {needsMfa && (
-            <div>
-              <label className="text-xs text-muted">Código MFA (6 dígitos)</label>
+          {!needsMfa && error && (
+            <div className="text-sm text-danger">{error}</div>
+          )}
+          <Button type="submit" className="w-full" disabled={loading || needsMfa}>
+            {loading ? 'Entrando...' : 'Entrar'}
+          </Button>
+        </form>
+      </Card>
+
+      {needsMfa && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4">
+          <Card className="w-full max-w-sm p-6">
+            <div className="mb-4">
+              <div className="font-semibold text-lg">Verificação em duas etapas</div>
+              <p className="text-sm text-muted mt-1">
+                Digite o código de 6 dígitos do seu aplicativo autenticador.
+              </p>
+            </div>
+            <form onSubmit={submit} className="space-y-3">
               <Input
+                autoFocus
                 inputMode="numeric"
                 pattern="[0-9]*"
                 value={totp}
@@ -84,14 +112,29 @@ function LoginInner() {
                 maxLength={6}
                 placeholder="123456"
               />
-            </div>
-          )}
-          {error && <div className="text-sm text-danger">{error}</div>}
-          <Button type="submit" className="w-full" disabled={loading}>
-            {loading ? 'Entrando...' : 'Entrar'}
-          </Button>
-        </form>
-      </Card>
+              {error && <div className="text-sm text-danger">{error}</div>}
+              <Button
+                type="submit"
+                className="w-full"
+                disabled={loading || totp.length !== 6}
+              >
+                {loading ? 'Verificando...' : 'Confirmar'}
+              </Button>
+              <button
+                type="button"
+                className="text-xs text-muted hover:underline w-full text-center"
+                onClick={() => {
+                  setNeedsMfa(false);
+                  setTotp('');
+                  setError(null);
+                }}
+              >
+                Voltar
+              </button>
+            </form>
+          </Card>
+        </div>
+      )}
     </div>
   );
 }
