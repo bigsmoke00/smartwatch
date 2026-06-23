@@ -439,7 +439,12 @@ export class PgMonitorService {
             params,
           );
         }
-      } catch { /* ignore */ }
+      } catch (e: any) {
+        // Antes ficava em silêncio total — se isso falhasse na coleta, a aba
+        // "Saúde" ficava pra sempre vazia sem nenhum jeito de saber o motivo.
+        // Loga pra aparecer no log do backend e dar visibilidade real.
+        this.logger.error(`tableHealth collect ${c.name}: ${e.message}`);
+      }
 
       // ---------- Avalia alertas ----------
       await this.evaluateAlerts(c, {
