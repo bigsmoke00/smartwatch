@@ -106,8 +106,10 @@ export class ZeroTrustService implements OnModuleInit {
     userId: string; serverId?: string | null; osUsername: string;
     allowSudo?: boolean; allowReadwrite?: boolean; createdBy: string;
   }) {
-    if (!/^[a-z_][a-z0-9_-]{0,31}$/.test(input.osUsername)) {
-      throw new BadRequestException('usuário do SO inválido (use apenas letras minúsculas, números, _ e -)');
+    // POSIX permite ponto em login name (ex: geraldo.cruz) — regex de useradd
+    // de várias distros aceita [a-z_][a-z0-9_.-]*[$]?, então liberamos ponto também.
+    if (!/^[a-z_][a-z0-9._-]{0,31}$/.test(input.osUsername)) {
+      throw new BadRequestException('usuário do SO inválido (use letras minúsculas, números, ".", "_" e "-")');
     }
     const r = await this.pool.query(
       `INSERT INTO user_server_logins(user_id, server_id, os_username, allow_sudo, allow_readwrite, created_by)

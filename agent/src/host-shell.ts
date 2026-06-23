@@ -70,7 +70,10 @@ const READONLY_BLOCK = /\b(rm|rmdir|mv|dd|mkfs|shutdown|reboot|halt|poweroff|kil
 
 function shellQuoteUser(u: string): boolean {
   // Validação redundante à do backend — nunca confiamos só na outra ponta.
-  return /^[a-z_][a-z0-9_-]{0,31}$/.test(u);
+  // OBS: ponto é permitido (ex: geraldo.cruz) — é um padrão comum de login
+  // name. A regex antiga sem "." rejeitava esse caso, caindo no modo legado
+  // (sem targetUser => roda como o próprio agent, ou seja, root).
+  return /^[a-z_][a-z0-9._-]{0,31}$/.test(u);
 }
 
 export async function spawnHostShell(opts: HostSessionOpts) {
@@ -152,16 +155,56 @@ export async function spawnHostShell(opts: HostSessionOpts) {
     unlink(histFile).catch(() => {});
   };
 
+  // ---- bloqueio readonly: precisa olhar a LINHA inteira, não tecla a tecla.
+  // O xterm.js manda cada tecla num write() separado, então testar
+  // READONLY_BLOCK contra um único caractere nunca casava com nada — esse
+  // era o motivo do "modo readonly não funciona" mesmo antes do bug do
+  // usuário do SO. Acumulamos os caracteres da linha atual e só decidimos
+  // ao ver Enter, antes de repassar pro pty (em modo canônico o shell só
+  // recebe/processa a linha quando o \n chega, então dá pra interceptar a
+  // tempo). Backspace/Ctrl também são tratados pra manter o buffer em sync.
+  let lineBuf = '';
+  let dataCb: ((chunk: string) => void) | null = null;
+
   return {
-    onData: (cb: (chunk: string) => void) => term.onData(cb),
+    onData: (cb: (chunk: string) => void) => { dataCb = cb; return term.onData(cb); },
     onExit: (cb: (code: number) => void) => term.onExit(({ exitCode }: any) => { cleanup(); cb(exitCode); }),
     onCommand: (cb: (cmd: string, ts?: string) => void) => { commandCb = cb; },
     write: (data: string) => {
-      if (opts.readonly && READONLY_BLOCK.test(data)) {
-        term.write('\r\n\x1b[31m[readonly] comando bloqueado\x1b[0m\r\n');
-        return;
+      if (!opts.readonly) { term.write(data); return; }
+
+      for (const ch of data) {
+        if (ch === '\r' || ch === '\n') {
+          const line = lineBuf;
+          lineBuf = '';
+          if (line.trim() && READONLY_BLOCK.test(line)) {
+            // Ctrl+U limpa a linha já digitada no buffer canônico do tty
+            // (apaga o que o shell ainda não processou), sem deixar o \n
+            // passar — o comando nunca chega a ser executado.
+            term.write('\x15');
+            dataCb?.(`\r\n\x1b[31m[readonly] comando bloqueado: ${line.trim()}\x1b[0m\r\n`);
+          } else {
+            // a linha em si já foi repassada char a char acima — só falta
+            // o terminador (\r/\n) pra mandar o shell processar.
+            term.write(ch);
+          }
+        } else if (ch === '\x7f' || ch === '\b') {
+          lineBuf = lineBuf.slice(0, -1);
+          term.write(ch);
+        } else if (ch === '\x15') { // Ctrl+U digitado pela própria pessoa
+          lineBuf = '';
+          term.write(ch);
+        } else if (ch === '\x03') { // Ctrl+C
+          lineBuf = '';
+          term.write(ch);
+        } else if (ch >= ' ' || ch === '\t') {
+          lineBuf += ch;
+          term.write(ch);
+        } else {
+          // outros controles (setas, etc.) — repassa sem tocar no buffer
+          term.write(ch);
+        }
       }
-      term.write(data);
     },
     resize: (cols: number, rows: number) => term.resize(cols, rows),
     kill: () => { cleanup(); term.kill(); },
