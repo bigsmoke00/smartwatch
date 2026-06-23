@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { AppShell } from '@/components/AppShell';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
@@ -362,10 +362,17 @@ function TopTab({ cluster }: { cluster: Cluster }) {
   const [panel, setPanel] = useState<{
     q: any; values: string[]; showValues: boolean; plan: any | null;
   } | null>(null);
+  // Referência do painel pra rolar a tela até ele assim que abre.
+  const panelRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     apiFetch(`/pg/clusters/${cluster.id}/top-queries`).then((r) => setItems(safeArray<any>(r))).catch(() => setItems([]));
     apiFetch(`/pg/clusters/${cluster.id}/features`).then(setFeatures).catch(() => setFeatures(null));
   }, [cluster.id]);
+
+  // Rola até o painel sempre que ele aparecer (ou troca de query selecionada).
+  useEffect(() => {
+    if (panel) panelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, [panel?.q]);
 
   function openQuery(q: any) {
     const n = placeholderCount(q.query_text);
@@ -379,6 +386,7 @@ function TopTab({ cluster }: { cluster: Cluster }) {
     try {
       const body: any = { query: panel.q.query_text, analyze };
       if (n > 0) body.params = panel.values;
+      if (panel.q.datname) body.database = panel.q.datname;
       const plan = await apiFetch(`/pg/clusters/${cluster.id}/explain`, {
         method: 'POST', body: JSON.stringify(body),
       });
@@ -414,6 +422,7 @@ CREATE EXTENSION pg_stat_statements;`}
         <table className="w-full text-sm">
           <thead className="bg-panel2 text-xs uppercase text-muted">
             <tr>
+              <th className="text-left px-3 py-2">Banco</th>
               <th className="text-left px-3 py-2">Query</th>
               <th className="text-right px-3 py-2">Calls</th>
               <th className="text-right px-3 py-2">Total ms</th>
@@ -423,7 +432,8 @@ CREATE EXTENSION pg_stat_statements;`}
           </thead>
           <tbody>
             {safeArray<any>(items).map((q) => (
-              <tr key={q.queryid} className="border-t border-border align-top">
+              <tr key={`${q.datname}.${q.queryid}`} className="border-t border-border align-top">
+                <td className="px-3 py-1.5 text-xs text-muted whitespace-nowrap">{q.datname ?? '—'}</td>
                 <td
                   className="px-3 py-1.5 font-mono text-xs max-w-2xl truncate cursor-pointer hover:text-accent"
                   title="Clique para ver a query completa"
@@ -440,7 +450,7 @@ CREATE EXTENSION pg_stat_statements;`}
               </tr>
             ))}
             {items.length === 0 && !noStatStatements && (
-              <tr><td colSpan={5} className="py-4 px-3 text-center text-muted">
+              <tr><td colSpan={6} className="py-4 px-3 text-center text-muted">
                 Sem dados ainda — aguarde 1-2 ciclos de coleta.
               </td></tr>
             )}
@@ -454,9 +464,12 @@ CREATE EXTENSION pg_stat_statements;`}
           ? previewWithValues(panel.q.query_text, panel.values)
           : panel.q.query_text;
         return (
+          <div ref={panelRef}>
           <Card className="p-3 mt-3">
             <div className="flex justify-between mb-2">
-              <h2 className="text-sm font-medium">Query</h2>
+              <h2 className="text-sm font-medium">
+                Query{panel.q.datname && <span className="text-muted font-normal"> · banco: {panel.q.datname}</span>}
+              </h2>
               <button onClick={() => setPanel(null)} className="text-xs text-muted">fechar</button>
             </div>
 
@@ -514,6 +527,7 @@ CREATE EXTENSION pg_stat_statements;`}
               </pre>
             )}
           </Card>
+          </div>
         );
       })()}
     </>
@@ -535,6 +549,7 @@ function HealthTab({ cluster }: { cluster: Cluster }) {
         <table className="w-full text-sm">
           <thead className="text-xs uppercase text-muted">
             <tr>
+              <th className="text-left px-3 py-1">Banco</th>
               <th className="text-left px-3 py-1">Tabela</th>
               <th className="text-right px-3 py-1">Live</th>
               <th className="text-right px-3 py-1">Dead</th>
@@ -549,7 +564,8 @@ function HealthTab({ cluster }: { cluster: Cluster }) {
               .sort((a, b) => (b.dead_pct ?? 0) - (a.dead_pct ?? 0))
               .slice(0, 30)
               .map((t) => (
-                <tr key={`${t.schema_name}.${t.relname}`} className="border-t border-border">
+                <tr key={`${t.datname}.${t.schema_name}.${t.relname}`} className="border-t border-border">
+                  <td className="px-3 py-1 text-xs text-muted whitespace-nowrap">{t.datname ?? '—'}</td>
                   <td className="px-3 py-1 font-mono text-xs">{t.schema_name}.{t.relname}</td>
                   <td className="px-3 py-1 text-right tabular-nums">{Number(t.n_live_tup).toLocaleString()}</td>
                   <td className="px-3 py-1 text-right tabular-nums">{Number(t.n_dead_tup).toLocaleString()}</td>
@@ -574,6 +590,7 @@ function HealthTab({ cluster }: { cluster: Cluster }) {
           <table className="w-full text-sm">
             <thead className="text-xs uppercase text-muted">
               <tr>
+                <th className="text-left py-1">Banco</th>
                 <th className="text-left py-1">Tabela</th>
                 <th className="text-right py-1">Seq scans</th>
                 <th className="text-right py-1">Idx scans</th>
@@ -583,6 +600,7 @@ function HealthTab({ cluster }: { cluster: Cluster }) {
             <tbody>
               {safeArray<any>(hints).map((h, i) => (
                 <tr key={i} className="border-t border-border">
+                  <td className="py-1 text-xs text-muted whitespace-nowrap">{h.datname ?? '—'}</td>
                   <td className="py-1 font-mono text-xs">{h.schema}.{h.table}</td>
                   <td className="py-1 text-right tabular-nums">{Number(h.seq_scan).toLocaleString()}</td>
                   <td className="py-1 text-right tabular-nums">{Number(h.idx_scan ?? 0).toLocaleString()}</td>

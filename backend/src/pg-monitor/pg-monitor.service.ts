@@ -291,14 +291,36 @@ export class PgMonitorService {
     }
   }
 
-  private async getClient(c: ClusterRow): Promise<MonitoredPgClient> {
+  /**
+   * `dbOverride` permite abrir a conexão numa database diferente da
+   * configurada no cluster — necessário pra coletar/explicar queries de
+   * outras databases do mesmo servidor (ver listServerDatabases()).
+   */
+  private async getClient(c: ClusterRow, dbOverride?: string): Promise<MonitoredPgClient> {
     const raw = await this.secrets.get(c.vault_secret);
     const cred = JSON.parse(raw);   // { user, password, ssl? }
     return new MonitoredPgClient({
       hosts: c.hosts,
-      database: c.database,
+      database: dbOverride ?? c.database,
       user: cred.user, password: cred.password, ssl: cred.ssl ?? false,
     });
+  }
+
+  /**
+   * Lista todas as databases "reais" do servidor (exclui templates e bancos
+   * que não aceitam conexão), pra coletar dados de todas elas — não só da
+   * que foi configurada no cluster. O cluster normalmente é cadastrado com
+   * user=postgres/database=postgres (banco de manutenção), que raramente
+   * tem tabelas de usuário — por isso "Saúde"/"Sugestões de índice"
+   * apareciam vazios mesmo com tráfego real em outro banco do servidor.
+   */
+  private async listServerDatabases(client: MonitoredPgClient): Promise<string[]> {
+    const rows = await client.query<any>(`
+      SELECT datname FROM pg_database
+      WHERE datistemplate = false AND datallowconn = true
+      ORDER BY datname
+    `);
+    return rows.map((r) => r.datname as string);
   }
 
   private async pollCluster(c: ClusterRow) {
@@ -368,82 +390,113 @@ export class PgMonitorService {
         ],
       );
 
-      // ---------- pg_stat_statements (top queries) — opcional ----------
+      // ---------- top queries + saúde de tabelas, em TODAS as databases ----------
+      // O cluster é cadastrado com uma única database (ex.: user=postgres,
+      // database=postgres — o banco de manutenção padrão), mas o servidor
+      // normalmente tem várias databases reais. Antes a coleta só rodava
+      // contra a database configurada, então "Saúde"/"Sugestões de índice"
+      // ficavam vazios sempre que essa database não fosse onde o tráfego de
+      // verdade acontece. Agora listamos todas as databases do servidor e
+      // coletamos de cada uma, tagueando as linhas com `datname`.
+      let databases: string[];
       try {
-        const top = await client.query<any>(`
-          SELECT queryid::bigint, query, calls, total_exec_time, mean_exec_time, rows,
-                 shared_blks_hit, shared_blks_read
-          FROM pg_stat_statements
-          ORDER BY total_exec_time DESC
-          LIMIT 50
-        `);
-        const placeholders: string[] = [];
-        const params: any[] = [];
-        let i = 1;
-        for (const t of top) {
-          placeholders.push(`(now(),$${i++},$${i++},$${i++},$${i++},$${i++},$${i++},$${i++},$${i++},$${i++})`);
-          params.push(c.id, t.queryid, (t.query ?? '').slice(0, 8000),
-            Number(t.calls), Number(t.total_exec_time), Number(t.mean_exec_time), Number(t.rows),
-            Number(t.shared_blks_hit), Number(t.shared_blks_read));
-        }
-        if (placeholders.length) {
-          await this.pool.query(
-            `INSERT INTO pg_top_queries(ts, cluster_id, queryid, query_text, calls, total_exec_ms,
-                                        mean_exec_ms, rows, shared_blks_hit, shared_blks_read)
-             VALUES ${placeholders.join(',')}
-             ON CONFLICT DO NOTHING`,
-            params,
-          );
-        }
+        databases = await this.listServerDatabases(client);
       } catch (e: any) {
-        // pg_stat_statements pode não estar habilitado — registra no cache
-        // pra UI mostrar aviso amigável em vez de quebrar.
-        if (/pg_stat_statements|relation .* does not exist/i.test(e.message)) {
-          await this.pool.query(
-            `INSERT INTO pg_cluster_features(cluster_id, has_pg_stat_statements, detected_at, last_error)
-             VALUES ($1, false, now(), $2)
-             ON CONFLICT (cluster_id) DO UPDATE SET
-               has_pg_stat_statements=false, detected_at=now(), last_error=EXCLUDED.last_error`,
-            [c.id, e.message.slice(0, 500)],
-          ).catch(() => {});
-        }
+        this.logger.error(`listServerDatabases ${c.name}: ${e.message}`);
+        databases = [c.database];
       }
 
-      // ---------- pg_stat_user_tables (saúde) ----------
-      try {
-        const tbl = await client.query<any>(`
-          SELECT schemaname, relname, n_live_tup, n_dead_tup,
-                 last_vacuum, last_autovacuum, last_analyze, last_autoanalyze,
-                 pg_total_relation_size(relid) AS total_size
-          FROM pg_stat_user_tables
-        `);
-        const placeholders: string[] = [];
-        const params: any[] = [];
-        let i = 1;
-        for (const t of tbl) {
-          const dead = Number(t.n_dead_tup ?? 0);
-          const live = Number(t.n_live_tup ?? 0);
-          const pct = live + dead > 0 ? (dead / (live + dead)) * 100 : 0;
-          placeholders.push(`(now(),$${i++},$${i++},$${i++},$${i++},$${i++},$${i++},$${i++},$${i++},$${i++},$${i++},$${i++})`);
-          params.push(
-            c.id, t.schemaname, t.relname, live, dead, pct,
-            t.last_vacuum, t.last_autovacuum, t.last_analyze, t.last_autoanalyze, t.total_size,
-          );
+      for (const datname of databases) {
+        const dbClient = datname === c.database ? client : await this.getClient(c, datname);
+        try {
+          // ---------- pg_stat_statements (top queries) — opcional ----------
+          try {
+            // pg_stat_statements é por instância (cobre todos os bancos do
+            // servidor), não por conexão. Filtramos por dbid = banco atual
+            // pra só guardar queries que realmente pertencem a esse banco
+            // — senão o EXPLAIN depois falha com "relation ... does not
+            // exist" porque a tabela referida não existe nesse banco.
+            const top = await dbClient.query<any>(`
+              SELECT queryid::bigint, query, calls, total_exec_time, mean_exec_time, rows,
+                     shared_blks_hit, shared_blks_read
+              FROM pg_stat_statements
+              WHERE dbid = (SELECT oid FROM pg_database WHERE datname = current_database())
+              ORDER BY total_exec_time DESC
+              LIMIT 50
+            `);
+            const placeholders: string[] = [];
+            const params: any[] = [];
+            let i = 1;
+            for (const t of top) {
+              placeholders.push(`(now(),$${i++},$${i++},$${i++},$${i++},$${i++},$${i++},$${i++},$${i++},$${i++},$${i++})`);
+              params.push(c.id, datname, t.queryid, (t.query ?? '').slice(0, 8000),
+                Number(t.calls), Number(t.total_exec_time), Number(t.mean_exec_time), Number(t.rows),
+                Number(t.shared_blks_hit), Number(t.shared_blks_read));
+            }
+            if (placeholders.length) {
+              await this.pool.query(
+                `INSERT INTO pg_top_queries(ts, cluster_id, datname, queryid, query_text, calls,
+                                            total_exec_ms, mean_exec_ms, rows, shared_blks_hit, shared_blks_read)
+                 VALUES ${placeholders.join(',')}
+                 ON CONFLICT DO NOTHING`,
+                params,
+              );
+            }
+          } catch (e: any) {
+            // pg_stat_statements pode não estar habilitado — registra no
+            // cache pra UI mostrar aviso amigável em vez de quebrar.
+            if (/pg_stat_statements|relation .* does not exist/i.test(e.message)) {
+              await this.pool.query(
+                `INSERT INTO pg_cluster_features(cluster_id, has_pg_stat_statements, detected_at, last_error)
+                 VALUES ($1, false, now(), $2)
+                 ON CONFLICT (cluster_id) DO UPDATE SET
+                   has_pg_stat_statements=false, detected_at=now(), last_error=EXCLUDED.last_error`,
+                [c.id, e.message.slice(0, 500)],
+              ).catch(() => {});
+            }
+          }
+
+          // ---------- pg_stat_user_tables (saúde) ----------
+          try {
+            const tbl = await dbClient.query<any>(`
+              SELECT schemaname, relname, n_live_tup, n_dead_tup,
+                     last_vacuum, last_autovacuum, last_analyze, last_autoanalyze,
+                     pg_total_relation_size(relid) AS total_size
+              FROM pg_stat_user_tables
+            `);
+            const placeholders: string[] = [];
+            const params: any[] = [];
+            let i = 1;
+            for (const t of tbl) {
+              const dead = Number(t.n_dead_tup ?? 0);
+              const live = Number(t.n_live_tup ?? 0);
+              const pct = live + dead > 0 ? (dead / (live + dead)) * 100 : 0;
+              placeholders.push(`(now(),$${i++},$${i++},$${i++},$${i++},$${i++},$${i++},$${i++},$${i++},$${i++},$${i++},$${i++},$${i++})`);
+              params.push(
+                c.id, datname, t.schemaname, t.relname, live, dead, pct,
+                t.last_vacuum, t.last_autovacuum, t.last_analyze, t.last_autoanalyze, t.total_size,
+              );
+            }
+            if (placeholders.length) {
+              await this.pool.query(
+                `INSERT INTO pg_table_health(ts, cluster_id, datname, schema_name, relname, n_live_tup,
+                                              n_dead_tup, dead_pct, last_vacuum, last_autovacuum,
+                                              last_analyze, last_autoanalyze, total_size_bytes)
+                 VALUES ${placeholders.join(',')}`,
+                params,
+              );
+            }
+          } catch (e: any) {
+            // Antes ficava em silêncio total — se isso falhasse na coleta, a
+            // aba "Saúde" ficava pra sempre vazia sem nenhum jeito de saber
+            // o motivo. Loga pra aparecer no log do backend.
+            this.logger.error(`tableHealth collect ${c.name}/${datname}: ${e.message}`);
+          }
+        } catch (e: any) {
+          this.logger.error(`coleta multi-db ${c.name}/${datname}: ${e.message}`);
+        } finally {
+          if (dbClient !== client) await dbClient.end();
         }
-        if (placeholders.length) {
-          await this.pool.query(
-            `INSERT INTO pg_table_health(ts, cluster_id, schema_name, relname, n_live_tup, n_dead_tup,
-                                          dead_pct, last_vacuum, last_autovacuum, last_analyze,
-                                          last_autoanalyze, total_size_bytes)
-             VALUES ${placeholders.join(',')}`,
-            params,
-          );
-        }
-      } catch (e: any) {
-        // Antes ficava em silêncio total — se isso falhasse na coleta, a aba
-        // "Saúde" ficava pra sempre vazia sem nenhum jeito de saber o motivo.
-        // Loga pra aparecer no log do backend e dar visibilidade real.
-        this.logger.error(`tableHealth collect ${c.name}: ${e.message}`);
       }
 
       // ---------- Avalia alertas ----------
@@ -584,12 +637,15 @@ export class PgMonitorService {
   }
 
   async topQueries(clusterId: string, limit = 30) {
+    // Agrupa por datname também — o mesmo queryid pode existir em mais de
+    // uma database do servidor (textos parecidos, planos diferentes), e o
+    // EXPLAIN precisa saber em qual database rodar.
     const r = await this.pool.query(
-      `SELECT queryid, query_text, max(total_exec_ms) AS total_ms,
+      `SELECT queryid, datname, query_text, max(total_exec_ms) AS total_ms,
               max(mean_exec_ms) AS mean_ms, max(calls) AS calls, max(rows) AS rows
        FROM pg_top_queries
        WHERE cluster_id=$1 AND ts >= now() - interval '1 hour'
-       GROUP BY queryid, query_text
+       GROUP BY queryid, datname, query_text
        ORDER BY total_ms DESC
        LIMIT $2`,
       [clusterId, limit],
@@ -599,12 +655,12 @@ export class PgMonitorService {
 
   async tableHealth(clusterId: string) {
     const r = await this.pool.query(
-      `SELECT DISTINCT ON (schema_name, relname)
-              schema_name, relname, n_live_tup, n_dead_tup, dead_pct,
+      `SELECT DISTINCT ON (datname, schema_name, relname)
+              datname, schema_name, relname, n_live_tup, n_dead_tup, dead_pct,
               last_autovacuum, last_autoanalyze, total_size_bytes
        FROM pg_table_health
        WHERE cluster_id=$1 AND ts >= now() - interval '1 day'
-       ORDER BY schema_name, relname, ts DESC`,
+       ORDER BY datname, schema_name, relname, ts DESC`,
       [clusterId],
     );
     return r.rows;
@@ -625,7 +681,7 @@ export class PgMonitorService {
     } finally { await client.end(); }
   }
 
-  async explain(clusterId: string, query: string, analyze = false, params?: any[]) {
+  async explain(clusterId: string, query: string, analyze = false, params?: any[], database?: string) {
     const c = await this.cluster(clusterId);
     if (!/^\s*(SELECT|WITH)\b/i.test(query)) {
       throw new ForbiddenException('EXPLAIN só permitido em SELECT/WITH');
@@ -643,7 +699,10 @@ export class PgMonitorService {
         `Esta query foi normalizada pelo pg_stat_statements: os valores literais foram substituídos por ${maxParam} parâmetro(s) (${Array.from(new Set(placeholderNums)).sort((a, b) => a - b).map((n) => `$${n}`).join(', ')}). Informe os valores reais para gerar o EXPLAIN.`,
       );
     }
-    const client = await this.getClient(c);
+    // A query de "top queries" agora pode vir de qualquer database do
+    // servidor (não só a configurada no cluster) — conecta na database
+    // certa quando informada, senão cai no comportamento antigo.
+    const client = await this.getClient(c, database);
     try {
       const sql = analyze
         ? `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) ${query}`
@@ -664,22 +723,49 @@ export class PgMonitorService {
   }
 
   async indexSuggestions(clusterId: string) {
-    // Heurística: tabelas com seq_scan muito > idx_scan
-    const c = await this.cluster(clusterId);
-    const client = await this.getClient(c);
-    try {
-      return client.query(`
-        SELECT schemaname AS schema, relname AS table,
-               seq_scan, idx_scan, n_live_tup,
-               'seq_scan/idx_scan ratio: ' ||
-                 round(seq_scan::numeric / nullif(idx_scan,0), 2) AS hint
-        FROM pg_stat_user_tables
-        WHERE seq_scan > 1000 AND (idx_scan IS NULL OR seq_scan > 10 * coalesce(idx_scan,0))
-          AND n_live_tup > 1000
-        ORDER BY seq_scan DESC
-        LIMIT 30
-      `);
-    } finally { await client.end(); }
+    // Heurística: tabelas com seq_scan muito > idx_scan. Percorre TODAS as
+    // databases do servidor (não só a configurada no cluster) — mesmo
+    // motivo do pollCluster: a database configurada (geralmente "postgres")
+    // raramente tem tabelas de usuário de verdade. Cacheado por 10s e
+    // compartilhado entre usuários, já que agora abre 1 conexão por
+    // database em vez de só 1 conexão total.
+    return this.withSharedCache(`hints:${clusterId}`, 10000, async () => {
+      const c = await this.cluster(clusterId);
+      const main = await this.getClient(c);
+      let databases: string[];
+      try {
+        databases = await this.listServerDatabases(main);
+      } catch {
+        databases = [c.database];
+      } finally {
+        await main.end();
+      }
+
+      const out: any[] = [];
+      for (const datname of databases) {
+        const client = await this.getClient(c, datname);
+        try {
+          const rows = await client.query<any>(`
+            SELECT schemaname AS schema, relname AS table,
+                   seq_scan, idx_scan, n_live_tup,
+                   'seq_scan/idx_scan ratio: ' ||
+                     round(seq_scan::numeric / nullif(idx_scan,0), 2) AS hint
+            FROM pg_stat_user_tables
+            WHERE seq_scan > 1000 AND (idx_scan IS NULL OR seq_scan > 10 * coalesce(idx_scan,0))
+              AND n_live_tup > 1000
+            ORDER BY seq_scan DESC
+            LIMIT 30
+          `);
+          for (const r of rows) out.push({ datname, ...r });
+        } catch (e: any) {
+          this.logger.error(`indexSuggestions ${c.name}/${datname}: ${e.message}`);
+        } finally {
+          await client.end();
+        }
+      }
+      out.sort((a, b) => Number(b.seq_scan ?? 0) - Number(a.seq_scan ?? 0));
+      return out.slice(0, 30);
+    });
   }
 
   private async cluster(id: string): Promise<ClusterRow> {

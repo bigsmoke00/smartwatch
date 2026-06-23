@@ -38,6 +38,8 @@ class ExplainDto {
   @IsOptional() analyze?: boolean;
   /** Valores reais pros placeholders $1, $2, ... quando a query vem normalizada do pg_stat_statements. */
   @IsOptional() params?: any[];
+  /** Database onde rodar o EXPLAIN — necessário pq "top queries" agora cobre todas as databases do servidor, não só a configurada no cluster. */
+  @IsOptional() @IsString() database?: string;
 }
 
 @ApiTags('pg-monitor')
@@ -126,7 +128,7 @@ class PgMonitorController {
   @Audit('pg.explain')
   @Post('clusters/:id/explain')
   explain(@Param('id') id: string, @Body() dto: ExplainDto) {
-    return this.svc.explain(id, dto.query, !!dto.analyze, dto.params);
+    return this.svc.explain(id, dto.query, !!dto.analyze, dto.params, dto.database);
   }
 }
 
