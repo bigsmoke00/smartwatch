@@ -24,6 +24,8 @@ export class PgMonitorService {
   private readonly logger = new Logger('PgMonitorService');
   // delta de TPS / bgwriter precisa do snapshot anterior
   private prevTx = new Map<string, { commits: number; rollbacks: number; ts: number }>();
+  // cache curto compartilhado entre usuários (ver withSharedCache abaixo)
+  private sharedCache = new Map<string, { ts: number; value?: any; inflight?: Promise<any> }>();
 
   constructor(
     @Inject(PG_POOL) private readonly pool: Pool,
@@ -256,6 +258,36 @@ export class PgMonitorService {
       } catch (e: any) {
         this.logger.error(`pollCluster ${c.name}: ${e.message}`);
       }
+    }
+  }
+
+  /**
+   * Compartilha UMA leitura por chave entre todos os usuários que pedirem
+   * dentro da janela de `ttlMs`. Antes, cada aba aberta (de cada usuário)
+   * abria sua própria conexão direto no cluster monitorado a cada poll do
+   * frontend (5s em "Queries ativas"/"Locks") — com N usuários, N conexões
+   * reais por ciclo. Agora a primeira requisição da janela busca os dados
+   * de verdade; as outras (de qualquer usuário, dentro do TTL) recebem o
+   * mesmo resultado, ou esperam a mesma busca já em andamento — sem abrir
+   * conexão extra nenhuma. Erros nunca ficam em cache (a próxima chamada
+   * tenta de novo).
+   */
+  private async withSharedCache<T>(key: string, ttlMs: number, fn: () => Promise<T>): Promise<T> {
+    const now = Date.now();
+    const entry = this.sharedCache.get(key);
+    if (entry) {
+      if (entry.inflight) return entry.inflight;
+      if (now - entry.ts < ttlMs) return entry.value;
+    }
+    const inflight = fn();
+    this.sharedCache.set(key, { ts: now, inflight });
+    try {
+      const value = await inflight;
+      this.sharedCache.set(key, { ts: Date.now(), value });
+      return value;
+    } catch (e) {
+      this.sharedCache.delete(key);
+      throw e;
     }
   }
 
@@ -504,36 +536,40 @@ export class PgMonitorService {
   }
 
   async activeQueries(clusterId: string) {
-    const c = await this.cluster(clusterId);
-    const client = await this.getClient(c);
-    try {
-      return client.query(`
-        SELECT pid, datname, usename, state, wait_event, wait_event_type,
-               client_addr::text AS client_addr, application_name,
-               extract(epoch from now() - query_start)::int AS dur_sec,
-               now() - query_start AS dur,
-               left(query, 4000) AS query
-        FROM pg_stat_activity
-        WHERE pid <> pg_backend_pid() AND query IS NOT NULL
-        ORDER BY query_start ASC
-      `);
-    } finally { await client.end(); }
+    return this.withSharedCache(`active:${clusterId}`, 4000, async () => {
+      const c = await this.cluster(clusterId);
+      const client = await this.getClient(c);
+      try {
+        return client.query(`
+          SELECT pid, datname, usename, state, wait_event, wait_event_type,
+                 client_addr::text AS client_addr, application_name,
+                 extract(epoch from now() - query_start)::int AS dur_sec,
+                 now() - query_start AS dur,
+                 left(query, 4000) AS query
+          FROM pg_stat_activity
+          WHERE pid <> pg_backend_pid() AND query IS NOT NULL
+          ORDER BY query_start ASC
+        `);
+      } finally { await client.end(); }
+    });
   }
 
   async lockChain(clusterId: string) {
-    const c = await this.cluster(clusterId);
-    const client = await this.getClient(c);
-    try {
-      return client.query(`
-        SELECT pid, usename, datname, state,
-               pg_blocking_pids(pid) AS blocking,
-               left(query, 200) AS query,
-               extract(epoch from now() - query_start)::int AS dur_sec
-        FROM pg_stat_activity
-        WHERE pg_blocking_pids(pid) <> '{}'::int[]
-           OR pid IN (SELECT unnest(pg_blocking_pids(p2.pid)) FROM pg_stat_activity p2)
-      `);
-    } finally { await client.end(); }
+    return this.withSharedCache(`locks:${clusterId}`, 4000, async () => {
+      const c = await this.cluster(clusterId);
+      const client = await this.getClient(c);
+      try {
+        return client.query(`
+          SELECT pid, usename, datname, state,
+                 pg_blocking_pids(pid) AS blocking,
+                 left(query, 200) AS query,
+                 extract(epoch from now() - query_start)::int AS dur_sec
+          FROM pg_stat_activity
+          WHERE pg_blocking_pids(pid) <> '{}'::int[]
+             OR pid IN (SELECT unnest(pg_blocking_pids(p2.pid)) FROM pg_stat_activity p2)
+        `);
+      } finally { await client.end(); }
+    });
   }
 
   async topQueries(clusterId: string, limit = 30) {
@@ -569,6 +605,11 @@ export class PgMonitorService {
     const client = await this.getClient(c);
     try {
       const r = await client.query<any>(`SELECT pg_terminate_backend($1) AS ok`, [pid]);
+      // invalida o cache compartilhado pra esse cluster — sem isso, o reload
+      // que a tela faz na sequência podia devolver a lista de antes do kill
+      // (ainda dentro da janela do cache) e parecer que não funcionou.
+      this.sharedCache.delete(`active:${clusterId}`);
+      this.sharedCache.delete(`locks:${clusterId}`);
       return { ok: !!r[0]?.ok };
     } finally { await client.end(); }
   }
