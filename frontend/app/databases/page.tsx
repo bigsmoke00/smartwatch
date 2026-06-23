@@ -202,12 +202,26 @@ function OverviewTab({ cluster }: { cluster: Cluster }) {
   );
 }
 
+// Mostra "active"/"running" sempre no topo (depois ordenado pela mais
+// demorada), o resto (idle, idle in transaction, etc.) depois, também por
+// duração — assim quem está realmente consumindo CPU agora fica visível
+// sem precisar rolar a lista.
+function sortActiveFirst(items: any[]): any[] {
+  const isRunning = (r: any) => r.state === 'active' || r.state === 'running';
+  return [...items].sort((a, b) => {
+    const ra = isRunning(a) ? 0 : 1;
+    const rb = isRunning(b) ? 0 : 1;
+    if (ra !== rb) return ra - rb;
+    return (b.dur_sec ?? 0) - (a.dur_sec ?? 0);
+  });
+}
+
 function ActiveTab({ cluster }: { cluster: Cluster }) {
   const [items, setItems] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   async function load() {
     setLoading(true);
-    try { setItems(safeArray<any>(await apiFetch(`/pg/clusters/${cluster.id}/active`))); }
+    try { setItems(sortActiveFirst(safeArray<any>(await apiFetch(`/pg/clusters/${cluster.id}/active`)))); }
     finally { setLoading(false); }
   }
   useEffect(() => { load(); const t = setInterval(load, 5_000); return () => clearInterval(t); /* eslint-disable-next-line */ }, [cluster.id]);
