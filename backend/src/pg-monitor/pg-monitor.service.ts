@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ForbiddenException,
   Inject,
   Injectable,
@@ -572,17 +573,39 @@ export class PgMonitorService {
     } finally { await client.end(); }
   }
 
-  async explain(clusterId: string, query: string, analyze = false) {
+  async explain(clusterId: string, query: string, analyze = false, params?: any[]) {
     const c = await this.cluster(clusterId);
     if (!/^\s*(SELECT|WITH)\b/i.test(query)) {
       throw new ForbiddenException('EXPLAIN só permitido em SELECT/WITH');
+    }
+    // O texto vindo de "top queries" é normalizado pelo pg_stat_statements:
+    // valores literais (números, strings, etc.) são substituídos por
+    // marcadores de posição $1, $2, ... Para conseguir gerar o plano mesmo
+    // assim, deixamos o cliente informar os valores reais — e usamos o
+    // próprio protocolo de bind do Postgres pra "preencher" esses $N, em vez
+    // de fazer substituição de texto (evita problemas de escaping/injection).
+    const placeholderNums = Array.from(query.matchAll(/\$(\d+)/g)).map((m) => parseInt(m[1], 10));
+    const maxParam = placeholderNums.length ? Math.max(...placeholderNums) : 0;
+    if (maxParam > 0 && (!params || params.length < maxParam)) {
+      throw new BadRequestException(
+        `Esta query foi normalizada pelo pg_stat_statements: os valores literais foram substituídos por ${maxParam} parâmetro(s) (${Array.from(new Set(placeholderNums)).sort((a, b) => a - b).map((n) => `$${n}`).join(', ')}). Informe os valores reais para gerar o EXPLAIN.`,
+      );
     }
     const client = await this.getClient(c);
     try {
       const sql = analyze
         ? `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) ${query}`
         : `EXPLAIN (FORMAT JSON) ${query}`;
-      const r = await client.query<any>(sql);
+      // Sem placeholders: chamamos via queryRaw(), que nunca passa um array
+      // de params pro driver (nem vazio). Passar `[]` explicitamente força o
+      // protocolo "extended query" (Parse/Bind) e qualquer "$1" literal no
+      // SQL (ex. dentro de uma string ou subquery) seria interpretado como
+      // parâmetro a bindar, quebrando com "there is no parameter $1" mesmo
+      // sem placeholders reais. Com placeholders reais, usamos query() com
+      // os valores informados — aí o bind é exatamente o que queremos.
+      const r = maxParam > 0
+        ? await client.query<any>(sql, params!.slice(0, maxParam))
+        : await client.queryRaw<any>(sql);
       // pg retorna em coluna "QUERY PLAN"
       return r[0]?.['QUERY PLAN'] ?? r;
     } finally { await client.end(); }

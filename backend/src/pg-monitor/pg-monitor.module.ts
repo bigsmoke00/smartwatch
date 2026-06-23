@@ -36,6 +36,8 @@ class UpdateClusterDto {
 class ExplainDto {
   @IsString() query!: string;
   @IsOptional() analyze?: boolean;
+  /** Valores reais pros placeholders $1, $2, ... quando a query vem normalizada do pg_stat_statements. */
+  @IsOptional() params?: any[];
 }
 
 @ApiTags('pg-monitor')
@@ -124,7 +126,7 @@ class PgMonitorController {
   @Audit('pg.explain')
   @Post('clusters/:id/explain')
   explain(@Param('id') id: string, @Body() dto: ExplainDto) {
-    return this.svc.explain(id, dto.query, !!dto.analyze);
+    return this.svc.explain(id, dto.query, !!dto.analyze, dto.params);
   }
 }
 

@@ -320,24 +320,53 @@ function LocksTab({ cluster }: { cluster: Cluster }) {
   );
 }
 
+// Conta quantos placeholders $1, $2, ... existem no texto normalizado pelo
+// pg_stat_statements (retorna o maior número encontrado, ou 0 se não tiver).
+function placeholderCount(text: string): number {
+  const nums = Array.from(text.matchAll(/\$(\d+)/g)).map((m) => parseInt(m[1], 10));
+  return nums.length ? Math.max(...nums) : 0;
+}
+
+// Substitui $1, $2, ... pelos valores informados, só pra exibição (preview)
+// — não é isso que é enviado pro backend, que faz o bind de verdade.
+function previewWithValues(text: string, values: string[]): string {
+  return text.replace(/\$(\d+)/g, (m, n) => {
+    const v = values[parseInt(n, 10) - 1];
+    return v !== undefined && v !== '' ? v : m;
+  });
+}
+
 function TopTab({ cluster }: { cluster: Cluster }) {
   const [items, setItems] = useState<any[]>([]);
   const [features, setFeatures] = useState<any>(null);
-  const [explainOf, setExplainOf] = useState<{ q: string; plan: any } | null>(null);
+  // Painel da query selecionada: texto completo, inputs de parâmetro,
+  // modo de visualização (com ou sem placeholders) e o plano do EXPLAIN.
+  const [panel, setPanel] = useState<{
+    q: any; values: string[]; showValues: boolean; plan: any | null;
+  } | null>(null);
   useEffect(() => {
     apiFetch(`/pg/clusters/${cluster.id}/top-queries`).then((r) => setItems(safeArray<any>(r))).catch(() => setItems([]));
     apiFetch(`/pg/clusters/${cluster.id}/features`).then(setFeatures).catch(() => setFeatures(null));
   }, [cluster.id]);
 
-  async function runExplain(q: string) {
-    setExplainOf({ q, plan: 'loading…' });
+  function openQuery(q: any) {
+    const n = placeholderCount(q.query_text);
+    setPanel({ q, values: Array(n).fill(''), showValues: false, plan: null });
+  }
+
+  async function runExplain(analyze: boolean) {
+    if (!panel) return;
+    const n = placeholderCount(panel.q.query_text);
+    setPanel({ ...panel, plan: 'loading…' });
     try {
+      const body: any = { query: panel.q.query_text, analyze };
+      if (n > 0) body.params = panel.values;
       const plan = await apiFetch(`/pg/clusters/${cluster.id}/explain`, {
-        method: 'POST', body: JSON.stringify({ query: q, analyze: false }),
+        method: 'POST', body: JSON.stringify(body),
       });
-      setExplainOf({ q, plan });
+      setPanel((p) => (p ? { ...p, plan } : p));
     } catch (e: any) {
-      setExplainOf({ q, plan: { error: e?.payload?.message || e.message } });
+      setPanel((p) => (p ? { ...p, plan: { error: e?.payload?.message || e.message } } : p));
     }
   }
 
@@ -377,12 +406,18 @@ CREATE EXTENSION pg_stat_statements;`}
           <tbody>
             {safeArray<any>(items).map((q) => (
               <tr key={q.queryid} className="border-t border-border align-top">
-                <td className="px-3 py-1.5 font-mono text-xs max-w-2xl truncate">{q.query_text}</td>
+                <td
+                  className="px-3 py-1.5 font-mono text-xs max-w-2xl truncate cursor-pointer hover:text-accent"
+                  title="Clique para ver a query completa"
+                  onClick={() => openQuery(q)}
+                >
+                  {q.query_text}
+                </td>
                 <td className="px-3 py-1.5 text-right tabular-nums">{Number(q.calls).toLocaleString()}</td>
                 <td className="px-3 py-1.5 text-right tabular-nums">{Number(q.total_ms).toFixed(0)}</td>
                 <td className="px-3 py-1.5 text-right tabular-nums">{Number(q.mean_ms).toFixed(2)}</td>
                 <td className="px-3 py-1.5 text-right">
-                  <button onClick={() => runExplain(q.query_text)} className="text-accent hover:underline text-xs">EXPLAIN</button>
+                  <button onClick={() => openQuery(q)} className="text-accent hover:underline text-xs">Ver / EXPLAIN</button>
                 </td>
               </tr>
             ))}
@@ -395,17 +430,74 @@ CREATE EXTENSION pg_stat_statements;`}
         </table>
       </Card>
 
-      {explainOf && (
-        <Card className="p-3 mt-3">
-          <div className="flex justify-between mb-2">
-            <h2 className="text-sm font-medium">EXPLAIN</h2>
-            <button onClick={() => setExplainOf(null)} className="text-xs text-muted">fechar</button>
-          </div>
-          <pre className="text-xs bg-bg p-2 rounded border border-border max-h-96 overflow-auto whitespace-pre-wrap">
-{typeof explainOf.plan === 'string' ? explainOf.plan : JSON.stringify(explainOf.plan, null, 2)}
-          </pre>
-        </Card>
-      )}
+      {panel && (() => {
+        const n = placeholderCount(panel.q.query_text);
+        const displayText = panel.showValues
+          ? previewWithValues(panel.q.query_text, panel.values)
+          : panel.q.query_text;
+        return (
+          <Card className="p-3 mt-3">
+            <div className="flex justify-between mb-2">
+              <h2 className="text-sm font-medium">Query</h2>
+              <button onClick={() => setPanel(null)} className="text-xs text-muted">fechar</button>
+            </div>
+
+            <div className="flex items-center justify-between mb-1">
+              <span className="text-xs text-muted">
+                {n > 0
+                  ? `Texto normalizado pelo pg_stat_statements — ${n} parâmetro(s) (${Array.from({ length: n }, (_, i) => `$${i + 1}`).join(', ')})`
+                  : 'Sem parâmetros normalizados'}
+              </span>
+              {n > 0 && (
+                <button
+                  onClick={() => setPanel({ ...panel, showValues: !panel.showValues })}
+                  className="text-accent hover:underline text-xs"
+                >
+                  {panel.showValues ? 'ver com $1, $2...' : 'ver com valores preenchidos'}
+                </button>
+              )}
+            </div>
+            <pre className="text-xs bg-bg p-2 rounded border border-border max-h-60 overflow-auto whitespace-pre-wrap">
+{displayText}
+            </pre>
+
+            {n > 0 && (
+              <div className="mt-2 grid grid-cols-2 sm:grid-cols-3 gap-2">
+                {Array.from({ length: n }, (_, i) => (
+                  <label key={i} className="text-xs">
+                    <span className="text-muted">${i + 1}</span>
+                    <input
+                      value={panel.values[i] ?? ''}
+                      onChange={(e) => {
+                        const values = [...panel.values];
+                        values[i] = e.target.value;
+                        setPanel({ ...panel, values });
+                      }}
+                      placeholder={`valor de $${i + 1}`}
+                      className="w-full mt-0.5 px-2 py-1 rounded border border-border bg-bg text-xs"
+                    />
+                  </label>
+                ))}
+              </div>
+            )}
+
+            <div className="mt-3 flex gap-2">
+              <button onClick={() => runExplain(false)} className="text-xs px-3 py-1.5 rounded bg-accent text-white">
+                EXPLAIN
+              </button>
+              <button onClick={() => runExplain(true)} className="text-xs px-3 py-1.5 rounded border border-border">
+                EXPLAIN ANALYZE
+              </button>
+            </div>
+
+            {panel.plan && (
+              <pre className="text-xs bg-bg p-2 rounded border border-border max-h-96 overflow-auto whitespace-pre-wrap mt-3">
+{typeof panel.plan === 'string' ? panel.plan : JSON.stringify(panel.plan, null, 2)}
+              </pre>
+            )}
+          </Card>
+        );
+      })()}
     </>
   );
 }

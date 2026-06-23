@@ -61,4 +61,18 @@ export class MonitoredPgClient {
     const r = await c.query(sql, params);
     return r.rows as T[];
   }
+
+  /**
+   * Igual a query(), mas nunca passa um array de params pro driver — nem
+   * vazio. Com `pg`, passar um segundo argumento (mesmo `[]`) força o
+   * protocolo "extended query" (Parse/Bind), que tenta resolver qualquer
+   * "$1", "$2" etc. literal no texto da query como parâmetro a ser bindado.
+   * Útil para EXPLAIN de texto vindo de fora (ex.: pg_stat_statements) onde
+   * não temos — e não queremos forçar — esse binding.
+   */
+  async queryRaw<T = any>(sql: string): Promise<T[]> {
+    const c = await this.connect();
+    const r = await c.query(sql);
+    return r.rows as T[];
+  }
 }
