@@ -8,7 +8,7 @@ import { Input } from '@/components/ui/Input';
 import { Badge } from '@/components/ui/Badge';
 import { apiFetch } from '@/lib/api';
 import { safeArray } from '@/lib/utils';
-import { Mail, Save, ShieldCheck, Trash2, X, Lock, Unlock } from 'lucide-react';
+import { Mail, Save, ShieldCheck, Trash2, X, Lock, Unlock, KeyRound } from 'lucide-react';
 
 interface AssignedRole {
   id: string;
@@ -107,6 +107,31 @@ export default function UsersPage() {
       );
     } catch (err: any) {
       setError(err?.payload?.message || 'Erro ao reenviar convite');
+    }
+  }
+
+  async function sendPasswordReset(user: UserRow) {
+    if (
+      !confirm(
+        `Enviar email de redefinição de senha para ${user.email}? A senha atual dele(a) deixa de funcionar até definir uma nova pelo link.`,
+      )
+    )
+      return;
+    setError(null);
+    setInfo(null);
+    try {
+      const r = await apiFetch<{ ok: boolean }>(
+        `/users/${user.id}/send-password-reset`,
+        { method: 'POST' },
+      );
+      setInfo(
+        r.ok
+          ? `Email de redefinição enviado para ${user.email}.`
+          : `Falha ao enviar email de redefinição para ${user.email}.`,
+      );
+      await load();
+    } catch (err: any) {
+      setError(err?.payload?.message || 'Erro ao enviar redefinição de senha');
     }
   }
 
@@ -334,13 +359,22 @@ export default function UsersPage() {
                       {user.mfaRequired ? <Unlock size={13} /> : <Lock size={13} />}
                       {user.mfaRequired ? 'Tornar 2FA opcional' : 'Exigir 2FA'}
                     </button>
-                    {user.mustChangePassword && (
+                    {user.mustChangePassword ? (
                       <Button
                         type="button"
                         variant="secondary"
                         onClick={() => resendInvite(user)}
                       >
                         <Mail size={14} /> Reenviar convite
+                      </Button>
+                    ) : (
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        onClick={() => sendPasswordReset(user)}
+                        title="Envia um link por email para o colaborador definir uma nova senha"
+                      >
+                        <KeyRound size={14} /> Resetar senha
                       </Button>
                     )}
                     <Button

@@ -105,6 +105,26 @@ export class UsersController {
     return this.mail.sendPasswordSetupEmail(email, link);
   }
 
+  /**
+   * Envia um link de redefinição de senha pra um usuário que já está ativo
+   * (já passou pelo convite inicial). A senha atual fica inválida até ele
+   * definir uma nova pelo link — mesmo fluxo de /set-password, mas com o
+   * template de "redefinição" em vez de "primeiro acesso".
+   */
+  @RequirePermission('users:write')
+  @Audit('user.password_reset_email')
+  @Post(':id/send-password-reset')
+  async sendPasswordReset(@Param('id') id: string) {
+    const user = await this.users.findById(id);
+    if (!user) return { ok: false, message: 'Usuário não encontrado' };
+    await this.users.requirePasswordReset(id);
+    const token = await this.users.signSetPasswordToken(user.id, user.email);
+    const base = process.env.FRONTEND_URL ?? 'http://localhost:3000';
+    const link = `${base.replace(/\/$/, '')}/set-password?token=${token}`;
+    const sent = await this.mail.sendPasswordResetEmail(user.email, link);
+    return { ok: sent };
+  }
+
   @RequirePermission('users:write')
   @Audit('user.role_change')
   @Patch(':id/role')

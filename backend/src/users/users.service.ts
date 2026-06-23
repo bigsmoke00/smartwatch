@@ -223,6 +223,20 @@ export class UsersService {
     );
   }
 
+  /**
+   * Força o usuário (já ativo, com senha já definida) a redefinir a senha
+   * no próximo acesso — usado quando um admin dispara o reenvio do email de
+   * redefinição pra um colaborador que esqueceu/perdeu a senha. Diferente do
+   * convite inicial: aqui o usuário já existe e já tem permissões/roles, só
+   * a senha fica inválida até ele definir uma nova pelo link.
+   */
+  async requirePasswordReset(id: string) {
+    await this.pool.query(
+      `UPDATE users SET must_change_password=true WHERE id=$1`,
+      [id],
+    );
+  }
+
   async remove(id: string) {
     await this.pool.query(`DELETE FROM users WHERE id=$1`, [id]);
     return { ok: true };
