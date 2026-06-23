@@ -139,13 +139,26 @@ export class ControlGateway implements OnGatewayConnection, OnGatewayDisconnect 
   // O TerminalGateway se registra aqui pra receber output do agent.
   private termOutputHandler?: (sessionId: string, b64: string) => void;
   private termClosedHandler?: (sessionId: string, reason: string) => void;
+  private termCommandHandler?: (sessionId: string, command: string, ts?: string) => void;
 
   registerTerminalForwarders(
     onOutput: (sessionId: string, b64: string) => void,
     onClosed: (sessionId: string, reason: string) => void,
+    onCommand?: (sessionId: string, command: string, ts?: string) => void,
   ) {
     this.termOutputHandler = onOutput;
     this.termClosedHandler = onClosed;
+    this.termCommandHandler = onCommand;
+  }
+
+  // Comando capturado pelo agent via HISTFILE (ver agent/src/host-shell.ts) —
+  // separado do stream bruto de output pra alimentar o log "fácil de ler".
+  @SubscribeMessage('term:command')
+  onTermCommand(
+    @ConnectedSocket() _client: Socket,
+    @MessageBody() msg: { sessionId: string; command: string; ts?: string },
+  ) {
+    this.termCommandHandler?.(msg.sessionId, msg.command, msg.ts);
   }
 
   @SubscribeMessage('term:output')

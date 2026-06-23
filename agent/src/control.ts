@@ -170,11 +170,14 @@ async function dispatch(docker: Docker, op: string, args: any, reqId: string): P
       // ========= MODO HOST =========
       if (args.target === 'host' || (!args.containerId && args.target !== 'container')) {
         const sh = await spawnHostShell({
+          sessionId,
           shell: args.shell, cwd: args.cwd,
           cols: args.cols, rows: args.rows,
           readonly: !!args.readonly, sudo: !!args.sudo,
+          targetUser: args.targetUser,
         });
         sh.onData((s) => socket?.emit('term:output', { sessionId, data: Buffer.from(s, 'utf-8').toString('base64') }));
+        sh.onCommand((cmd, ts) => socket?.emit('term:command', { sessionId, command: cmd, ts }));
         sh.onExit((code) => {
           socket?.emit('term:closed', { sessionId, reason: `exit ${code}` });
           activeTermStreams.delete(sessionId);

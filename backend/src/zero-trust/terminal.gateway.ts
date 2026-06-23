@@ -20,6 +20,13 @@ import { ControlGateway } from '../docker-manager/control.gateway';
  * Cliente conecta em /ws/terminal com JWT no auth + sessionId aprovado.
  * Backend valida sessão, abre stream no agent (via ControlGateway), e
  * faz proxy bidirecional. Cada chunk de I/O é gravado em terminal_session_events.
+ *
+ * IMPORTANTE (correção de segurança): target/modo/sudo/usuário do SO NUNCA
+ * são lidos do payload de auth do cliente — vêm sempre da linha já
+ * persistida em `terminal_sessions` (decidida em requestSession()/approve(),
+ * com checagem contra `user_server_logins`). O cliente só manda token +
+ * sessionId; tudo o resto seria uma forma trivial de escalar privilégio
+ * (bastava abrir o DevTools e mandar sudo:true).
  */
 @WebSocketGateway({
   cors: { origin: process.env.CORS_ORIGIN?.split(',') ?? '*' },
@@ -36,36 +43,53 @@ export class TerminalGateway implements OnGatewayConnection, OnGatewayDisconnect
     private readonly jwt: JwtService,
     private readonly ctrl: ControlGateway,
     @Inject(PG_POOL) private readonly pool: Pool,
-  ) {
-    this.bindAgentOutputForwarding();
-  }
-
-  /** Recebe `term:output` do agent (via ControlGateway) e repassa para o uiSocket. */
-  private bindAgentOutputForwarding() {
-    // Hack: ControlGateway expõe acesso ao Server interno através do `server`
-    // mas não temos handler direto p/ "term:output". Alternativa: o agent
-    // emite no mesmo namespace control, então registramos via namespace adapter.
-    // Para simplicidade, iremos plugar via ControlGateway no lifecycle do invoke.
-    // (Ver onAgentTermOutput chamado pelo ControlGateway abaixo.)
-  }
+  ) {}
 
   /** API: backend chama para ouvir output do agent. */
   async forwardOutput(sessionId: string, base64Data: string) {
     const ui = this.uiSockets.get(sessionId);
     if (ui?.connected) ui.emit('output', base64Data);
-    // grava no histórico
     await this.pool.query(
       `INSERT INTO terminal_session_events(session_id, direction, data) VALUES ($1,'output',$2)`,
       [sessionId, base64Data],
     ).catch(() => {});
   }
 
+  /** Comando capturado pelo agent via HISTFILE — log legível, separado do dump bruto. */
+  async recordCommand(sessionId: string, command: string, ts?: string) {
+    const trimmed = command.trim();
+    if (!trimmed) return;
+    await this.pool.query(
+      `INSERT INTO terminal_session_commands(session_id, command, ts) VALUES ($1,$2, COALESCE($3::timestamptz, clock_timestamp()))`,
+      [sessionId, trimmed, ts ?? null],
+    ).catch((e) => this.logger.warn(`recordCommand ${sessionId}: ${e.message}`));
+    await this.touchActivity(sessionId);
+  }
+
   async forwardClosed(sessionId: string, reason: string) {
     const ui = this.uiSockets.get(sessionId);
     if (ui?.connected) ui.emit('closed', { reason });
+    this.uiSockets.delete(sessionId);
     await this.pool.query(
-      `UPDATE terminal_sessions SET status='closed', closed_at=now()
+      `UPDATE terminal_sessions SET status='closed', closed_at=now(), closed_reason=COALESCE(closed_reason,$2)
        WHERE id=$1 AND status IN ('active','approved')`,
+      [sessionId, reason],
+    ).catch(() => {});
+  }
+
+  /** Chamado pelo ZeroTrustService (TTL/idle cron, ou fechamento manual). */
+  forceClose(sessionId: string, reason: string) {
+    const ui = this.uiSockets.get(sessionId);
+    if (ui?.connected) {
+      ui.emit('closed', { reason });
+      ui.disconnect(true);
+    }
+    this.uiSockets.delete(sessionId);
+  }
+
+  private async touchActivity(sessionId: string) {
+    await this.pool.query(
+      `UPDATE terminal_sessions SET last_activity_at=now() WHERE id=$1`,
       [sessionId],
     ).catch(() => {});
   }
@@ -79,7 +103,9 @@ export class TerminalGateway implements OnGatewayConnection, OnGatewayDisconnect
         secret: process.env.JWT_SECRET ?? 'dev-secret',
       });
 
-      // Valida sessão: aprovada, não expirada, do próprio user
+      // Valida sessão: aprovada, não expirada, do próprio user. Tudo que
+      // importa pra decidir COMO o shell roda vem dessa linha — nunca do
+      // payload mandado pelo cliente no handshake.
       const r = await this.pool.query(
         `SELECT * FROM terminal_sessions
          WHERE id=$1 AND requested_by=$2 AND status IN ('approved','active')
@@ -93,22 +119,12 @@ export class TerminalGateway implements OnGatewayConnection, OnGatewayDisconnect
       (client.data as any).sessionId = sessionId;
       this.uiSockets.set(sessionId, client);
 
-      // Marca como ativa
       await this.pool.query(
-        `UPDATE terminal_sessions SET status='active' WHERE id=$1`,
+        `UPDATE terminal_sessions SET status='active', last_activity_at=now() WHERE id=$1`,
         [sessionId],
       );
 
-      // Pede ao agent que abra o exec. O ControlGateway escutará as
-      // mensagens term:output emitidas pelo agent (registradas no construtor).
-      // Para o agent saber em qual container, sess.metadata pode trazer
-      // containerId; para simplificar, esperamos que UI já ofereça a escolha.
-      const containerId = client.handshake.auth?.containerId as string | undefined;
-      const target = (client.handshake.auth?.target as string) ?? (containerId ? 'container' : 'host');
-      const readonly = client.handshake.auth?.readonly === true || client.handshake.auth?.readonly === 'true';
-      const sudo = client.handshake.auth?.sudo === true || client.handshake.auth?.sudo === 'true';
-
-      if (target === 'container' && !containerId) {
+      if (sess.target === 'container' && !sess.container_id) {
         client.emit('error', { message: 'containerId required for target=container' });
         client.disconnect(true);
         return;
@@ -116,12 +132,21 @@ export class TerminalGateway implements OnGatewayConnection, OnGatewayDisconnect
 
       try {
         await this.ctrl.invoke(sess.server_id, 'term.start', {
-          sessionId, target, containerId,
-          command: sess.command, shell: sess.command,
-          readonly, sudo,
+          sessionId,
+          target: sess.target,
+          containerId: sess.container_id,
+          command: sess.command,
+          shell: sess.command,
+          readonly: sess.mode === 'readonly',
+          sudo: !!sess.sudo_granted,
+          targetUser: sess.target_user,
           cols: 100, rows: 30,
         }, { timeoutMs: 10_000 });
-        client.emit('ready', { sessionId, target });
+        client.emit('ready', {
+          sessionId, target: sess.target,
+          targetUser: sess.target_user, mode: sess.mode,
+          sudoGranted: sess.sudo_granted, expiresAt: sess.expires_at,
+        });
       } catch (e: any) {
         client.emit('error', { message: e.message });
         client.disconnect(true);
@@ -136,14 +161,13 @@ export class TerminalGateway implements OnGatewayConnection, OnGatewayDisconnect
     const sessionId = (client.data as any).sessionId;
     if (sessionId) {
       this.uiSockets.delete(sessionId);
-      // sinaliza ao agent
       const r = await this.pool.query(`SELECT server_id FROM terminal_sessions WHERE id=$1`, [sessionId]);
       const serverId = r.rows[0]?.server_id;
       if (serverId) {
         this.ctrl.invoke(serverId, 'term.close', { sessionId }).catch(() => {});
       }
       await this.pool.query(
-        `UPDATE terminal_sessions SET status='closed', closed_at=now()
+        `UPDATE terminal_sessions SET status='closed', closed_at=now(), closed_reason=COALESCE(closed_reason,'desconectado')
          WHERE id=$1 AND status IN ('active','approved')`,
         [sessionId],
       ).catch(() => {});
@@ -167,11 +191,11 @@ export class TerminalGateway implements OnGatewayConnection, OnGatewayDisconnect
     const r = await this.pool.query(`SELECT server_id FROM terminal_sessions WHERE id=$1`, [sessionId]);
     const serverId = r.rows[0]?.server_id;
     if (!serverId) return;
-    // Grava input
     await this.pool.query(
       `INSERT INTO terminal_session_events(session_id, direction, data) VALUES ($1,'input',$2)`,
       [sessionId, data],
     ).catch(() => {});
+    await this.touchActivity(sessionId);
     this.ctrl.invoke(serverId, 'term.input', { sessionId, data }).catch(() => {});
   }
 }
