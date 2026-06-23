@@ -548,8 +548,14 @@ export class PgMonitorService {
         return client.query(`
           SELECT pid, datname, usename, state, wait_event, wait_event_type,
                  client_addr::text AS client_addr, application_name,
+                 -- "duração": tempo desde que a query/estado atual começou
                  extract(epoch from now() - query_start)::int AS dur_sec,
                  now() - query_start AS dur,
+                 -- "conectado há": idade da conexão em si (backend_start),
+                 -- diferente de dur_sec — uma sessão idle pode ter sido
+                 -- aberta há horas e ter rodado a última query há segundos,
+                 -- ou (como num connection storm) ter sido aberta agora mesmo.
+                 extract(epoch from now() - backend_start)::int AS conn_age_sec,
                  left(query, 4000) AS query
           FROM pg_stat_activity
           WHERE pid <> pg_backend_pid() AND query IS NOT NULL

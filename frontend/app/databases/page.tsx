@@ -245,7 +245,8 @@ function ActiveTab({ cluster }: { cluster: Cluster }) {
             <th className="text-left px-3 py-2">Estado</th>
             <th className="text-left px-3 py-2">Wait</th>
             <th className="text-left px-3 py-2">Cliente</th>
-            <th className="text-right px-3 py-2">Duração</th>
+            <th className="text-right px-3 py-2" title="Há quanto tempo a query/estado atual começou">Duração</th>
+            <th className="text-right px-3 py-2" title="Idade da conexão (desde que o backend foi aberto), não da query atual">Conectado há</th>
             <th className="text-left px-3 py-2">Query</th>
             <th />
           </tr>
@@ -263,7 +264,10 @@ function ActiveTab({ cluster }: { cluster: Cluster }) {
               </td>
               <td className="px-3 py-1.5 text-xs text-muted">{r.client_addr ?? '—'}</td>
               <td className="px-3 py-1.5 text-right tabular-nums text-xs">
-                {r.dur_sec != null ? `${r.dur_sec}s` : '—'}
+                {fmtDur(r.dur_sec)}
+              </td>
+              <td className="px-3 py-1.5 text-right tabular-nums text-xs text-muted">
+                {fmtDur(r.conn_age_sec)}
               </td>
               <td className="px-3 py-1.5 font-mono text-xs max-w-md truncate">{r.query}</td>
               <td className="px-3 py-1.5 text-right">
@@ -276,7 +280,7 @@ function ActiveTab({ cluster }: { cluster: Cluster }) {
             </tr>
           ))}
           {items.length === 0 && !loading && (
-            <tr><td colSpan={8} className="py-3 px-3 text-center text-muted text-sm">Nenhuma query ativa.</td></tr>
+            <tr><td colSpan={9} className="py-3 px-3 text-center text-muted text-sm">Nenhuma query ativa.</td></tr>
           )}
         </tbody>
       </table>
@@ -818,4 +822,15 @@ function fmtBytes(b?: number) {
   const u = ['B','KB','MB','GB','TB']; let v = Number(b); let i = 0;
   while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
   return `${v.toFixed(1)}${u[i]}`;
+}
+function fmtDur(sec?: number) {
+  if (sec == null) return '—';
+  const s = Math.max(0, Math.floor(sec));
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m${s % 60}s`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h${m % 60}m`;
+  const d = Math.floor(h / 24);
+  return `${d}d${h % 24}h`;
 }
