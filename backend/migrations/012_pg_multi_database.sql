@@ -15,6 +15,19 @@
 ALTER TABLE pg_top_queries ADD COLUMN IF NOT EXISTS datname text;
 ALTER TABLE pg_table_health ADD COLUMN IF NOT EXISTS datname text;
 
+-- Backfill: linhas coletadas antes desta migration não têm datname (era
+-- sempre a única database configurada no cluster). Sem isso, ADD PRIMARY
+-- KEY falha com "column datname ... contains null values" porque colunas
+-- de PK são implicitamente NOT NULL.
+UPDATE pg_top_queries t SET datname = c.database
+  FROM pg_clusters c WHERE c.id = t.cluster_id AND t.datname IS NULL;
+UPDATE pg_table_health t SET datname = c.database
+  FROM pg_clusters c WHERE c.id = t.cluster_id AND t.datname IS NULL;
+-- Fallback final pra linhas cujo cluster_id já não existe mais (cluster
+-- deletado de verdade, sem soft-delete, em algum momento do passado).
+UPDATE pg_top_queries SET datname = 'unknown' WHERE datname IS NULL;
+UPDATE pg_table_health SET datname = 'unknown' WHERE datname IS NULL;
+
 -- Troca a PK pra incluir datname (evita colisão entre bancos diferentes
 -- com o mesmo queryid ou schema.tabela no mesmo instante de coleta).
 ALTER TABLE pg_top_queries DROP CONSTRAINT IF EXISTS pg_top_queries_pkey;
