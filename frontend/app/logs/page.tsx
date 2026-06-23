@@ -103,7 +103,19 @@ function LogsPageInner() {
       .catch(() => setContainerOptions([]));
   }, [serverId]);
 
+  // Evita resposta fora de ordem sobrescrever o estado com dados velhos:
+  // cada chamada a search() pega um número de sequência; se quando a
+  // resposta chega já existe uma busca mais nova em andamento (seq mudou),
+  // descarta o resultado em vez de aplicar no estado. Sem isso, alternar
+  // rapidamente entre Host/Containers/Tudo disparava múltiplos fetches e o
+  // que demorasse mais (ex.: de uma janela de tempo maior) podia "ganhar"
+  // a corrida e sobrescrever um resultado mais recente — a tela parecia
+  // travada, mostrando linhas de um filtro antigo com os contadores de um
+  // filtro novo.
+  const searchSeqRef = useRef(0);
+
   async function search() {
+    const seq = ++searchSeqRef.current;
     setLoading(true);
     const qp = new URLSearchParams();
     if (serverId) qp.set('serverId', serverId);
@@ -124,6 +136,7 @@ function LogsPageInner() {
       }>(
         `/logs?${qp.toString()}`,
       );
+      if (seq !== searchSeqRef.current) return; // resposta velha, ignora
       let arr = safeArray<LogHit>(data?.hits);
       if (source === 'host') {
         arr = arr.filter((h) => (h.containerName ?? '').startsWith('host:'));
@@ -135,11 +148,12 @@ function LogsPageInner() {
       setTotal(data?.total ?? 0);
       setOccurrences(data?.occurrences ?? data?.total ?? 0);
     } catch {
+      if (seq !== searchSeqRef.current) return;
       setHits([]);
       setTotal(0);
       setOccurrences(0);
     } finally {
-      setLoading(false);
+      if (seq === searchSeqRef.current) setLoading(false);
     }
   }
 

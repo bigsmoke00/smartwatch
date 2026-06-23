@@ -82,7 +82,17 @@ export async function spawnHostShell(opts: HostSessionOpts) {
   const hostShell = existsSync(`${config.hostRoot}/bin/bash`) ? '/bin/bash' : '/bin/sh';
   const requestedShell = opts.shell && opts.shell !== '/bin/sh' ? opts.shell : hostShell;
 
-  const histFile = `/tmp/.logwatch_hist_${opts.sessionId.replace(/[^a-zA-Z0-9-]/g, '')}`;
+  // Caminho que o PRÓPRIO shell vai usar via HISTFILE — sempre relativo à
+  // raiz que ELE vê. Quando há chroot (hasHostRoot), o shell roda com root
+  // = config.hostRoot, então "/tmp/..." pra ele é "${config.hostRoot}/tmp/..."
+  // no disco real. O agent (que não está chrootado) precisa ler/escrever
+  // esse MESMO arquivo usando o caminho completo (com o prefixo) — senão
+  // fica lendo um /tmp/... que é o /tmp do próprio container do agent, um
+  // arquivo totalmente diferente, e a captura de comando nunca vê nada
+  // (era exatamente esse o bug: zero trust e logs funcionam pq não dependem
+  // desse arquivo, só a captura de comando/transcript dependia).
+  const histFileInShell = `/tmp/.logwatch_hist_${opts.sessionId.replace(/[^a-zA-Z0-9-]/g, '')}`;
+  const histFile = hasHostRoot ? `${config.hostRoot}${histFileInShell}` : histFileInShell;
   await writeFile(histFile, '').catch(() => {});
 
   const targetUser = opts.targetUser && shellQuoteUser(opts.targetUser) ? opts.targetUser : undefined;
@@ -97,7 +107,7 @@ export async function spawnHostShell(opts: HostSessionOpts) {
     // Comandos de ambiente vão dentro da string -c (são parseados pelo
     // shell da pessoa via `su -c`), não pelo env do node-pty — assim
     // sobrevivem mesmo que `su -` zere o ambiente herdado.
-    const envPrefix = `HISTFILE=${histFile} HISTSIZE=10000 HISTFILESIZE=10000 ` +
+    const envPrefix = `HISTFILE=${histFileInShell} HISTSIZE=10000 HISTFILESIZE=10000 ` +
       `HISTTIMEFORMAT='%s ' HISTCONTROL= PROMPT_COMMAND='history -a'`;
     const innerCmd = opts.sudo
       ? `${envPrefix} exec sudo -E -i`
