@@ -12,11 +12,11 @@ import {
   ResponsiveContainer, AreaChart, Area, LineChart, Line,
   XAxis, YAxis, Tooltip, CartesianGrid,
 } from 'recharts';
-import { Skull, RefreshCw, Plus, Trash2 } from 'lucide-react';
+import { Skull, RefreshCw, Plus, Trash2, Pencil } from 'lucide-react';
 
 interface Cluster {
   id: string; name: string; description?: string;
-  hosts: string; database: string; pollSeconds: number;
+  hosts: string; database: string; pollSeconds: number; enabled: boolean;
 }
 type Tab = 'overview' | 'active' | 'locks' | 'top' | 'health' | 'history';
 
@@ -25,13 +25,35 @@ export default function DatabasesPage() {
   const [active, setActive] = useState<Cluster | null>(null);
   const [tab, setTab] = useState<Tab>('overview');
   const [showNew, setShowNew] = useState(false);
+  const [editing, setEditing] = useState<Cluster | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   async function load() {
-    const arr = safeArray<Cluster>(await apiFetch('/pg/clusters').catch(() => []));
-    setClusters(arr);
-    if (arr[0] && !active) setActive(arr[0]);
+    try {
+      const arr = safeArray<Cluster>(await apiFetch('/pg/clusters'));
+      setClusters(arr);
+      setError(null);
+      if (arr[0] && !active) setActive(arr[0]);
+      if (active && !arr.find((c) => c.id === active.id)) setActive(arr[0] ?? null);
+    } catch (err: any) {
+      // Antes isso era silenciosamente engolido (.catch(() => [])) e a tela
+      // só mostrava "Nenhum cluster", indistinguível de um 403/500 real.
+      setClusters([]);
+      setError(err?.payload?.message || 'Erro ao carregar clusters PostgreSQL');
+    }
   }
   useEffect(() => { load(); }, []);
+
+  async function removeCluster(c: Cluster) {
+    if (!confirm(`Remover o cluster "${c.name}"? Ele para de ser monitorado.`)) return;
+    try {
+      await apiFetch(`/pg/clusters/${c.id}`, { method: 'DELETE' });
+      if (active?.id === c.id) setActive(null);
+      await load();
+    } catch (err: any) {
+      alert(`Falha ao remover: ${err?.payload?.message || err.message}`);
+    }
+  }
 
   return (
     <AppShell>
@@ -41,25 +63,59 @@ export default function DatabasesPage() {
           <Button onClick={() => setShowNew(!showNew)}><Plus size={14}/> Novo cluster</Button>
         </div>
 
-        {showNew && <NewClusterForm onCreated={() => { setShowNew(false); load(); }} />}
+        {error && (
+          <Card className="p-3 border border-danger/40 bg-danger/10 text-sm text-danger">
+            {error}
+          </Card>
+        )}
+
+        {showNew && <NewClusterForm onCreated={() => { setShowNew(false); load(); }} onCancel={() => setShowNew(false)} />}
+        {editing && (
+          <EditClusterForm
+            cluster={editing}
+            onSaved={() => { setEditing(null); load(); }}
+            onCancel={() => setEditing(null)}
+          />
+        )}
 
         <div className="grid grid-cols-12 gap-3">
           <Card className="col-span-3 p-2">
             <div className="text-xs uppercase tracking-wider text-muted px-2 py-1">Clusters</div>
             <div className="space-y-0.5">
               {safeArray<Cluster>(clusters).map((c) => (
-                <button
+                <div
                   key={c.id}
-                  onClick={() => setActive(c)}
-                  className={`w-full text-left px-2 py-1.5 text-sm rounded hover:bg-panel2 ${
+                  className={`group flex items-center gap-1 w-full rounded hover:bg-panel2 ${
                     active?.id === c.id ? 'bg-panel2 text-accent' : ''
                   }`}
                 >
-                  <div className="font-medium">{c.name}</div>
-                  <div className="text-xs text-muted truncate">{c.hosts} · {c.database}</div>
-                </button>
+                  <button
+                    onClick={() => setActive(c)}
+                    className="flex-1 text-left px-2 py-1.5 text-sm min-w-0"
+                  >
+                    <div className="font-medium truncate flex items-center gap-1.5">
+                      {c.name}
+                      {!c.enabled && <span className="text-[10px] px-1 rounded border border-border text-muted">desativado</span>}
+                    </div>
+                    <div className="text-xs text-muted truncate">{c.hosts} · {c.database}</div>
+                  </button>
+                  <button
+                    onClick={() => setEditing(c)}
+                    title="Editar cluster"
+                    className="px-1.5 text-muted hover:text-accent opacity-0 group-hover:opacity-100"
+                  >
+                    <Pencil size={13} />
+                  </button>
+                  <button
+                    onClick={() => removeCluster(c)}
+                    title="Remover cluster"
+                    className="px-1.5 mr-1 text-muted hover:text-danger opacity-0 group-hover:opacity-100"
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                </div>
               ))}
-              {clusters.length === 0 && (
+              {clusters.length === 0 && !error && (
                 <div className="px-2 py-2 text-sm text-muted">Nenhum cluster.</div>
               )}
             </div>
@@ -458,32 +514,186 @@ function HistoryTab({ cluster }: { cluster: Cluster }) {
   );
 }
 
-function NewClusterForm({ onCreated }: { onCreated: () => void }) {
+function NewClusterForm({ onCreated, onCancel }: { onCreated: () => void; onCancel: () => void }) {
   const [name, setName] = useState('');
+  const [description, setDescription] = useState('');
   const [hosts, setHosts] = useState('localhost:5432');
   const [database, setDatabase] = useState('postgres');
-  const [vaultSecret, setVaultSecret] = useState('');
+  const [user, setUser] = useState('postgres');
+  const [password, setPassword] = useState('');
+  const [ssl, setSsl] = useState(false);
+  const [testResult, setTestResult] = useState<any>(null);
+  const [testing, setTesting] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function testConnection() {
+    setTesting(true);
+    setTestResult(null);
+    try {
+      const r = await apiFetch('/pg/validate', {
+        method: 'POST',
+        body: JSON.stringify({ hosts, database, user, password, ssl }),
+      });
+      setTestResult(r);
+    } catch (e: any) {
+      setTestResult({ ok: false, error: e?.payload?.message || e.message });
+    } finally {
+      setTesting(false);
+    }
+  }
 
   async function go() {
-    await apiFetch('/pg/clusters', {
-      method: 'POST',
-      body: JSON.stringify({ name, hosts, database, vaultSecret }),
-    });
-    onCreated();
+    setErr(null);
+    setSaving(true);
+    try {
+      await apiFetch('/pg/clusters', {
+        method: 'POST',
+        body: JSON.stringify({
+          name, description: description || undefined, hosts, database, user, password, ssl,
+        }),
+      });
+      onCreated();
+    } catch (e: any) {
+      setErr(e?.payload?.message || 'Falha ao criar cluster');
+    } finally {
+      setSaving(false);
+    }
   }
+
   return (
     <Card className="p-4 grid md:grid-cols-4 gap-2">
       <div><label className="text-xs text-muted">Nome</label><Input value={name} onChange={(e) => setName(e.target.value)} /></div>
+      <div className="md:col-span-3">
+        <label className="text-xs text-muted">Descrição (opcional)</label>
+        <Input value={description} onChange={(e) => setDescription(e.target.value)} />
+      </div>
       <div className="md:col-span-2">
         <label className="text-xs text-muted">Hosts (CSV: host:port)</label>
         <Input value={hosts} onChange={(e) => setHosts(e.target.value)} placeholder="pg1:5432,pg2:5432,pg3:5432" />
       </div>
       <div><label className="text-xs text-muted">Database</label><Input value={database} onChange={(e) => setDatabase(e.target.value)} /></div>
-      <div className="md:col-span-3">
-        <label className="text-xs text-muted">Nome do segredo no vault (JSON: {`{user, password, ssl?}`})</label>
-        <Input value={vaultSecret} onChange={(e) => setVaultSecret(e.target.value)} placeholder="pg_prod_creds" />
+      <div>
+        <label className="flex items-center gap-2 text-xs text-muted mt-5">
+          <input type="checkbox" checked={ssl} onChange={(e) => setSsl(e.target.checked)} /> SSL
+        </label>
       </div>
-      <div className="md:col-span-4"><Button onClick={go}>Criar</Button></div>
+      <div><label className="text-xs text-muted">Usuário</label><Input value={user} onChange={(e) => setUser(e.target.value)} /></div>
+      <div className="md:col-span-2">
+        <label className="text-xs text-muted">Senha</label>
+        <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
+      </div>
+      <div className="flex items-end">
+        <Button type="button" variant="secondary" onClick={testConnection} disabled={testing || !hosts || !user}>
+          {testing ? 'Testando...' : 'Testar conexão'}
+        </Button>
+      </div>
+      {testResult && (
+        <div className={`md:col-span-4 text-xs ${testResult.ok ? 'text-success' : 'text-danger'}`}>
+          {testResult.ok
+            ? `Conectado — PostgreSQL ${testResult.pgVersion ?? ''}`
+            : `Falha: ${testResult.error ?? 'erro desconhecido'}`}
+        </div>
+      )}
+      {err && <div className="md:col-span-4 text-sm text-danger">{err}</div>}
+      <div className="md:col-span-4 flex gap-2">
+        <Button onClick={go} disabled={saving || !name || !hosts || !user}>
+          {saving ? 'Criando...' : 'Criar'}
+        </Button>
+        <Button type="button" variant="secondary" onClick={onCancel}>Cancelar</Button>
+      </div>
+    </Card>
+  );
+}
+
+function EditClusterForm({
+  cluster, onSaved, onCancel,
+}: { cluster: Cluster; onSaved: () => void; onCancel: () => void }) {
+  const [name, setName] = useState(cluster.name);
+  const [description, setDescription] = useState(cluster.description ?? '');
+  const [hosts, setHosts] = useState(cluster.hosts);
+  const [database, setDatabase] = useState(cluster.database);
+  const [pollSeconds, setPollSeconds] = useState(cluster.pollSeconds);
+  const [enabled, setEnabled] = useState(cluster.enabled);
+  const [user, setUser] = useState('');
+  const [password, setPassword] = useState('');
+  const [ssl, setSsl] = useState(false);
+  const [changeCreds, setChangeCreds] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function save() {
+    setErr(null);
+    setSaving(true);
+    try {
+      const body: any = {
+        name, description: description || undefined, hosts, database, pollSeconds, enabled,
+      };
+      if (changeCreds) {
+        if (user) body.user = user;
+        if (password) body.password = password;
+        body.ssl = ssl;
+      }
+      await apiFetch(`/pg/clusters/${cluster.id}`, { method: 'PATCH', body: JSON.stringify(body) });
+      onSaved();
+    } catch (e: any) {
+      setErr(e?.payload?.message || 'Falha ao salvar cluster');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Card className="p-4 space-y-3">
+      <div className="flex items-center justify-between">
+        <h2 className="text-sm font-medium">Editar cluster "{cluster.name}"</h2>
+      </div>
+      <div className="grid md:grid-cols-4 gap-2">
+        <div><label className="text-xs text-muted">Nome</label><Input value={name} onChange={(e) => setName(e.target.value)} /></div>
+        <div className="md:col-span-3">
+          <label className="text-xs text-muted">Descrição</label>
+          <Input value={description} onChange={(e) => setDescription(e.target.value)} />
+        </div>
+        <div className="md:col-span-2">
+          <label className="text-xs text-muted">Hosts (CSV: host:port)</label>
+          <Input value={hosts} onChange={(e) => setHosts(e.target.value)} />
+        </div>
+        <div><label className="text-xs text-muted">Database</label><Input value={database} onChange={(e) => setDatabase(e.target.value)} /></div>
+        <div>
+          <label className="text-xs text-muted">Poll (s)</label>
+          <Input type="number" min={5} value={pollSeconds} onChange={(e) => setPollSeconds(Number(e.target.value))} />
+        </div>
+        <div className="md:col-span-4">
+          <label className="flex items-center gap-2 text-xs text-muted">
+            <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} /> Cluster ativo (monitorado)
+          </label>
+        </div>
+        <div className="md:col-span-4 border-t border-border pt-2">
+          <label className="flex items-center gap-2 text-xs text-muted">
+            <input type="checkbox" checked={changeCreds} onChange={(e) => setChangeCreds(e.target.checked)} />
+            Alterar usuário/senha de conexão
+          </label>
+        </div>
+        {changeCreds && (
+          <>
+            <div><label className="text-xs text-muted">Usuário</label><Input value={user} onChange={(e) => setUser(e.target.value)} placeholder="manter atual se vazio" /></div>
+            <div className="md:col-span-2">
+              <label className="text-xs text-muted">Nova senha</label>
+              <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="manter atual se vazio" />
+            </div>
+            <div>
+              <label className="flex items-center gap-2 text-xs text-muted mt-5">
+                <input type="checkbox" checked={ssl} onChange={(e) => setSsl(e.target.checked)} /> SSL
+              </label>
+            </div>
+          </>
+        )}
+      </div>
+      {err && <div className="text-sm text-danger">{err}</div>}
+      <div className="flex gap-2">
+        <Button onClick={save} disabled={saving || !name || !hosts}>{saving ? 'Salvando...' : 'Salvar'}</Button>
+        <Button type="button" variant="secondary" onClick={onCancel}>Cancelar</Button>
+      </div>
     </Card>
   );
 }

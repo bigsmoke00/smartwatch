@@ -1,20 +1,37 @@
 import {
-  Body, Controller, Delete, Get, Module, Param, Post, Query,
+  Body, Controller, Delete, Get, Module, Param, Patch, Post, Query,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import { IsInt, IsOptional, IsString, Min } from 'class-validator';
+import { IsBoolean, IsInt, IsOptional, IsString, Min } from 'class-validator';
 import { PgMonitorService } from './pg-monitor.service';
 import { RequirePermission } from '../auth/permissions.decorator';
 import { Audit } from '../audit/audit.decorator';
 import { SecretsModule } from '../secrets/secrets.module';
 
+// Credenciais vêm direto no DTO (user/password/ssl) — o serviço cuida de
+// guardar isso encriptado no vault internamente. O usuário da UI nunca
+// precisa saber o que é um "vault secret".
 class CreateClusterDto {
   @IsString() name!: string;
   @IsOptional() @IsString() description?: string;
-  @IsString() vaultSecret!: string;        // segredo no vault: {user, password, ssl?}
   @IsString() hosts!: string;              // "host1:5432,host2:5432"
   @IsOptional() @IsString() database?: string;
   @IsOptional() @IsInt() @Min(5) pollSeconds?: number;
+  @IsString() user!: string;
+  @IsString() password!: string;
+  @IsOptional() @IsBoolean() ssl?: boolean;
+}
+class UpdateClusterDto {
+  @IsOptional() @IsString() name?: string;
+  @IsOptional() @IsString() description?: string;
+  @IsOptional() @IsString() hosts?: string;
+  @IsOptional() @IsString() database?: string;
+  @IsOptional() @IsInt() @Min(5) pollSeconds?: number;
+  @IsOptional() @IsBoolean() enabled?: boolean;
+  /** Qualquer um destes três presente dispara atualização das credenciais no vault. */
+  @IsOptional() @IsString() user?: string;
+  @IsOptional() @IsString() password?: string;
+  @IsOptional() @IsBoolean() ssl?: boolean;
 }
 class ExplainDto {
   @IsString() query!: string;
@@ -35,6 +52,13 @@ class PgMonitorController {
   @Audit('pg.cluster_create')
   @Post('clusters')
   create(@Body() dto: CreateClusterDto) { return this.svc.createCluster(dto); }
+
+  @RequirePermission('pg:write')
+  @Audit('pg.cluster_update')
+  @Patch('clusters/:id')
+  update(@Param('id') id: string, @Body() dto: UpdateClusterDto) {
+    return this.svc.updateCluster(id, dto);
+  }
 
   @RequirePermission('pg:write')
   @Audit('pg.cluster_delete')

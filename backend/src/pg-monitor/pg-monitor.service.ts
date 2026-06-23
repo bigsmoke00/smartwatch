@@ -6,6 +6,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
+import { randomUUID } from 'crypto';
 import { Pool } from 'pg';
 import { PG_POOL } from '../db/db.module';
 import { SecretsService } from '../secrets/secrets.service';
@@ -102,25 +103,108 @@ export class PgMonitorService {
   }
 
   // ---------- CRUD de clusters ----------
+  // Nunca expõe vault_secret pra fora — é um detalhe interno de implementação.
+  private toPublic(row: any) {
+    return {
+      id: row.id,
+      name: row.name,
+      description: row.description,
+      hosts: row.hosts,
+      database: row.database,
+      enabled: row.enabled,
+      pollSeconds: row.poll_seconds,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
+  }
+
   async listClusters() {
     const r = await this.pool.query(
-      `SELECT id, name, description, vault_secret AS "vaultSecret", hosts, database,
-              enabled, poll_seconds AS "pollSeconds", created_at AS "createdAt"
-       FROM pg_clusters ORDER BY name`,
+      `SELECT id, name, description, hosts, database, enabled,
+              poll_seconds AS "pollSeconds", created_at AS "createdAt", updated_at AS "updatedAt"
+       FROM pg_clusters WHERE deleted_at IS NULL ORDER BY name`,
     );
     return r.rows;
   }
 
-  async createCluster(c: any) {
+  /**
+   * Recebe credenciais diretas (user/password/ssl) — quem chama nunca precisa
+   * saber ou criar um "vault secret" antecipadamente. O segredo é gerado e
+   * guardado encriptado aqui dentro, de forma transparente.
+   */
+  async createCluster(c: {
+    name: string; description?: string; hosts: string; database?: string;
+    pollSeconds?: number; user: string; password: string; ssl?: boolean;
+  }) {
+    const vaultSecret = `pg_${randomUUID()}`;
+    await this.secrets.set(
+      vaultSecret,
+      JSON.stringify({ user: c.user, password: c.password, ssl: !!c.ssl }),
+      `Credenciais do cluster PG "${c.name}"`,
+    );
     const r = await this.pool.query(
       `INSERT INTO pg_clusters(name, description, vault_secret, hosts, database, poll_seconds)
        VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
-      [c.name, c.description ?? null, c.vaultSecret, c.hosts, c.database ?? 'postgres', c.pollSeconds ?? 10],
+      [c.name, c.description ?? null, vaultSecret, c.hosts, c.database ?? 'postgres', c.pollSeconds ?? 10],
     );
     const id = r.rows[0].id;
     // Detecta features em background (não bloqueia criação se cluster offline)
     this.detectByClusterId(id).catch(() => {});
-    return { id };
+    return this.getClusterPublic(id);
+  }
+
+  /**
+   * Atualiza campos do cluster e, opcionalmente, as credenciais. Se vier
+   * qualquer um de user/password/ssl, mescla com o que já está salvo no
+   * vault (não precisa reenviar todos os três pra trocar só a senha, por
+   * exemplo) e regrava o mesmo segredo nomeado.
+   */
+  async updateCluster(id: string, input: {
+    name?: string; description?: string; hosts?: string; database?: string;
+    pollSeconds?: number; enabled?: boolean;
+    user?: string; password?: string; ssl?: boolean;
+  }) {
+    const cl = await this.cluster(id);
+
+    if (input.user !== undefined || input.password !== undefined || input.ssl !== undefined) {
+      let existing: any = {};
+      try {
+        existing = JSON.parse(await this.secrets.get(cl.vault_secret));
+      } catch { /* segredo perdido/inexistente — recria do zero com o que veio */ }
+      const merged = {
+        user: input.user ?? existing.user,
+        password: input.password ?? existing.password,
+        ssl: input.ssl ?? existing.ssl ?? false,
+      };
+      await this.secrets.set(
+        cl.vault_secret,
+        JSON.stringify(merged),
+        `Credenciais do cluster PG "${input.name ?? cl.name}"`,
+      );
+    }
+
+    const set: string[] = [];
+    const params: any[] = [];
+    let i = 1;
+    if (input.name !== undefined) { set.push(`name=$${i++}`); params.push(input.name); }
+    if (input.description !== undefined) { set.push(`description=$${i++}`); params.push(input.description); }
+    if (input.hosts !== undefined) { set.push(`hosts=$${i++}`); params.push(input.hosts); }
+    if (input.database !== undefined) { set.push(`database=$${i++}`); params.push(input.database); }
+    if (input.pollSeconds !== undefined) { set.push(`poll_seconds=$${i++}`); params.push(input.pollSeconds); }
+    if (input.enabled !== undefined) { set.push(`enabled=$${i++}`); params.push(input.enabled); }
+    if (set.length) {
+      set.push(`updated_at=now()`);
+      params.push(id);
+      await this.pool.query(`UPDATE pg_clusters SET ${set.join(', ')} WHERE id=$${i}`, params);
+    }
+    // Credenciais ou conexão podem ter mudado — redetecta em background.
+    this.detectByClusterId(id).catch(() => {});
+    return this.getClusterPublic(id);
+  }
+
+  async getClusterPublic(id: string) {
+    const cl = await this.cluster(id);
+    return this.toPublic(cl);
   }
 
   /** Carrega cred do vault e roda detecção pra um cluster existente. */
@@ -141,8 +225,11 @@ export class PgMonitorService {
     }
   }
 
+  /** Soft delete (mesmo padrão do Patroni) — preserva histórico em pg_metrics/etc. */
   async deleteCluster(id: string) {
-    await this.pool.query(`DELETE FROM pg_clusters WHERE id=$1`, [id]);
+    const cl = await this.cluster(id);
+    await this.pool.query(`UPDATE pg_clusters SET deleted_at=now() WHERE id=$1`, [id]);
+    await this.secrets.remove(cl.vault_secret).catch(() => {});
     return { ok: true };
   }
 
@@ -152,7 +239,7 @@ export class PgMonitorService {
   async pollAll() {
     const clusters = await this.pool.query<ClusterRow>(
       `SELECT id, name, vault_secret, hosts, database, enabled, poll_seconds
-       FROM pg_clusters WHERE enabled=true`,
+       FROM pg_clusters WHERE enabled=true AND deleted_at IS NULL`,
     );
     for (const c of clusters.rows) {
       // cada cluster pode ter poll_seconds próprio, mas como o cron base é 10s,
@@ -521,7 +608,10 @@ export class PgMonitorService {
   }
 
   private async cluster(id: string): Promise<ClusterRow> {
-    const r = await this.pool.query<ClusterRow>(`SELECT * FROM pg_clusters WHERE id=$1`, [id]);
+    const r = await this.pool.query<ClusterRow>(
+      `SELECT * FROM pg_clusters WHERE id=$1 AND deleted_at IS NULL`,
+      [id],
+    );
     if (!r.rowCount) throw new NotFoundException('cluster not found');
     return r.rows[0];
   }
