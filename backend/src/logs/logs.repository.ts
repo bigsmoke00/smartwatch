@@ -153,6 +153,29 @@ export class LogsRepository {
     };
   }
 
+  /**
+   * Containers distintos já vistos nos logs de um servidor — usado pelo
+   * filtro "container específico" da tela de Logs. Olhamos a tabela `logs`
+   * em vez do docker.sock em tempo real porque assim aparecem containers
+   * que já pararam/foram removidos mas ainda têm log armazenado, e porque
+   * não depende do agent estar respondendo nesse momento. Exclui as linhas
+   * "host:..." (são arquivos de /var/log do host, não containers).
+   */
+  async distinctContainers(serverId: string): Promise<{ containerName: string; image: string | null }[]> {
+    const r = await this.pool.query(
+      `SELECT container_name AS "containerName", max(image) AS image
+       FROM logs
+       WHERE server_id = $1
+         AND container_name IS NOT NULL
+         AND container_name NOT LIKE 'host:%'
+       GROUP BY container_name
+       ORDER BY container_name ASC
+       LIMIT 500`,
+      [serverId],
+    );
+    return r.rows;
+  }
+
   /** Histograma usando o continuous aggregate quando possível, senão raw. */
   async histogram(
     filters: LogQuery,

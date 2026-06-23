@@ -163,4 +163,8 @@ export class LogsService {
   histogram(filters: LogQuery, interval = '1 minute') {
     return this.repo.histogram(filters, interval);
   }
+
+  listContainers(serverId: string) {
+    return this.repo.distinctContainers(serverId);
+  }
 }

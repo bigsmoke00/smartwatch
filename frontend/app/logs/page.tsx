@@ -56,6 +56,9 @@ function LogsPageInner() {
   const [range, setRange] = useState<TimeRange>(DEFAULT_RANGE);
   // 'all' | 'host' | 'container' — host = linhas vindas do agent /var/log; container = docker exec
   const [source, setSource] = useState<'all' | 'host' | 'container'>('all');
+  // Container específico dentro do source=container (vazio = todos os containers)
+  const [containerName, setContainerName] = useState('');
+  const [containerOptions, setContainerOptions] = useState<{ containerName: string; image: string | null }[]>([]);
   const [hits, setHits] = useState<LogHit[]>([]);
   const [total, setTotal] = useState(0);
   const [occurrences, setOccurrences] = useState(0);
@@ -65,12 +68,40 @@ function LogsPageInner() {
   const [wsAttempt, setWsAttempt] = useState(0);
   const containerRef = useRef<HTMLDivElement>(null);
   const socketRef = useRef<Socket | null>(null);
+  // Refs sempre atualizadas com o valor mais recente — usadas dentro do
+  // listener 'logs' (que é registrado só UMA vez por conexão) pra evitar o
+  // bug de "closure velho": antes, levels/q não entravam nas deps do efeito
+  // do socket, então o filtro em tempo real ficava preso no valor de quando
+  // o socket foi criado.
+  const levelsRef = useRef(levels);
+  const qRef = useRef(q);
+  const sourceRef = useRef(source);
+  const serverIdRef = useRef(serverId);
+  const containerNameRef = useRef(containerName);
+  useEffect(() => { levelsRef.current = levels; }, [levels]);
+  useEffect(() => { qRef.current = q; }, [q]);
+  useEffect(() => { sourceRef.current = source; }, [source]);
+  useEffect(() => { containerNameRef.current = containerName; }, [containerName]);
 
   useEffect(() => {
     apiFetch<ServerRow[]>('/servers')
       .then((rows) => setServers(safeArray<ServerRow>(rows)))
       .catch(() => setServers([]));
   }, []);
+
+  // Lista de containers já vistos nos logs desse servidor, pra popular o
+  // seletor "container específico". Refaz quando troca de servidor; se o
+  // container selecionado não existir mais nessa lista, limpa a seleção.
+  useEffect(() => {
+    if (!serverId) { setContainerOptions([]); setContainerName(''); return; }
+    apiFetch<{ containerName: string; image: string | null }[]>(`/logs/containers?serverId=${serverId}`)
+      .then((rows) => {
+        const arr = safeArray<{ containerName: string; image: string | null }>(rows);
+        setContainerOptions(arr);
+        setContainerName((prev) => (arr.some((c) => c.containerName === prev) ? prev : ''));
+      })
+      .catch(() => setContainerOptions([]));
+  }, [serverId]);
 
   async function search() {
     setLoading(true);
@@ -80,7 +111,10 @@ function LogsPageInner() {
     if (levels.length) qp.set('level', levels.join(','));
     qp.set('from', range.from);
     qp.set('to', range.to);
-    // Pede mais pra compensar o filtro client-side de fonte
+    // Container específico já filtra no banco (exato) — mais preciso e
+    // mais barato que pedir uma página grande e filtrar no client.
+    if (source === 'container' && containerName) qp.set('containerName', containerName);
+    // Pede mais pra compensar o filtro client-side de fonte (host/container)
     qp.set('pageSize', source === 'all' ? '300' : '500');
     try {
       const data = await apiFetch<{
@@ -95,6 +129,7 @@ function LogsPageInner() {
         arr = arr.filter((h) => (h.containerName ?? '').startsWith('host:'));
       } else if (source === 'container') {
         arr = arr.filter((h) => h.containerName && !h.containerName.startsWith('host:'));
+        if (containerName) arr = arr.filter((h) => h.containerName === containerName);
       }
       setHits(arr);
       setTotal(data?.total ?? 0);
@@ -111,9 +146,16 @@ function LogsPageInner() {
   useEffect(() => {
     search();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [serverId, range.from, range.to, source]);
+  }, [serverId, range.from, range.to, source, containerName]);
 
   // ---- WebSocket com reconnect + exponential backoff ----
+  // IMPORTANTE: este efeito só depende de `live`. Antes ele também
+  // dependia de `serverId`/`source`, o que fazia DESCONECTAR e RECRIAR a
+  // conexão inteira a cada troca de filtro — daí o "muda o filtro e a tela
+  // para de atualizar" (o socket ficava preso reconectando em loop em vez
+  // de simplesmente trocar a sala de subscribe na conexão já existente).
+  // Agora a conexão é criada uma única vez (enquanto `live` estiver ativo)
+  // e a troca de servidor só re-emite 'subscribe' nela.
   useEffect(() => {
     if (!live) {
       socketRef.current?.disconnect();
@@ -138,7 +180,7 @@ function LogsPageInner() {
     s.on('connect', () => {
       setWsStatus('connected');
       setWsAttempt(0);
-      s.emit('subscribe', { serverId: serverId || undefined });
+      s.emit('subscribe', { serverId: serverIdRef.current || undefined });
     });
     s.on('disconnect', () => setWsStatus('connecting'));
     s.io.on('reconnect_attempt', (n) => {
@@ -162,19 +204,27 @@ function LogsPageInner() {
 
     s.on('logs', (batch: LogHit[]) => {
       let filtered = safeArray<LogHit>(batch);
-      if (levels.length)
-        filtered = filtered.filter((d) => levels.includes(d.level || 'unknown'));
-      if (q.trim()) {
-        const needle = q.toLowerCase();
+      // Usa sempre os refs (valor atual), não os valores capturados na
+      // criação deste listener — é isso que corrige o filtro ficar
+      // "travado" no valor de quando o socket conectou.
+      const lv = levelsRef.current;
+      const qq = qRef.current;
+      const src = sourceRef.current;
+      const cn = containerNameRef.current;
+      if (lv.length)
+        filtered = filtered.filter((d) => lv.includes(d.level || 'unknown'));
+      if (qq.trim()) {
+        const needle = qq.toLowerCase();
         filtered = filtered.filter((d) =>
           (d.message || '').toLowerCase().includes(needle),
         );
       }
       // filtro de fonte (host = container_name começa com "host:")
-      if (source === 'host') {
+      if (src === 'host') {
         filtered = filtered.filter((d) => (d.containerName ?? '').startsWith('host:'));
-      } else if (source === 'container') {
+      } else if (src === 'container') {
         filtered = filtered.filter((d) => !(d.containerName ?? '').startsWith('host:'));
+        if (cn) filtered = filtered.filter((d) => d.containerName === cn);
       }
       if (filtered.length === 0) return;
       setHits((prev) => [...filtered, ...prev].slice(0, 1000));
@@ -185,7 +235,16 @@ function LogsPageInner() {
       s.disconnect();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [live, serverId, source]);
+  }, [live]);
+
+  // Troca de servidor não recria a conexão — só re-emite 'subscribe' na
+  // sala certa (o backend já dá `client.leave()` na sala antiga).
+  useEffect(() => {
+    serverIdRef.current = serverId;
+    if (socketRef.current?.connected) {
+      socketRef.current.emit('subscribe', { serverId: serverId || undefined });
+    }
+  }, [serverId]);
 
   const sortedHits = useMemo(
     () =>
@@ -275,6 +334,28 @@ function LogsPageInner() {
                 </button>
               ))}
             </div>
+
+            {source === 'container' && (
+              <>
+                <div className="h-5 w-px bg-border" />
+                {!serverId ? (
+                  <span className="text-xs text-muted">selecione um servidor pra filtrar por container</span>
+                ) : (
+                  <select
+                    value={containerName}
+                    onChange={(e) => setContainerName(e.target.value)}
+                    className="rounded-md bg-panel2 border border-border px-2 py-1 text-xs max-w-[260px]"
+                  >
+                    <option value="">Todos os containers</option>
+                    {containerOptions.map((c) => (
+                      <option key={c.containerName} value={c.containerName}>
+                        {c.containerName}{c.image ? ` (${c.image})` : ''}
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </>
+            )}
 
             <div className="h-5 w-px bg-border" />
 

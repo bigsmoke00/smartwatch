@@ -111,6 +111,14 @@ export class LogsController {
     });
   }
 
+  /** Containers já vistos nos logs desse servidor — popula o seletor de container específico. */
+  @ApiBearerAuth()
+  @Get('logs/containers')
+  listContainers(@Query('serverId') serverId: string) {
+    if (!serverId) return [];
+    return this.logs.listContainers(serverId);
+  }
+
   @ApiBearerAuth()
   @Get('logs/histogram')
   histogram(
