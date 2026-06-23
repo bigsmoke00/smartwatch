@@ -106,12 +106,22 @@ export async function apiFetch<T = any>(
     throw new ApiError(0, { message: (e as Error).message });
   }
 
-  if (res.status === 401 && !retried) {
+  // Endpoints públicos de auth (login/refresh) retornam 401 por motivo de
+  // credencial/MFA, não de sessão expirada — não devem disparar o fluxo de
+  // refresh+redirect, senão a mensagem real do backend (ex: "Invalid MFA
+  // code") é descartada e substituída por um "Unauthorized" genérico, e a
+  // tela de login nunca sabe que precisa pedir o código de 2FA.
+  const isAuthEndpoint = path === '/auth/login' || path === '/auth/refresh';
+  if (res.status === 401 && !retried && !isAuthEndpoint) {
     const ok = await refresh();
     if (ok) return apiFetch<T>(path, init, true);
     clearTokens();
     redirectToLogin();
     throw new ApiError(401, { message: 'Unauthorized' });
+  }
+  if (res.status === 401 && isAuthEndpoint) {
+    const payload = await res.json().catch(() => ({}));
+    throw new ApiError(401, payload);
   }
   if (res.status === 403) {
     // Não redireciona — usuário autenticado, só sem permissão
