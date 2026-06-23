@@ -406,6 +406,15 @@ export class PgMonitorService {
         databases = [c.database];
       }
 
+      // pg_stat_statements precisa de CREATE EXTENSION em cada database
+      // separadamente — é normal a extensão existir só na database principal
+      // e não nas outras (ex.: "template1" ou bancos administrativos). Por
+      // isso só marcamos o cluster como "sem pg_stat_statements" se TODAS as
+      // databases falharem; uma falha isolada numa database sem a extensão
+      // não pode apagar a detecção correta vinda de outra que tem.
+      let statStatementsOkAnywhere = false;
+      let lastStatStatementsErr: string | null = null;
+
       for (const datname of databases) {
         const dbClient = datname === c.database ? client : await this.getClient(c, datname);
         try {
@@ -442,18 +451,13 @@ export class PgMonitorService {
                 params,
               );
             }
+            statStatementsOkAnywhere = true;
           } catch (e: any) {
-            // pg_stat_statements pode não estar habilitado — registra no
-            // cache pra UI mostrar aviso amigável em vez de quebrar.
-            if (/pg_stat_statements|relation .* does not exist/i.test(e.message)) {
-              await this.pool.query(
-                `INSERT INTO pg_cluster_features(cluster_id, has_pg_stat_statements, detected_at, last_error)
-                 VALUES ($1, false, now(), $2)
-                 ON CONFLICT (cluster_id) DO UPDATE SET
-                   has_pg_stat_statements=false, detected_at=now(), last_error=EXCLUDED.last_error`,
-                [c.id, e.message.slice(0, 500)],
-              ).catch(() => {});
-            }
+            // Não escreve em pg_cluster_features aqui — uma falha isolada
+            // numa database sem a extensão não pode sobrescrever a detecção
+            // correta vinda de outra database do mesmo cluster. Decisão
+            // final é tomada depois do loop, considerando todas as bases.
+            lastStatStatementsErr = e.message;
           }
 
           // ---------- pg_stat_user_tables (saúde) ----------
@@ -497,6 +501,27 @@ export class PgMonitorService {
         } finally {
           if (dbClient !== client) await dbClient.end();
         }
+      }
+
+      // Só registra "sem pg_stat_statements" se NENHUMA database do
+      // cluster conseguiu ler a view — assim uma extensão ausente numa
+      // database isolada não derruba a detecção correta vinda das outras.
+      if (statStatementsOkAnywhere) {
+        await this.pool.query(
+          `INSERT INTO pg_cluster_features(cluster_id, has_pg_stat_statements, detected_at, last_error)
+           VALUES ($1, true, now(), NULL)
+           ON CONFLICT (cluster_id) DO UPDATE SET
+             has_pg_stat_statements=true, detected_at=now(), last_error=NULL`,
+          [c.id],
+        ).catch(() => {});
+      } else if (lastStatStatementsErr && /pg_stat_statements|relation .* does not exist/i.test(lastStatStatementsErr)) {
+        await this.pool.query(
+          `INSERT INTO pg_cluster_features(cluster_id, has_pg_stat_statements, detected_at, last_error)
+           VALUES ($1, false, now(), $2)
+           ON CONFLICT (cluster_id) DO UPDATE SET
+             has_pg_stat_statements=false, detected_at=now(), last_error=EXCLUDED.last_error`,
+          [c.id, lastStatStatementsErr.slice(0, 500)],
+        ).catch(() => {});
       }
 
       // ---------- Avalia alertas ----------
