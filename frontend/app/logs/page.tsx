@@ -119,7 +119,19 @@ function LogsPageInner() {
 
   // Buffer de batches recebidos via WS — ver useEffect de flush abaixo, logo
   // após a conexão do socket, pro motivo de existir.
-  const pendingRef = useRef<LogHit[]>([]);
+  //
+  // Cada batch carrega o `searchSeqRef.current` de QUANDO CHEGOU. Antes só
+  // filtrávamos por level/q/source/serverId no flush, lendo os refs no
+  // momento do flush — mas isso ainda deixa uma janela de corrida: uma
+  // mensagem que chega ENTRE o clique no novo filtro e o instante em que os
+  // refs (sourceRef etc.) terminam de atualizar pode passar pelo filtro
+  // ainda com valores antigos e ficar parada em `hits` pra sempre (nada
+  // remove depois). Carimbando o seq na chegada e só aceitando no flush os
+  // batches cujo seq == seq atual, qualquer mensagem associada a uma busca
+  // que já foi superada por uma busca mais nova é descartada inteira no
+  // flush, mesmo que os refs de filtro ainda não tivessem atualizado no
+  // instante exato em que ela chegou.
+  const pendingRef = useRef<{ seq: number; items: LogHit[] }[]>([]);
 
   async function search() {
     const seq = ++searchSeqRef.current;
@@ -247,7 +259,10 @@ function LogsPageInner() {
       // aparecer (reproduzido: trocar pra "Host" mostrava linhas de
       // dcs-worker-ack que nunca deveriam passar). Filtrando só no flush,
       // 400ms depois, os refs já estão garantidamente atualizados.
-      pendingRef.current = [...arr, ...pendingRef.current];
+      pendingRef.current = [
+        { seq: searchSeqRef.current, items: arr },
+        ...pendingRef.current,
+      ];
     });
 
     socketRef.current = s;
@@ -267,8 +282,18 @@ function LogsPageInner() {
     if (!live) return;
     const t = setInterval(() => {
       if (pendingRef.current.length === 0) return;
-      const raw = pendingRef.current;
+      const batches = pendingRef.current;
       pendingRef.current = [];
+
+      // Só aceita batches carimbados com o seq da busca ATUAL — qualquer
+      // coisa que chegou enquanto um filtro antigo estava ativo (mesmo que
+      // os refs ainda não tivessem atualizado no instante da chegada) é
+      // descartada aqui, em vez de arriscar entrar em `hits`.
+      const curSeq = searchSeqRef.current;
+      const raw = batches
+        .filter((b) => b.seq === curSeq)
+        .flatMap((b) => b.items);
+      if (raw.length === 0) return;
 
       let filtered = raw;
       const lv = levelsRef.current;
