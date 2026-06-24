@@ -231,10 +231,46 @@ function LogsPageInner() {
     });
 
     s.on('logs', (batch: LogHit[]) => {
-      let filtered = safeArray<LogHit>(batch);
-      // Usa sempre os refs (valor atual), não os valores capturados na
-      // criação deste listener — é isso que corrige o filtro ficar
-      // "travado" no valor de quando o socket conectou.
+      const arr = safeArray<LogHit>(batch);
+      if (arr.length === 0) return;
+      // Empilha CRU no buffer, sem filtrar aqui. O filtro só é aplicado no
+      // flush (abaixo), lendo os refs no momento do flush — não no momento
+      // em que a mensagem chegou.
+      //
+      // Por quê: antes filtrava aqui na chegada. Isso criava uma race ao
+      // trocar de filtro: se uma rajada de mensagens da fonte ANTIGA (ex.:
+      // container dcs-worker-ack, bem barulhento) chegasse no pequeno
+      // intervalo entre o clique no novo filtro e o re-render que atualiza
+      // sourceRef, ela passava pelo filtro velho, ficava no buffer, e era
+      // mesclada por cima do resultado já limpo da busca nova no próximo
+      // flush — a tela ficava com lixo de um filtro que não devia mais
+      // aparecer (reproduzido: trocar pra "Host" mostrava linhas de
+      // dcs-worker-ack que nunca deveriam passar). Filtrando só no flush,
+      // 400ms depois, os refs já estão garantidamente atualizados.
+      pendingRef.current = [...arr, ...pendingRef.current];
+    });
+
+    socketRef.current = s;
+    return () => {
+      s.disconnect();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [live]);
+
+  // Flush do buffer de WS em lote, no máximo a cada 400ms — desacopla a
+  // taxa de chegada de mensagens (que pode passar de 50-100/s sob carga) da
+  // taxa de re-render, que é o gargalo real. O filtro (level/q/source/
+  // container) é aplicado AQUI, lendo os refs atuais, não no momento em que
+  // a mensagem chegou — ver comentário no listener 'logs' pra entender a
+  // race que isso evita.
+  useEffect(() => {
+    if (!live) return;
+    const t = setInterval(() => {
+      if (pendingRef.current.length === 0) return;
+      const raw = pendingRef.current;
+      pendingRef.current = [];
+
+      let filtered = raw;
       const lv = levelsRef.current;
       const qq = qRef.current;
       const src = sourceRef.current;
@@ -247,7 +283,6 @@ function LogsPageInner() {
           (d.message || '').toLowerCase().includes(needle),
         );
       }
-      // filtro de fonte (host = container_name começa com "host:")
       if (src === 'host') {
         filtered = filtered.filter((d) => (d.containerName ?? '').startsWith('host:'));
       } else if (src === 'container') {
@@ -255,38 +290,11 @@ function LogsPageInner() {
         if (cn) filtered = filtered.filter((d) => d.containerName === cn);
       }
       if (filtered.length === 0) return;
-      // Não chama setHits aqui — só empilha no buffer. Em volumes altos
-      // (ex.: source=all juntando host+containers, ou containers chatos
-      // tipo dcs-worker-ack/dcs-sentiment-analysis-api que mandam stack
-      // traces inteiros linha a linha), um setState por mensagem chegava
-      // a várias vezes por segundo, cada um re-sortando e re-renderizando
-      // até 1000 linhas sem virtualização — isso travava a thread principal
-      // e a tela "parava de atualizar" (era só lentidão extrema, não bug de
-      // estado). O flush abaixo aplica no máximo a cada ~400ms.
-      pendingRef.current = [...filtered, ...pendingRef.current];
-    });
-
-    socketRef.current = s;
-    return () => {
-      s.disconnect();
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [live]);
-
-  // Flush do buffer de WS em lote, no máximo a cada 400ms — desacopla a
-  // taxa de chegada de mensagens (que pode passar de 50-100/s sob carga) da
-  // taxa de re-render, que é o gargalo real.
-  useEffect(() => {
-    if (!live) return;
-    const t = setInterval(() => {
-      if (pendingRef.current.length === 0) return;
-      const toApply = pendingRef.current;
-      pendingRef.current = [];
-      // Teto subiu de 1000 pra 5000 — isso é só o array em memória, não
-      // quantidade renderizada no DOM (essa é limitada por `renderLimit`
-      // mais abaixo, que é o controle real de performance). Sem nenhum
-      // teto aqui a lista cresceria pra sempre numa sessão longa de tail.
-      setHits((prev) => [...toApply, ...prev].slice(0, 5000));
+      // Teto de 5000 — só o array em memória, não quantidade renderizada no
+      // DOM (essa é limitada por `renderLimit` mais abaixo, que é o
+      // controle real de performance). Sem nenhum teto aqui a lista
+      // cresceria pra sempre numa sessão longa de tail.
+      setHits((prev) => [...filtered, ...prev].slice(0, 5000));
     }, 400);
     return () => clearInterval(t);
   }, [live]);
