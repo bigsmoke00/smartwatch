@@ -92,6 +92,7 @@ export class LogsController {
   query(
     @Query('serverId') serverId?: string,
     @Query('containerName') containerName?: string,
+    @Query('source') source?: 'all' | 'host' | 'container',
     @Query('q') q?: string,
     @Query('level') level?: string,
     @Query('from') from?: string,
@@ -102,6 +103,7 @@ export class LogsController {
     return this.logs.query({
       serverId,
       containerName,
+      source,
       q,
       level: level ? level.split(',') : undefined,
       from,

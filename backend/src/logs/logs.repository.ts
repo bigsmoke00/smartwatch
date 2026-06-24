@@ -19,6 +19,17 @@ export interface LogDoc {
 export interface LogQuery {
   serverId?: string;
   containerName?: string;
+  /**
+   * 'host' = linhas de /var/log do agent (container_name = 'host:<arquivo>');
+   * 'container' = linhas de containers docker; 'all'/undefined = sem filtro.
+   * Filtrar isso aqui (antes do LIMIT) é o que faz o filtro de fonte
+   * funcionar de fato — antes era aplicado só no client DEPOIS da página já
+   * vir limitada a 500 linhas mais recentes, então se essas 500 linhas mais
+   * recentes fossem todas de containers (caso comum com containers
+   * barulhentos), o filtro "Host" voltava vazio mesmo tendo dados — parecia
+   * que o filtro "não funcionava" quando saía do padrão Tudo.
+   */
+  source?: 'all' | 'host' | 'container';
   level?: string[];
   q?: string;
   from?: string;
@@ -109,6 +120,11 @@ export class LogsRepository {
       where.push(`container_name = $${i++}`);
       params.push(filters.containerName);
     }
+    if (filters.source === 'host') {
+      where.push(`container_name LIKE 'host:%'`);
+    } else if (filters.source === 'container') {
+      where.push(`container_name IS NOT NULL AND container_name NOT LIKE 'host:%'`);
+    }
     if (filters.level && filters.level.length) {
       where.push(`level = ANY($${i++}::text[])`);
       params.push(filters.level);
@@ -121,7 +137,12 @@ export class LogsRepository {
 
     const w = where.length ? 'WHERE ' + where.join(' AND ') : '';
     const page = Math.max(1, filters.page ?? 1);
-    const pageSize = Math.min(500, Math.max(1, filters.pageSize ?? 100));
+    // Teto subiu de 500 pra 5000: o limite de 500 era aplicado ANTES do
+    // filtro de fonte no client (ver comment em LogQuery.source), então uma
+    // janela de tempo dominada por containers barulhentos podia devolver
+    // zero linhas de host mesmo havendo dados — pedir mais linhas (agora já
+    // filtradas corretamente por fonte aqui no banco) resolve isso de fato.
+    const pageSize = Math.min(5000, Math.max(1, filters.pageSize ?? 100));
     const offset = (page - 1) * pageSize;
 
     const sql = `

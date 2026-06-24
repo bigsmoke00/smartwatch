@@ -63,6 +63,9 @@ function LogsPageInner() {
   const [total, setTotal] = useState(0);
   const [occurrences, setOccurrences] = useState(0);
   const [loading, setLoading] = useState(false);
+  // Erro pontual de fetch (ex.: 502 do backend) — só pra avisar o usuário sem
+  // apagar os dados que já estavam na tela.
+  const [searchError, setSearchError] = useState(false);
   const [live, setLive] = useState(true);
   const [wsStatus, setWsStatus] = useState<'connected' | 'connecting' | 'offline'>('offline');
   const [wsAttempt, setWsAttempt] = useState(0);
@@ -124,6 +127,7 @@ function LogsPageInner() {
     // senão ele é aplicado por cima do resultado novo no próximo flush.
     pendingRef.current = [];
     setLoading(true);
+    setSearchError(false);
     const qp = new URLSearchParams();
     if (serverId) qp.set('serverId', serverId);
     if (q) qp.set('q', q);
@@ -133,8 +137,14 @@ function LogsPageInner() {
     // Container específico já filtra no banco (exato) — mais preciso e
     // mais barato que pedir uma página grande e filtrar no client.
     if (source === 'container' && containerName) qp.set('containerName', containerName);
-    // Pede mais pra compensar o filtro client-side de fonte (host/container)
-    qp.set('pageSize', source === 'all' ? '300' : '500');
+    // Fonte (host/container) agora vai pro backend e filtra ANTES do LIMIT
+    // (ver logs.repository.ts) — antes era filtrado aqui no client DEPOIS de
+    // já ter vindo uma página de 500 linhas mais recentes sem esse filtro, e
+    // se essas 500 fossem todas de containers barulhentos (comum), o filtro
+    // "Host" voltava vazio mesmo havendo dados. Daí o "se eu tiro do padrão
+    // Tudo, não funciona".
+    qp.set('source', source);
+    qp.set('pageSize', '2000');
     try {
       const data = await apiFetch<{
         hits: LogHit[];
@@ -144,21 +154,18 @@ function LogsPageInner() {
         `/logs?${qp.toString()}`,
       );
       if (seq !== searchSeqRef.current) return; // resposta velha, ignora
-      let arr = safeArray<LogHit>(data?.hits);
-      if (source === 'host') {
-        arr = arr.filter((h) => (h.containerName ?? '').startsWith('host:'));
-      } else if (source === 'container') {
-        arr = arr.filter((h) => h.containerName && !h.containerName.startsWith('host:'));
-        if (containerName) arr = arr.filter((h) => h.containerName === containerName);
-      }
+      const arr = safeArray<LogHit>(data?.hits);
       setHits(arr);
       setTotal(data?.total ?? 0);
       setOccurrences(data?.occurrences ?? data?.total ?? 0);
     } catch {
+      // Falha pontual (ex.: 502 do backend sobrecarregado) não deve apagar o
+      // que já estava na tela — antes isso limpava tudo (setHits([])), e
+      // qualquer instabilidade do backend no exato momento da troca de filtro
+      // fazia parecer que a tela "travou" (ficava em branco e parada).
+      // Agora só registramos o erro e mantemos os dados anteriores visíveis.
       if (seq !== searchSeqRef.current) return;
-      setHits([]);
-      setTotal(0);
-      setOccurrences(0);
+      setSearchError(true);
     } finally {
       if (seq === searchSeqRef.current) setLoading(false);
     }
@@ -275,7 +282,11 @@ function LogsPageInner() {
       if (pendingRef.current.length === 0) return;
       const toApply = pendingRef.current;
       pendingRef.current = [];
-      setHits((prev) => [...toApply, ...prev].slice(0, 1000));
+      // Teto subiu de 1000 pra 5000 — isso é só o array em memória, não
+      // quantidade renderizada no DOM (essa é limitada por `renderLimit`
+      // mais abaixo, que é o controle real de performance). Sem nenhum
+      // teto aqui a lista cresceria pra sempre numa sessão longa de tail.
+      setHits((prev) => [...toApply, ...prev].slice(0, 5000));
     }, 400);
     return () => clearInterval(t);
   }, [live]);
@@ -298,6 +309,17 @@ function LogsPageInner() {
         .sort((a, b) => (b?.ts ?? '').localeCompare(a?.ts ?? '')),
     [hits],
   );
+
+  // Quantidade renderizada no DOM — separado do total de dados em memória
+  // (`hits`, até 5000). Sem esse limite, listas grandes sem virtualização
+  // travam a aba (era exatamente o bug de performance já visto antes nessa
+  // tela). O usuário decide ver mais clicando em "mostrar mais", sem perder
+  // acesso ao restante dos dados já carregados.
+  const [renderLimit, setRenderLimit] = useState(500);
+  useEffect(() => {
+    setRenderLimit(500);
+  }, [serverId, range.from, range.to, source, containerName, q, levels]);
+  const visibleHits = sortedHits.slice(0, renderLimit);
 
   function toggleLevel(l: string) {
     setLevels((prev) =>
@@ -422,10 +444,15 @@ function LogsPageInner() {
 
         <div className="text-xs text-muted">
           {total > 0 && (
-            `${occurrences.toLocaleString()} ocorrências em ${total.toLocaleString()} linhas armazenadas — exibindo ${sortedHits.length}`
+            `${occurrences.toLocaleString()} ocorrências em ${total.toLocaleString()} linhas armazenadas — exibindo ${visibleHits.length} de ${sortedHits.length} carregadas`
           )}
           {live && wsStatus === 'connected' && (
             <span className="ml-3 text-accent">● tail ativo</span>
+          )}
+          {searchError && (
+            <span className="ml-3 text-yellow-500">
+              ⚠ falha ao buscar (backend instável) — exibindo últimos dados conhecidos
+            </span>
           )}
         </div>
 
@@ -439,7 +466,7 @@ function LogsPageInner() {
                 Nenhum log encontrado para os filtros selecionados.
               </div>
             )}
-            {sortedHits.map((h) => {
+            {visibleHits.map((h) => {
               const isHost = (h.containerName ?? '').startsWith('host:');
               const hostFile = isHost ? h.containerName!.replace(/^host:/, '') : null;
               return (
@@ -471,6 +498,16 @@ function LogsPageInner() {
                 </div>
               );
             })}
+            {renderLimit < sortedHits.length && (
+              <div className="p-3 text-center border-t border-border/50">
+                <button
+                  onClick={() => setRenderLimit((n) => n + 500)}
+                  className="text-xs text-accent hover:underline"
+                >
+                  mostrar mais 500 (de {sortedHits.length - renderLimit} restantes)
+                </button>
+              </div>
+            )}
           </div>
         </Card>
       </div>
