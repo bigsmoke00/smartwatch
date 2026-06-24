@@ -275,6 +275,16 @@ function LogsPageInner() {
       const qq = qRef.current;
       const src = sourceRef.current;
       const cn = containerNameRef.current;
+      const sid = serverIdRef.current;
+      // Faltava filtrar por servidor aqui — o flush filtrava level/q/source/
+      // container mas não serverId, então ao trocar de servidor as mensagens
+      // que chegassem via WS (de QUALQUER servidor, inclusive se o resubscribe
+      // de sala ainda não tivesse efetivado no backend) eram misturadas sem
+      // checagem e ficavam pra sempre em `hits` — nada removia depois. Isso
+      // causava linhas de outro servidor presas na lista e, com volume alto,
+      // a lista parecia "não atualizar mais" (dominada por ruído de outro
+      // servidor que nunca deveria aparecer).
+      if (sid) filtered = filtered.filter((d) => d.serverId === sid);
       if (lv.length)
         filtered = filtered.filter((d) => lv.includes(d.level || 'unknown'));
       if (qq.trim()) {
