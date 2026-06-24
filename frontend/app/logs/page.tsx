@@ -114,8 +114,15 @@ function LogsPageInner() {
   // filtro novo.
   const searchSeqRef = useRef(0);
 
+  // Buffer de batches recebidos via WS — ver useEffect de flush abaixo, logo
+  // após a conexão do socket, pro motivo de existir.
+  const pendingRef = useRef<LogHit[]>([]);
+
   async function search() {
     const seq = ++searchSeqRef.current;
+    // Descarta qualquer batch de WS bufferizado da busca/fonte anterior —
+    // senão ele é aplicado por cima do resultado novo no próximo flush.
+    pendingRef.current = [];
     setLoading(true);
     const qp = new URLSearchParams();
     if (serverId) qp.set('serverId', serverId);
@@ -241,7 +248,15 @@ function LogsPageInner() {
         if (cn) filtered = filtered.filter((d) => d.containerName === cn);
       }
       if (filtered.length === 0) return;
-      setHits((prev) => [...filtered, ...prev].slice(0, 1000));
+      // Não chama setHits aqui — só empilha no buffer. Em volumes altos
+      // (ex.: source=all juntando host+containers, ou containers chatos
+      // tipo dcs-worker-ack/dcs-sentiment-analysis-api que mandam stack
+      // traces inteiros linha a linha), um setState por mensagem chegava
+      // a várias vezes por segundo, cada um re-sortando e re-renderizando
+      // até 1000 linhas sem virtualização — isso travava a thread principal
+      // e a tela "parava de atualizar" (era só lentidão extrema, não bug de
+      // estado). O flush abaixo aplica no máximo a cada ~400ms.
+      pendingRef.current = [...filtered, ...pendingRef.current];
     });
 
     socketRef.current = s;
@@ -249,6 +264,20 @@ function LogsPageInner() {
       s.disconnect();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [live]);
+
+  // Flush do buffer de WS em lote, no máximo a cada 400ms — desacopla a
+  // taxa de chegada de mensagens (que pode passar de 50-100/s sob carga) da
+  // taxa de re-render, que é o gargalo real.
+  useEffect(() => {
+    if (!live) return;
+    const t = setInterval(() => {
+      if (pendingRef.current.length === 0) return;
+      const toApply = pendingRef.current;
+      pendingRef.current = [];
+      setHits((prev) => [...toApply, ...prev].slice(0, 1000));
+    }, 400);
+    return () => clearInterval(t);
   }, [live]);
 
   // Troca de servidor não recria a conexão — só re-emite 'subscribe' na
