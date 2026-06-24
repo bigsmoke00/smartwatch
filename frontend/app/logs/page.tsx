@@ -499,7 +499,18 @@ function LogsPageInner() {
           )}
         </div>
 
-        <Card className="p-0 overflow-hidden">
+        <Card className="p-0 overflow-hidden relative">
+          {/* Overlay durante a troca de filtro/servidor — sem isso, enquanto
+              o fetch novo está em voo o usuário continua vendo a lista do
+              filtro ANTERIOR (correto, é o comportamento esperado pra não
+              "branquear" a tela), mas sem nenhum aviso visual fica parecendo
+              que a tela travou/buggou na troca. */}
+          {loading && (
+            <div className="absolute inset-0 z-10 bg-panel/80 backdrop-blur-[1px] flex items-center justify-center gap-2 text-xs text-muted">
+              <span className="inline-block h-3 w-3 rounded-full border-2 border-accent border-t-transparent animate-spin" />
+              Atualizando para o novo filtro…
+            </div>
+          )}
           <div
             ref={containerRef}
             className="font-mono text-xs leading-relaxed max-h-[calc(100vh-280px)] overflow-auto"
