@@ -92,6 +92,16 @@ function detailFontSize(width: number): number {
   return Math.round(DETAIL_MIN_FONT + t * (DETAIL_MAX_FONT - DETAIL_MIN_FONT));
 }
 
+// limite máximo (px) que o painel de detalhe pode esticar na ALTURA — preso à
+// altura da janela, não um valor fixo. Sem isso, era possível arrastar o
+// painel até ficar mais alto que a tela: a barrinha de arrastar (e o resto do
+// painel) ficava abaixo da área visível, sem scroll que alcançasse ela de
+// volta — uma armadilha onde dava pra esticar mas não pra encolher de volta.
+function maxDetailPanelH(): number {
+  if (typeof window === 'undefined') return 900;
+  return Math.max(200, window.innerHeight - 220);
+}
+
 /**
  * Barra fina arrastável (estilo divisor de painel) pra redimensionar o painel
  * de detalhe ao lado — puxando pra esquerda ele fica mais largo (e a letra
@@ -423,7 +433,7 @@ export default function CaptureLiveView({ packets, totalParsed }: Props) {
                     <pre className="mt-2 whitespace-pre-wrap break-all leading-relaxed bg-panel2 rounded p-1.5 border border-border" style={{ fontSize: 'inherit' }}>{selected.sipText}</pre>
                   )}
                 </div>
-                <ResizeHandleV onDelta={(dy) => setPacketPanelH((h) => Math.max(150, Math.min(1200, h + dy)))} />
+                <ResizeHandleV onDelta={(dy) => setPacketPanelH((h) => Math.max(150, Math.min(maxDetailPanelH(), h + dy)))} />
               </div>
             </>
           )}
@@ -528,7 +538,7 @@ function CallFlow({ dialog, onBack, maxH }: { dialog: SipDialog; onBack: () => v
                 </div>
                 <pre className="whitespace-pre-wrap break-all leading-relaxed" style={{ fontSize: 'inherit' }}>{selectedMsg.sipText}</pre>
               </div>
-              <ResizeHandleV onDelta={(dy) => setMsgPanelH((h) => Math.max(150, Math.min(1200, h + dy)))} />
+              <ResizeHandleV onDelta={(dy) => setMsgPanelH((h) => Math.max(150, Math.min(maxDetailPanelH(), h + dy)))} />
             </div>
           </>
         )}
