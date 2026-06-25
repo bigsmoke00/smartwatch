@@ -1,7 +1,7 @@
 'use client';
 
 import { useMemo, useState } from 'react';
-import { ParsedPacket, SipDialog, buildDialogs } from '@/lib/pcap';
+import { ParsedPacket, SipDialog, SipDialogState, SIP_METHODS_LIST, buildDialogs } from '@/lib/pcap';
 
 interface Props {
   packets: ParsedPacket[];
@@ -20,12 +20,55 @@ const PROTO_COLOR: Record<string, string> = {
   TCP: 'text-muted',
 };
 
+// Estado do diálogo (estilo sngrep) -> rótulo exibido + cor.
+const DIALOG_STATE: Record<SipDialogState, { label: string; className: string }> = {
+  calling: { label: 'CALL SETUP', className: 'text-warn' },
+  em_andamento: { label: 'IN CALL', className: 'text-accent' },
+  completed: { label: 'COMPLETED', className: 'text-success' },
+  cancelled: { label: 'CANCELLED', className: 'text-muted' },
+  busy: { label: 'BUSY', className: 'text-purple-400' },
+  rejected: { label: 'REJECTED', className: 'text-danger' },
+};
+
+// Cor por método/resposta SIP, pra distinguir de cara INVITE de OPTIONS,
+// REGISTER, BYE etc. na lista de pacotes (igual o sngrep faz por cor).
+const METHOD_COLOR: Record<string, string> = {
+  INVITE: 'text-accent',
+  ACK: 'text-muted',
+  BYE: 'text-warn',
+  CANCEL: 'text-danger',
+  OPTIONS: 'text-purple-400',
+  REGISTER: 'text-success',
+  PRACK: 'text-muted',
+  SUBSCRIBE: 'text-purple-400',
+  NOTIFY: 'text-purple-400',
+  PUBLISH: 'text-muted',
+  INFO: 'text-muted',
+  REFER: 'text-muted',
+  MESSAGE: 'text-muted',
+  UPDATE: 'text-muted',
+};
+
+/** Cor pro texto de "Info" de um pacote SIP: por método se for request, por faixa de status se for resposta. */
+function sipInfoColor(p: ParsedPacket): string {
+  if (p.proto !== 'SIP' || !p.sipMethodOrStatus) return '';
+  if (p.sipIsRequest) return METHOD_COLOR[p.sipMethodOrStatus] ?? '';
+  if (/^2/.test(p.sipMethodOrStatus)) return 'text-success';
+  if (/^1/.test(p.sipMethodOrStatus)) return 'text-accent';
+  if (/^3/.test(p.sipMethodOrStatus)) return 'text-warn';
+  if (/^[4-6]/.test(p.sipMethodOrStatus)) return 'text-danger';
+  return '';
+}
+
 function fmtT(t: number) {
   return t.toFixed(6);
 }
 
 export default function CaptureLiveView({ packets, totalParsed }: Props) {
   const [filter, setFilter] = useState('');
+  // filtro "só método" (INVITE/OPTIONS/REGISTER/...) — separado do filtro de
+  // texto livre acima pra não precisar digitar o nome certinho do método.
+  const [methodFilter, setMethodFilter] = useState('');
   const [selected, setSelected] = useState<ParsedPacket | null>(null);
   const [selectedCallId, setSelectedCallId] = useState<string | null>(null);
   const [tab, setTab] = useState<'packets' | 'dialogs'>('dialogs');
@@ -37,13 +80,17 @@ export default function CaptureLiveView({ packets, totalParsed }: Props) {
   const dialogs = useMemo(() => buildDialogs(packets), [packets]);
 
   const filteredPackets = useMemo(() => {
-    if (!filter.trim()) return packets;
+    let base = packets;
+    if (methodFilter) {
+      base = base.filter((p) => p.sipIsRequest && p.sipMethodOrStatus === methodFilter);
+    }
+    if (!filter.trim()) return base;
     const f = filter.toLowerCase();
-    return packets.filter((p) =>
+    return base.filter((p) =>
       [p.srcIp, p.dstIp, p.proto, p.info, p.sipCallId, String(p.srcPort), String(p.dstPort)]
         .some((v) => v && v.toLowerCase().includes(f)),
     );
-  }, [packets, filter]);
+  }, [packets, filter, methodFilter]);
 
   const selectedDialog: SipDialog | undefined = selectedCallId
     ? dialogs.find((d) => d.callId === selectedCallId)
@@ -82,6 +129,19 @@ export default function CaptureLiveView({ packets, totalParsed }: Props) {
           <span className="text-[10px] text-muted">
             exibindo só os últimos {packets.length} pacotes não-SIP (de {totalParsed} no total) — o .pcap baixado tem todos
           </span>
+        )}
+        {tab === 'packets' && (
+          <select
+            value={methodFilter}
+            onChange={(e) => setMethodFilter(e.target.value)}
+            className="text-[11px] bg-panel border border-border rounded px-1.5 py-0.5"
+            title="filtrar só por método SIP"
+          >
+            <option value="">todos os métodos</option>
+            {SIP_METHODS_LIST.map((m) => (
+              <option key={m} value={m}>{m}</option>
+            ))}
+          </select>
         )}
         {tab === 'packets' && (
           <input
@@ -123,15 +183,8 @@ export default function CaptureLiveView({ packets, totalParsed }: Props) {
                   <td className="px-2 py-1 truncate max-w-[160px]" title={d.to}>{d.to ?? '—'}</td>
                   <td className="px-2 py-1">{d.messages.length}</td>
                   <td className="px-2 py-1">
-                    <span
-                      className={
-                        d.state === 'atendida' ? 'text-success'
-                          : d.state === 'falhou' ? 'text-danger'
-                          : d.state === 'encerrada' ? 'text-muted'
-                          : 'text-warn'
-                      }
-                    >
-                      {d.state}
+                    <span className={`font-medium ${DIALOG_STATE[d.state].className}`}>
+                      {DIALOG_STATE[d.state].label}
                     </span>
                   </td>
                 </tr>
@@ -180,7 +233,7 @@ export default function CaptureLiveView({ packets, totalParsed }: Props) {
                     <td className="px-2 py-0.5">{p.dstPort ?? '—'}</td>
                     <td className={`px-2 py-0.5 ${PROTO_COLOR[p.proto] ?? ''}`}>{p.proto}</td>
                     <td className="px-2 py-0.5">{p.length}</td>
-                    <td className="px-2 py-0.5 truncate max-w-[260px]">{p.info}</td>
+                    <td className={`px-2 py-0.5 truncate max-w-[260px] font-medium ${sipInfoColor(p)}`}>{p.info}</td>
                   </tr>
                 ))}
                 {!filteredPackets.length && (
@@ -237,7 +290,8 @@ function CallFlow({ dialog, onBack, maxH }: { dialog: SipDialog; onBack: () => v
     <div className="p-2">
       <button onClick={onBack} className="text-[11px] text-accent hover:underline mb-2">← voltar pros diálogos</button>
       <div className="text-[11px] text-muted mb-2">
-        Call-ID: <span className="font-mono">{dialog.callId}</span> · estado: {dialog.state}
+        Call-ID: <span className="font-mono">{dialog.callId}</span> · estado:{' '}
+        <span className={`font-medium ${DIALOG_STATE[dialog.state].className}`}>{DIALOG_STATE[dialog.state].label}</span>
       </div>
       <div className="flex gap-2">
         <div className="overflow-auto border border-border rounded bg-panel2" style={{ maxHeight: maxH ?? 320 }}>
@@ -289,7 +343,7 @@ function CallFlow({ dialog, onBack, maxH }: { dialog: SipDialog; onBack: () => v
         {selectedMsg && (
           <div className="w-72 border border-border rounded bg-panel2 p-2 text-[11px] overflow-auto" style={{ maxHeight: maxH ?? 320 }}>
             <div className="flex justify-between items-center mb-1">
-              <span className="font-medium">{selectedMsg.sipMethodOrStatus}</span>
+              <span className={`font-medium ${sipInfoColor(selectedMsg)}`}>{selectedMsg.sipMethodOrStatus}</span>
               <button onClick={() => setSelectedMsg(null)} className="text-muted hover:text-accent">x</button>
             </div>
             <pre className="whitespace-pre-wrap text-[10px]">{selectedMsg.sipText}</pre>

@@ -52,10 +52,13 @@ function u16be(bytes: Uint8Array, off: number): number {
   return (bytes[off] << 8) | bytes[off + 1];
 }
 
-const SIP_METHODS = new Set([
+// Exportado pra UI montar filtro/cores por método (ex.: dropdown "só
+// INVITE", "só OPTIONS"...) sem duplicar a lista aqui e lá.
+export const SIP_METHODS_LIST = [
   'INVITE', 'ACK', 'BYE', 'CANCEL', 'OPTIONS', 'REGISTER', 'PRACK',
   'SUBSCRIBE', 'NOTIFY', 'PUBLISH', 'INFO', 'REFER', 'MESSAGE', 'UPDATE',
-]);
+] as const;
+const SIP_METHODS = new Set<string>(SIP_METHODS_LIST);
 
 function tryDecodeSip(payload: Uint8Array): {
   text: string; isRequest: boolean; methodOrStatus: string; callId?: string; from?: string; to?: string;
@@ -280,12 +283,22 @@ export class PcapStreamParser {
   }
 }
 
+// Estados ao estilo sngrep:
+// - calling     -> "CALL SETUP" (INVITE mandado, sem resposta final ainda)
+// - em_andamento -> "IN CALL" (200 OK pro INVITE recebido, chamada ativa)
+// - completed   -> "COMPLETED" (foi atendida e depois terminou com BYE)
+// - cancelled   -> "CANCELLED" (CANCEL antes de atender)
+// - busy        -> "BUSY" (486/600 Busy)
+// - rejected    -> "REJECTED" (outro 4xx-6xx final, sem ser busy)
+export type SipDialogState =
+  | 'calling' | 'em_andamento' | 'completed' | 'cancelled' | 'busy' | 'rejected';
+
 export interface SipDialog {
   callId: string;
   from?: string;
   to?: string;
   messages: ParsedPacket[];
-  state: 'calling' | 'em andamento' | 'atendida' | 'encerrada' | 'falhou';
+  state: SipDialogState;
 }
 
 /** Agrupa pacotes SIP já decodificados em diálogos por Call-ID, com estado estimado. */
@@ -304,12 +317,15 @@ export function buildDialogs(packets: ParsedPacket[]): SipDialog[] {
   }
   for (const d of map.values()) {
     const hasBye = d.messages.some((m) => m.sipMethodOrStatus === 'BYE');
+    const hasCancel = d.messages.some((m) => m.sipMethodOrStatus === 'CANCEL');
     const has200ToInvite = d.messages.some((m) => !m.sipIsRequest && m.sipMethodOrStatus?.startsWith('200'));
+    const isBusy = d.messages.some((m) => !m.sipIsRequest && /^(486|600)/.test(m.sipMethodOrStatus ?? ''));
     const hasFailure = d.messages.some((m) => !m.sipIsRequest && /^[4-6]\d\d/.test(m.sipMethodOrStatus ?? ''));
-    if (hasBye) d.state = 'encerrada';
-    else if (hasFailure) d.state = 'falhou';
-    else if (has200ToInvite) d.state = 'atendida';
-    else if (d.messages.length > 1) d.state = 'em andamento';
+    if (hasBye && has200ToInvite) d.state = 'completed';
+    else if (isBusy) d.state = 'busy';
+    else if (hasFailure) d.state = 'rejected';
+    else if (hasCancel && !has200ToInvite) d.state = 'cancelled';
+    else if (has200ToInvite) d.state = 'em_andamento';
     else d.state = 'calling';
   }
   return [...map.values()].sort((a, b) => a.messages[0].relTime - b.messages[0].relTime);
