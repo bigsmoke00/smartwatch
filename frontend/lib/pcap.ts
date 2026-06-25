@@ -5,9 +5,10 @@
  * de chamada) direto no navegador, em tempo real, sem precisar de backend
  * nem de bibliotecas externas.
  *
- * Suporta linktype Ethernet (1) e Linux cooked capture (113 — é o que o
- * agent usa, já que captura sempre com `-i any`). Não suporta pcapng nem
- * VLAN tags — cobre o caso real de uso (tcpdump -w - num container Linux).
+ * Suporta linktype Ethernet (1), Linux cooked capture v1/SLL (113) e v2/SLL2
+ * (276 — é o que libpcap mais novo usa pra `-i any` em kernels recentes, e é
+ * o linktype real que os agentes vêm produzindo). Não suporta pcapng — cobre
+ * o caso real de uso (tcpdump -w - num container Linux).
  * Se o pcap vier num formato não suportado, o parser simplesmente não decodifica
  * nada (mas o .pcap continua válido pra salvar/abrir no Wireshark).
  */
@@ -177,10 +178,23 @@ export class PcapStreamParser {
 
     let etherType = 0;
     let l3Offset = 0;
-    if (this.linktype === 113) { // Linux cooked capture (SLL)
+    if (this.linktype === 113) { // Linux cooked capture v1 (SLL)
       if (frame.length < 16) { base.info = 'frame curto (SLL)'; return base; }
       etherType = u16be(frame, 14);
       l3Offset = 16;
+    } else if (this.linktype === 276) {
+      // Linux cooked capture v2 (SLL2) — versões recentes de libpcap usam
+      // esse linktype (em vez do 113/SLLv1) ao capturar com `-i any` em
+      // kernels novos. É o caso real dos agentes — por isso TODOS os
+      // pacotes apareciam como "linktype não suportado" e 0 diálogos SIP,
+      // mesmo com tráfego SIP de verdade (o .pcap salvo sempre esteve
+      // correto, só a decodificação ao vivo no navegador não suportava).
+      // Cabeçalho de 20 bytes: protocol(2) + reserved(2) + if_index(4) +
+      // hatype(2) + pkttype(1) + halen(1) + addr(8). "protocol" é o
+      // ethertype, em network byte order (big-endian), igual ao SLLv1.
+      if (frame.length < 20) { base.info = 'frame curto (SLL2)'; return base; }
+      etherType = u16be(frame, 0);
+      l3Offset = 20;
     } else if (this.linktype === 1) { // Ethernet
       if (frame.length < 14) { base.info = 'frame curto (Ethernet)'; return base; }
       etherType = u16be(frame, 12);

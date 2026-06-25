@@ -29,6 +29,10 @@ export default function CaptureLiveView({ packets, totalParsed }: Props) {
   const [selected, setSelected] = useState<ParsedPacket | null>(null);
   const [selectedCallId, setSelectedCallId] = useState<string | null>(null);
   const [tab, setTab] = useState<'packets' | 'dialogs'>('dialogs');
+  // visão expandida (tela cheia) — a inline embutida na tabela é boa pra um
+  // resumo rápido, mas pra navegar à vontade entre diálogos/pacotes/fluxo de
+  // chamada (tipo sngrep/Wireshark) cabe mais conteúdo em tela cheia.
+  const [fullscreen, setFullscreen] = useState(false);
 
   const dialogs = useMemo(() => buildDialogs(packets), [packets]);
 
@@ -49,8 +53,16 @@ export default function CaptureLiveView({ packets, totalParsed }: Props) {
     return <div className="text-[11px] text-muted px-1">aguardando os primeiros pacotes...</div>;
   }
 
+  const rowsMaxH = fullscreen ? 'max-h-[calc(100vh-180px)]' : 'max-h-72';
+
   return (
-    <div className="border border-border rounded-md overflow-hidden">
+    <div
+      className={
+        fullscreen
+          ? 'fixed inset-0 z-50 bg-panel flex flex-col'
+          : 'border border-border rounded-md overflow-hidden'
+      }
+    >
       <div className="flex items-center gap-2 px-2 py-1.5 bg-panel2 border-b border-border">
         <div className="flex gap-1">
           <button
@@ -76,13 +88,19 @@ export default function CaptureLiveView({ packets, totalParsed }: Props) {
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
             placeholder='filtro (ex: "sip", ip, porta...)'
-            className="ml-auto text-[11px] bg-panel border border-border rounded px-2 py-0.5 w-56"
+            className={`text-[11px] bg-panel border border-border rounded px-2 py-0.5 w-56 ${fullscreen ? '' : 'ml-auto'}`}
           />
         )}
+        <button
+          onClick={() => setFullscreen((v) => !v)}
+          className={`text-[11px] px-2 py-0.5 rounded border border-border text-muted hover:text-accent ${fullscreen || tab !== 'packets' ? 'ml-auto' : ''}`}
+        >
+          {fullscreen ? '✕ sair da tela cheia' : '⤢ tela cheia'}
+        </button>
       </div>
 
       {tab === 'dialogs' && !selectedDialog && (
-        <div className="max-h-72 overflow-auto">
+        <div className={`${rowsMaxH} overflow-auto ${fullscreen ? 'flex-1' : ''}`}>
           <table className="w-full text-[11px]">
             <thead className="bg-panel2 text-muted uppercase sticky top-0">
               <tr>
@@ -127,12 +145,14 @@ export default function CaptureLiveView({ packets, totalParsed }: Props) {
       )}
 
       {tab === 'dialogs' && selectedDialog && (
-        <CallFlow dialog={selectedDialog} onBack={() => setSelectedCallId(null)} />
+        <div className={fullscreen ? 'flex-1 overflow-auto' : ''}>
+          <CallFlow dialog={selectedDialog} onBack={() => setSelectedCallId(null)} maxH={fullscreen ? 'calc(100vh - 220px)' : undefined} />
+        </div>
       )}
 
       {tab === 'packets' && (
-        <div className="flex">
-          <div className="max-h-72 overflow-auto flex-1">
+        <div className={`flex ${fullscreen ? 'flex-1 overflow-hidden' : ''}`}>
+          <div className={`${rowsMaxH} overflow-auto flex-1`}>
             <table className="w-full text-[11px]">
               <thead className="bg-panel2 text-muted uppercase sticky top-0">
                 <tr>
@@ -170,7 +190,7 @@ export default function CaptureLiveView({ packets, totalParsed }: Props) {
             </table>
           </div>
           {selected && (
-            <div className="w-72 border-l border-border p-2 text-[11px] overflow-auto max-h-72">
+            <div className={`w-72 border-l border-border p-2 text-[11px] overflow-auto ${rowsMaxH}`}>
               <div className="flex justify-between items-center mb-1">
                 <span className="font-medium">pacote #{selected.no}</span>
                 <button onClick={() => setSelected(null)} className="text-muted hover:text-accent">x</button>
@@ -193,7 +213,7 @@ export default function CaptureLiveView({ packets, totalParsed }: Props) {
   );
 }
 
-function CallFlow({ dialog, onBack }: { dialog: SipDialog; onBack: () => void }) {
+function CallFlow({ dialog, onBack, maxH }: { dialog: SipDialog; onBack: () => void; maxH?: string }) {
   const [selectedMsg, setSelectedMsg] = useState<ParsedPacket | null>(null);
 
   const ips = useMemo(() => {
@@ -220,7 +240,7 @@ function CallFlow({ dialog, onBack }: { dialog: SipDialog; onBack: () => void })
         Call-ID: <span className="font-mono">{dialog.callId}</span> · estado: {dialog.state}
       </div>
       <div className="flex gap-2">
-        <div className="overflow-auto border border-border rounded bg-panel2" style={{ maxHeight: 320 }}>
+        <div className="overflow-auto border border-border rounded bg-panel2" style={{ maxHeight: maxH ?? 320 }}>
           <svg width={width} height={height} className="block">
             {ips.map((ip, i) => (
               <g key={ip}>
@@ -267,7 +287,7 @@ function CallFlow({ dialog, onBack }: { dialog: SipDialog; onBack: () => void })
           </svg>
         </div>
         {selectedMsg && (
-          <div className="w-72 border border-border rounded bg-panel2 p-2 text-[11px] overflow-auto" style={{ maxHeight: 320 }}>
+          <div className="w-72 border border-border rounded bg-panel2 p-2 text-[11px] overflow-auto" style={{ maxHeight: maxH ?? 320 }}>
             <div className="flex justify-between items-center mb-1">
               <span className="font-medium">{selectedMsg.sipMethodOrStatus}</span>
               <button onClick={() => setSelectedMsg(null)} className="text-muted hover:text-accent">x</button>
