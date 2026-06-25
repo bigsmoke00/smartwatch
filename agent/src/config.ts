@@ -42,7 +42,7 @@ export const config = {
     parseInt(process.env.LOGWATCH_HOST_LOG_MAX_LINE ?? '4096', 10),
   ),
 
-  agentVersion: '0.4.0',
+  agentVersion: '0.5.0',
 };
 
 function baseUrl(): string {
