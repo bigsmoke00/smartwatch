@@ -79,6 +79,48 @@ function fmtT(t: number) {
   return t.toFixed(6);
 }
 
+// largura mínima/máxima (px) do painel de detalhe arrastável, e a faixa de
+// tamanho de fonte que a letra assume conforme o painel é puxado pro lado.
+const DETAIL_MIN_W = 280;
+const DETAIL_MAX_W = 1000;
+const DETAIL_MIN_FONT = 12;
+const DETAIL_MAX_FONT = 26;
+
+/** Tamanho de fonte (px) do conteúdo do painel de detalhe, escalado com a largura puxada pelo usuário. */
+function detailFontSize(width: number): number {
+  const t = (width - DETAIL_MIN_W) / (DETAIL_MAX_W - DETAIL_MIN_W);
+  return Math.round(DETAIL_MIN_FONT + t * (DETAIL_MAX_FONT - DETAIL_MIN_FONT));
+}
+
+/**
+ * Barra fina arrastável (estilo divisor de painel) pra redimensionar o painel
+ * de detalhe ao lado — puxando pra esquerda ele fica mais largo (e a letra
+ * cresce com ele via detailFontSize), sem precisar abrir outro painel/modal.
+ */
+function ResizeHandle({ onDelta }: { onDelta: (dx: number) => void }) {
+  return (
+    <div
+      onMouseDown={(e) => {
+        e.preventDefault();
+        let lastX = e.clientX;
+        const onMove = (ev: MouseEvent) => {
+          const dx = ev.clientX - lastX;
+          lastX = ev.clientX;
+          onDelta(dx);
+        };
+        const onUp = () => {
+          window.removeEventListener('mousemove', onMove);
+          window.removeEventListener('mouseup', onUp);
+        };
+        window.addEventListener('mousemove', onMove);
+        window.addEventListener('mouseup', onUp);
+      }}
+      className="w-1.5 shrink-0 cursor-col-resize bg-border/50 hover:bg-accent/60 active:bg-accent transition-colors"
+      title="arraste pra redimensionar (e aumentar a letra)"
+    />
+  );
+}
+
 export default function CaptureLiveView({ packets, totalParsed }: Props) {
   const [filter, setFilter] = useState('');
   // filtro "só método" (INVITE/OPTIONS/REGISTER/...) — separado do filtro de
@@ -93,6 +135,9 @@ export default function CaptureLiveView({ packets, totalParsed }: Props) {
   // mensagens, que cobre ramal/número/nome que apareçam em From/To/Contact).
   const [dialogFilter, setDialogFilter] = useState('');
   const [selected, setSelected] = useState<ParsedPacket | null>(null);
+  // largura do painel de detalhe do pacote — arrastável (ver ResizeHandle); a
+  // letra do conteúdo escala junto via detailFontSize().
+  const [packetPanelW, setPacketPanelW] = useState(384);
   const [selectedCallId, setSelectedCallId] = useState<string | null>(null);
   const [tab, setTab] = useState<'packets' | 'dialogs'>('dialogs');
   // visão expandida (tela cheia) — a inline embutida na tabela é boa pra um
@@ -329,22 +374,28 @@ export default function CaptureLiveView({ packets, totalParsed }: Props) {
             </table>
           </div>
           {selected && (
-            <div className={`w-96 border-l border-border p-2.5 text-[13px] overflow-auto ${rowsMaxH}`}>
-              <div className="flex justify-between items-center mb-1.5">
-                <span className="font-medium">pacote #{selected.no}</span>
-                <button onClick={() => setSelected(null)} className="text-muted hover:text-accent text-[14px]">x</button>
+            <>
+              <ResizeHandle onDelta={(dx) => setPacketPanelW((w) => Math.max(DETAIL_MIN_W, Math.min(DETAIL_MAX_W, w - dx)))} />
+              <div
+                className={`shrink-0 p-2.5 overflow-auto ${rowsMaxH}`}
+                style={{ width: packetPanelW, fontSize: detailFontSize(packetPanelW) }}
+              >
+                <div className="flex justify-between items-center mb-1.5">
+                  <span className="font-medium">pacote #{selected.no}</span>
+                  <button onClick={() => setSelected(null)} className="text-muted hover:text-accent" style={{ fontSize: detailFontSize(packetPanelW) + 1 }}>x</button>
+                </div>
+                <div className="space-y-0.5 text-muted">
+                  <div>tempo: <span className="font-mono">{fmtT(selected.relTime)}s</span></div>
+                  <div>origem: <span className="font-mono">{selected.srcIp}{selected.srcPort ? `:${selected.srcPort}` : ''}</span></div>
+                  <div>destino: <span className="font-mono">{selected.dstIp}{selected.dstPort ? `:${selected.dstPort}` : ''}</span></div>
+                  <div>protocolo: {selected.proto}</div>
+                  <div>tamanho: {selected.length} bytes</div>
+                </div>
+                {selected.sipText && (
+                  <pre className="mt-2 whitespace-pre-wrap leading-relaxed bg-panel2 rounded p-1.5 border border-border" style={{ fontSize: 'inherit' }}>{selected.sipText}</pre>
+                )}
               </div>
-              <div className="space-y-0.5 text-muted">
-                <div>tempo: <span className="font-mono">{fmtT(selected.relTime)}s</span></div>
-                <div>origem: <span className="font-mono">{selected.srcIp}{selected.srcPort ? `:${selected.srcPort}` : ''}</span></div>
-                <div>destino: <span className="font-mono">{selected.dstIp}{selected.dstPort ? `:${selected.dstPort}` : ''}</span></div>
-                <div>protocolo: {selected.proto}</div>
-                <div>tamanho: {selected.length} bytes</div>
-              </div>
-              {selected.sipText && (
-                <pre className="mt-2 whitespace-pre-wrap text-[12.5px] leading-relaxed bg-panel2 rounded p-1.5 border border-border">{selected.sipText}</pre>
-              )}
-            </div>
+            </>
           )}
         </div>
       )}
@@ -354,6 +405,9 @@ export default function CaptureLiveView({ packets, totalParsed }: Props) {
 
 function CallFlow({ dialog, onBack, maxH }: { dialog: SipDialog; onBack: () => void; maxH?: string }) {
   const [selectedMsg, setSelectedMsg] = useState<ParsedPacket | null>(null);
+  // largura do painel de detalhe da mensagem — arrastável (ver ResizeHandle);
+  // a letra escala junto via detailFontSize(), sem precisar abrir outro painel.
+  const [msgPanelW, setMsgPanelW] = useState(384);
 
   const ips = useMemo(() => {
     const seen: string[] = [];
@@ -427,13 +481,21 @@ function CallFlow({ dialog, onBack, maxH }: { dialog: SipDialog; onBack: () => v
           </svg>
         </div>
         {selectedMsg && (
-          <div className="w-96 border border-border rounded bg-panel2 p-2.5 text-[13px] overflow-auto" style={{ maxHeight: maxH ?? 320 }}>
-            <div className="flex justify-between items-center mb-1.5">
-              <span className={`font-semibold text-[14px] ${sipInfoColor(selectedMsg)}`}>{selectedMsg.sipMethodOrStatus}</span>
-              <button onClick={() => setSelectedMsg(null)} className="text-muted hover:text-accent text-[14px]">x</button>
+          <>
+            <ResizeHandle onDelta={(dx) => setMsgPanelW((w) => Math.max(DETAIL_MIN_W, Math.min(DETAIL_MAX_W, w - dx)))} />
+            <div
+              className="border border-border rounded bg-panel2 p-2.5 overflow-auto shrink-0"
+              style={{ maxHeight: maxH ?? 320, width: msgPanelW, fontSize: detailFontSize(msgPanelW) }}
+            >
+              <div className="flex justify-between items-center mb-1.5">
+                <span className={`font-semibold ${sipInfoColor(selectedMsg)}`} style={{ fontSize: detailFontSize(msgPanelW) + 1 }}>
+                  {selectedMsg.sipMethodOrStatus}
+                </span>
+                <button onClick={() => setSelectedMsg(null)} className="text-muted hover:text-accent" style={{ fontSize: detailFontSize(msgPanelW) + 1 }}>x</button>
+              </div>
+              <pre className="whitespace-pre-wrap leading-relaxed" style={{ fontSize: 'inherit' }}>{selectedMsg.sipText}</pre>
             </div>
-            <pre className="whitespace-pre-wrap text-[12.5px] leading-relaxed">{selectedMsg.sipText}</pre>
-          </div>
+          </>
         )}
       </div>
     </div>
