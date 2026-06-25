@@ -55,6 +55,28 @@ function defaultSipFilter(): string[] {
   return ['port', '5060', 'or', 'port', '5061', 'or', '(', 'udp', 'and', 'portrange', '10000-60000', ')'];
 }
 
+/**
+ * Aceita atalhos comuns que não são BPF válido por si só (ex.: só "5061" ou
+ * "5060,5061") e normaliza pra sintaxe que o tcpdump entende. Qualquer outra
+ * coisa passa direto — assume-se que já é um filtro BPF válido (ex.: "host
+ * 10.0.0.5 and port 443").
+ */
+function normalizeFilterExpr(expr: string): string[] {
+  const trimmed = expr.trim();
+  if (/^\d+(\s*,\s*\d+)*$/.test(trimmed)) {
+    const ports = trimmed.split(/\s*,\s*/);
+    if (ports.length === 1) return ['port', ports[0]];
+    const out: string[] = ['('];
+    ports.forEach((p, i) => {
+      if (i > 0) out.push('or');
+      out.push('port', p);
+    });
+    out.push(')');
+    return out;
+  }
+  return trimmed.split(/\s+/).filter(Boolean);
+}
+
 function runCmd(cmd: string, args: string[], timeoutMs: number): Promise<{ code: number; stdout: string; stderr: string }> {
   return new Promise((resolveP) => {
     let child;
@@ -152,9 +174,9 @@ async function runPacketCapture(args: CaptureArgs, onChunk?: (b64: string) => vo
 
   let filterArgs: string[] = [];
   if (args.kind === 'sip') {
-    filterArgs = args.filterExpr ? args.filterExpr.split(/\s+/).filter(Boolean) : defaultSipFilter();
+    filterArgs = args.filterExpr ? normalizeFilterExpr(args.filterExpr) : defaultSipFilter();
   } else if (args.filterExpr) {
-    filterArgs = args.filterExpr.split(/\s+/).filter(Boolean);
+    filterArgs = normalizeFilterExpr(args.filterExpr);
   }
 
   const cmdArgs = [
@@ -163,6 +185,7 @@ async function runPacketCapture(args: CaptureArgs, onChunk?: (b64: string) => vo
     '-c', String(maxPackets),
     '-s', '0',
     '-U', // flush por pacote — essencial pra streaming em tempo real (sem isso o buffer interno do tcpdump atrasa a entrega)
+    '-p', // sem modo promíscuo — "any" não suporta mesmo, evita warning inútil no stderr
     ...filterArgs,
   ];
 

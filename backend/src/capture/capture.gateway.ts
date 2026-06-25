@@ -36,6 +36,18 @@ export class CaptureGateway implements OnGatewayConnection, OnGatewayDisconnect 
   // sessionId -> sockets assistindo (pode ter mais de um: solicitante + aprovador, por exemplo)
   private uiSockets = new Map<string, Socket[]>();
 
+  // sessionId -> chunks já emitidos NESTA captura em andamento, só em memória,
+  // só pra dar "catch-up" pra quem conectar depois do primeiro byte (ex.:
+  // aprovador que ainda não tinha clicado "assistir" quando aprovou, ou o
+  // solicitante abrindo a tela um instante depois). Sem isso, quem entra
+  // atrasado perde o cabeçalho global do .pcap e o arquivo final fica
+  // corrompido/incompatível com Wireshark. É descartado no forwardDone() —
+  // não é persistência, só compensa a corrida natural de uma conexão
+  // WebSocket vs. o agent já começar a mandar bytes.
+  private chunkBuffers = new Map<string, string[]>();
+  private chunkBufferBytes = new Map<string, number>();
+  private static readonly MAX_BUFFER_BYTES = 64 * 1024 * 1024; // folga sobre o limite de 50MB do agent
+
   constructor(
     private readonly jwt: JwtService,
     @Inject(PG_POOL) private readonly pool: Pool,
@@ -43,6 +55,13 @@ export class CaptureGateway implements OnGatewayConnection, OnGatewayDisconnect 
   ) {}
 
   forwardChunk(sessionId: string, b64: string) {
+    const buf = this.chunkBuffers.get(sessionId) ?? [];
+    const usedBytes = this.chunkBufferBytes.get(sessionId) ?? 0;
+    if (usedBytes < CaptureGateway.MAX_BUFFER_BYTES) {
+      buf.push(b64);
+      this.chunkBuffers.set(sessionId, buf);
+      this.chunkBufferBytes.set(sessionId, usedBytes + b64.length);
+    }
     for (const s of this.uiSockets.get(sessionId) ?? []) {
       if (s.connected) s.emit('chunk', b64);
     }
@@ -53,6 +72,8 @@ export class CaptureGateway implements OnGatewayConnection, OnGatewayDisconnect 
       if (s.connected) s.emit('done', meta);
     }
     this.uiSockets.delete(sessionId);
+    this.chunkBuffers.delete(sessionId);
+    this.chunkBufferBytes.delete(sessionId);
   }
 
   async handleConnection(client: Socket) {
@@ -84,6 +105,11 @@ export class CaptureGateway implements OnGatewayConnection, OnGatewayDisconnect 
         });
       } else {
         client.emit('watching', { status: sess.status, kind: sess.kind });
+        // catch-up: se a captura já estava rodando antes dessa conexão,
+        // repassa o que já foi emitido (inclui o cabeçalho global do pcap)
+        // pra esse cliente não ficar com um arquivo incompleto/inválido.
+        const buffered = this.chunkBuffers.get(sessionId) ?? [];
+        for (const b64 of buffered) client.emit('chunk', b64);
       }
     } catch (e: any) {
       this.logger.warn(`captures ws auth failed: ${e.message}`);

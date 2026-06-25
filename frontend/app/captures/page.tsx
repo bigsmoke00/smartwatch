@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { Fragment, useEffect, useRef, useState } from 'react';
 import { io, Socket } from 'socket.io-client';
 import { AppShell } from '@/components/AppShell';
 import { Card } from '@/components/ui/Card';
@@ -10,6 +10,8 @@ import { Badge } from '@/components/ui/Badge';
 import { apiFetch, ApiError, Auth } from '@/lib/api';
 import { loadMyPermissions, hasPerm } from '@/lib/perms';
 import { fmtTime, safeArray } from '@/lib/utils';
+import { PcapStreamParser, ParsedPacket } from '@/lib/pcap';
+import CaptureLiveView from '@/components/CaptureLiveView';
 
 interface ServerRow { id: string; name: string }
 type Kind = 'sip' | 'tcpdump' | 'ping';
@@ -65,6 +67,7 @@ interface WatchState {
   error?: string;
   blobUrl?: string;
   info?: string;
+  packets?: ParsedPacket[];
 }
 
 export default function CapturesPage() {
@@ -76,6 +79,10 @@ export default function CapturesPage() {
 
   const socketsRef = useRef<Map<string, Socket>>(new Map());
   const chunksRef = useRef<Map<string, Uint8Array[]>>(new Map());
+  // parser de pcap/SIP em tempo real, por sessão — só pra decodificar e
+  // exibir ao vivo (lista de pacotes/diálogos/fluxo). Não afeta o blob final
+  // salvo (esse continua sendo montado a partir dos bytes brutos).
+  const parsersRef = useRef<Map<string, PcapStreamParser>>(new Map());
 
   const [serverId, setServerId] = useState('');
   const [kind, setKind] = useState<Kind>('sip');
@@ -139,7 +146,8 @@ export default function CapturesPage() {
   function watchSession(id: string, kind: Kind) {
     if (socketsRef.current.has(id)) return;
     chunksRef.current.set(id, []);
-    setWatch((w) => ({ ...w, [id]: { kind, connected: false, done: false, bytesReceived: 0 } }));
+    if (kind !== 'ping') parsersRef.current.set(id, new PcapStreamParser());
+    setWatch((w) => ({ ...w, [id]: { kind, connected: false, done: false, bytesReceived: 0, packets: [] } }));
 
     const wsBase = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:4000';
     const s = io(`${wsBase}/ws/captures`, {
@@ -156,7 +164,16 @@ export default function CapturesPage() {
     });
     s.on('chunk', (b64: string) => {
       chunksRef.current.get(id)?.push(b64ToBytes(b64));
-      setWatch((w) => ({ ...w, [id]: { ...w[id], bytesReceived: (w[id]?.bytesReceived ?? 0) + b64.length } }));
+      const parser = parsersRef.current.get(id);
+      const newPackets = parser ? parser.feed(b64ToBytes(b64)) : [];
+      setWatch((w) => ({
+        ...w,
+        [id]: {
+          ...w[id],
+          bytesReceived: (w[id]?.bytesReceived ?? 0) + b64.length,
+          packets: newPackets.length ? [...(w[id]?.packets ?? []), ...newPackets] : w[id]?.packets,
+        },
+      }));
     });
     s.on('done', (meta: { ok: boolean; packetCount?: number; fileSizeBytes?: number; resultText?: string; error?: string }) => {
       const parts = chunksRef.current.get(id) ?? [];
@@ -254,7 +271,10 @@ export default function CapturesPage() {
                       <label className="text-xs text-muted">
                         Filtro BPF {kind === 'sip' ? '(opcional — default cobre porta 5060/5061 + faixa RTP 10000-60000)' : '(obrigatório)'}
                       </label>
-                      <Input value={filterExpr} onChange={(e) => setFilterExpr(e.target.value)} placeholder='ex: host 10.0.0.5 and port 443' />
+                      <Input value={filterExpr} onChange={(e) => setFilterExpr(e.target.value)} placeholder='ex: "port 5061", "5061" (atalho), ou "host 10.0.0.5 and port 443"' />
+                      <p className="text-[10px] text-muted mt-0.5">
+                        número de porta sozinho (ex.: "5061" ou "5060,5061") é aceito direto; pra qualquer coisa mais específica, use sintaxe BPF completa (ex.: "host 10.0.0.5 and port 443").
+                      </p>
                     </div>
                   </>
                 )}
@@ -317,7 +337,8 @@ export default function CapturesPage() {
               {safeArray<Session>(sessions).map((s) => {
                 const w = watch[s.id];
                 return (
-                  <tr key={s.id} className="border-t border-border align-top">
+                  <Fragment key={s.id}>
+                  <tr className="border-t border-border align-top">
                     <td className="px-3 py-1.5 text-xs text-muted whitespace-nowrap">{fmtTime(s.created_at)}</td>
                     <td className="px-3 py-1.5 text-xs">{s.server_name}</td>
                     <td className="px-3 py-1.5 text-xs">
@@ -385,6 +406,14 @@ export default function CapturesPage() {
                       )}
                     </td>
                   </tr>
+                  {w?.kind !== 'ping' && w?.packets && w.packets.length > 0 && (
+                    <tr className="border-t border-border">
+                      <td colSpan={7} className="px-3 py-2 bg-panel2/40">
+                        <CaptureLiveView packets={w.packets} live={!w.done} />
+                      </td>
+                    </tr>
+                  )}
+                  </Fragment>
                 );
               })}
               {!sessions.length && (
