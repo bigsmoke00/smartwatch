@@ -32,10 +32,15 @@ const DIALOG_STATE: Record<Exclude<SipDialogState, 'other'>, { label: string; cl
   rejected: { label: 'REJECTED', className: 'text-danger' },
 };
 
-/** Rótulo + cor pro Estado de um diálogo, cobrindo o caso 'other' (sem INVITE). */
+/**
+ * Rótulo + cor pro Estado de um diálogo. Estado de chamada (CALL SETUP, IN
+ * CALL, BUSY...) só existe pra diálogo de INVITE — pra REGISTER/NOTIFY/etc
+ * não tem "estado da chamada" (já tem o método na coluna Método), então a
+ * coluna Estado fica vazia em vez de repetir o método.
+ */
 function dialogStateInfo(d: SipDialog): { label: string; className: string } {
   if (d.state === 'other') {
-    return { label: d.primaryMethod, className: 'text-muted' };
+    return { label: '—', className: 'text-muted' };
   }
   return DIALOG_STATE[d.state];
 }
