@@ -6,6 +6,11 @@ import { ParsedPacket, SipDialog, buildDialogs } from '@/lib/pcap';
 interface Props {
   packets: ParsedPacket[];
   live: boolean; // ainda capturando (rola pra última linha automaticamente)
+  // total de pacotes já decodificados pelo parser (sem o cap de exibição
+  // aplicado em captures/page.tsx) — quando maior que packets.length, indica
+  // que pacotes não-SIP mais antigos foram descartados só da exibição (o
+  // .pcap final pra download continua com todos os bytes, intacto).
+  totalParsed?: number;
 }
 
 const PROTO_COLOR: Record<string, string> = {
@@ -19,7 +24,7 @@ function fmtT(t: number) {
   return t.toFixed(6);
 }
 
-export default function CaptureLiveView({ packets }: Props) {
+export default function CaptureLiveView({ packets, totalParsed }: Props) {
   const [filter, setFilter] = useState('');
   const [selected, setSelected] = useState<ParsedPacket | null>(null);
   const [selectedCallId, setSelectedCallId] = useState<string | null>(null);
@@ -58,9 +63,14 @@ export default function CaptureLiveView({ packets }: Props) {
             onClick={() => setTab('packets')}
             className={`text-[11px] px-2 py-0.5 rounded ${tab === 'packets' ? 'bg-accent/20 text-accent' : 'text-muted'}`}
           >
-            pacotes ({packets.length})
+            pacotes ({packets.length}{totalParsed && totalParsed > packets.length ? ` de ${totalParsed}` : ''})
           </button>
         </div>
+        {tab === 'packets' && totalParsed && totalParsed > packets.length && (
+          <span className="text-[10px] text-muted">
+            exibindo só os últimos {packets.length} pacotes não-SIP (de {totalParsed} no total) — o .pcap baixado tem todos
+          </span>
+        )}
         {tab === 'packets' && (
           <input
             value={filter}

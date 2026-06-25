@@ -122,13 +122,38 @@ function runCaptureProcess(
     let stderr = '';
     let totalBytes = 0;
     let exceeded = false;
+
+    // O tcpdump roda com -U (flush por pacote); em tráfego pesado (várias
+    // chamadas RTP simultâneas) o stdout dispara um 'data' por pacote —
+    // centenas/milhares por segundo. Repassar 1:1 via onChunk vira um emit
+    // de socket por pacote em CADA salto (agent -> backend -> navegador),
+    // o que satura o event loop dos três lados e atrasa até os próprios
+    // setTimeout de controle de duração. Por isso os bytes são acumulados
+    // num buffer pequeno e só vão pro onChunk em lotes (a cada 150ms ou ao
+    // passar de 64KB) — continua "tempo real" (latência sub-segundo), só
+    // não é mais um emit por pacote.
+    const FLUSH_INTERVAL_MS = 150;
+    const FLUSH_MAX_BYTES = 65536;
+    let pending: Buffer[] = [];
+    let pendingBytes = 0;
+    const flushPending = () => {
+      if (!pending.length) return;
+      const merged = Buffer.concat(pending, pendingBytes);
+      pending = [];
+      pendingBytes = 0;
+      onChunk?.(merged.toString('base64'));
+    };
+    const flushTimer = setInterval(flushPending, FLUSH_INTERVAL_MS);
+
     // SIGTERM primeiro — tcpdump fecha o pcap (flush dos headers/trailers)
     // corretamente ao receber esse sinal. SIGKILL é só fallback de segurança.
     const softTimer = setTimeout(() => { try { child.kill('SIGTERM'); } catch {} }, timeoutMs);
     const hardTimer = setTimeout(() => { try { child.kill('SIGKILL'); } catch {} }, timeoutMs + 5000);
     child.stdout.on('data', (b: Buffer) => {
       totalBytes += b.length;
-      onChunk?.(b.toString('base64'));
+      pending.push(b);
+      pendingBytes += b.length;
+      if (pendingBytes >= FLUSH_MAX_BYTES) flushPending();
       if (!exceeded && totalBytes > maxBytes) {
         exceeded = true;
         try { child.kill('SIGTERM'); } catch {}
@@ -136,11 +161,13 @@ function runCaptureProcess(
     });
     child.stderr.on('data', (b) => { stderr += b.toString(); });
     child.on('close', (code) => {
-      clearTimeout(softTimer); clearTimeout(hardTimer);
+      clearTimeout(softTimer); clearTimeout(hardTimer); clearInterval(flushTimer);
+      flushPending();
       resolveP({ code: code ?? -1, stderr, totalBytes, exceeded });
     });
     child.on('error', (e) => {
-      clearTimeout(softTimer); clearTimeout(hardTimer);
+      clearTimeout(softTimer); clearTimeout(hardTimer); clearInterval(flushTimer);
+      flushPending();
       resolveP({ code: -1, stderr: e.message, totalBytes, exceeded });
     });
   });

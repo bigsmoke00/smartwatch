@@ -116,6 +116,11 @@ export class PcapStreamParser {
   private packetNo = 0;
   private firstTs: number | null = null;
 
+  /** Total de pacotes já decodificados por essa instância (não afetado por nenhum corte/cap feito por quem consome os resultados). */
+  get totalParsed(): number {
+    return this.packetNo;
+  }
+
   /** Alimenta mais bytes recebidos do stream; devolve os pacotes novos já decodificados. */
   feed(chunk: Uint8Array): ParsedPacket[] {
     this.leftover = concatU8(this.leftover, chunk);

@@ -68,6 +68,26 @@ interface WatchState {
   blobUrl?: string;
   info?: string;
   packets?: ParsedPacket[];
+  totalPacketsParsed?: number;
+}
+
+// Tráfego pesado pode gerar milhares de pacotes/seg — manter TODOS na tabela
+// trava a aba (re-render gigante a cada chunk). Acima desse número de pacotes
+// NÃO-SIP guardados, os mais antigos são descartados (mensagens SIP nunca são
+// cortadas, pois diálogos/fluxo de chamada precisam delas intactas).
+const PACKET_CAP_NON_SIP = 5000;
+
+function capPackets(existing: ParsedPacket[], incoming: ParsedPacket[]): ParsedPacket[] {
+  if (!incoming.length) return existing;
+  const merged = existing.concat(incoming);
+  const sip: ParsedPacket[] = [];
+  const nonSip: ParsedPacket[] = [];
+  for (const p of merged) {
+    if (p.proto === 'SIP') sip.push(p);
+    else nonSip.push(p);
+  }
+  const trimmedNonSip = nonSip.length > PACKET_CAP_NON_SIP ? nonSip.slice(nonSip.length - PACKET_CAP_NON_SIP) : nonSip;
+  return sip.concat(trimmedNonSip).sort((a, b) => a.no - b.no);
 }
 
 export default function CapturesPage() {
@@ -83,11 +103,17 @@ export default function CapturesPage() {
   // exibir ao vivo (lista de pacotes/diálogos/fluxo). Não afeta o blob final
   // salvo (esse continua sendo montado a partir dos bytes brutos).
   const parsersRef = useRef<Map<string, PcapStreamParser>>(new Map());
+  // pacotes decodificados ainda não "commitados" no state — evita um
+  // setWatch (e re-render da tabela inteira) por chunk recebido, que é o que
+  // travava a aba em captura pesada. São aplicados ao state em lote pelo
+  // efeito de flush periódico abaixo.
+  const pendingPacketsRef = useRef<Map<string, ParsedPacket[]>>(new Map());
 
   const [serverId, setServerId] = useState('');
   const [kind, setKind] = useState<Kind>('sip');
   const [iface, setIface] = useState('any');
   const [filterExpr, setFilterExpr] = useState('');
+  const [includeRtp, setIncludeRtp] = useState(false);
   const [targetHost, setTargetHost] = useState('');
   const [durationSeconds, setDurationSeconds] = useState(60);
   const [maxPackets, setMaxPackets] = useState(200000);
@@ -114,6 +140,32 @@ export default function CapturesPage() {
     for (const s of socketsRef.current.values()) s.disconnect();
   }, []);
 
+  // Flush em lote dos pacotes decodificados acumulados em pendingPacketsRef —
+  // roda a cada 250ms em vez de comitar pro state a cada chunk recebido do
+  // socket (que em captura pesada chega muitas vezes por segundo e travava a
+  // aba ao re-renderizar a tabela inteira a cada vez).
+  useEffect(() => {
+    const t = setInterval(() => {
+      if (!pendingPacketsRef.current.size) return;
+      setWatch((w) => {
+        let changed = false;
+        const next = { ...w };
+        for (const [id, pending] of pendingPacketsRef.current.entries()) {
+          if (!pending.length || !next[id]) continue;
+          next[id] = {
+            ...next[id],
+            packets: capPackets(next[id].packets ?? [], pending),
+            totalPacketsParsed: parsersRef.current.get(id)?.totalParsed ?? next[id].totalPacketsParsed,
+          };
+          changed = true;
+        }
+        pendingPacketsRef.current.clear();
+        return changed ? next : w;
+      });
+    }, 250);
+    return () => clearInterval(t);
+  }, []);
+
   const canRequest = hasPerm(perms, 'capture:request');
   const canApprove = hasPerm(perms, 'capture:approve');
 
@@ -121,12 +173,18 @@ export default function CapturesPage() {
     if (!serverId || !reason.trim()) return alert('selecione um servidor e informe o motivo');
     if (kind === 'ping' && !targetHost.trim()) return alert('informe o host/IP de destino para o diagnóstico');
     if (kind === 'tcpdump' && !filterExpr.trim()) return alert('informe o filtro BPF (ex.: "host 1.2.3.4 and port 443")');
+    // Em SIP, sem filtro customizado e sem "incluir RTP" marcado, captura só
+    // a sinalização (porta 5060/5061) — RTP de áudio é pesado e na maioria
+    // das vezes não é o que se quer analisar (sngrep também é assim).
+    const effectiveFilter = filterExpr.trim()
+      ? filterExpr
+      : (kind === 'sip' && !includeRtp ? 'port 5060 or port 5061' : undefined);
     try {
       await apiFetch('/captures', {
         method: 'POST',
         body: JSON.stringify({
           serverId, kind, iface: iface || 'any',
-          filterExpr: filterExpr || undefined, targetHost: targetHost || undefined,
+          filterExpr: effectiveFilter, targetHost: targetHost || undefined,
           durationSeconds, maxPackets, reason,
         }),
       });
@@ -166,13 +224,16 @@ export default function CapturesPage() {
       chunksRef.current.get(id)?.push(b64ToBytes(b64));
       const parser = parsersRef.current.get(id);
       const newPackets = parser ? parser.feed(b64ToBytes(b64)) : [];
+      if (newPackets.length) {
+        const pending = pendingPacketsRef.current.get(id) ?? [];
+        pendingPacketsRef.current.set(id, pending.concat(newPackets));
+      }
+      // bytesReceived é só um número (leve) — atualiza direto; os pacotes
+      // decodificados (pesados, podem ser centenas por chunk) vão pro
+      // acumulador acima e só entram no state no flush periódico.
       setWatch((w) => ({
         ...w,
-        [id]: {
-          ...w[id],
-          bytesReceived: (w[id]?.bytesReceived ?? 0) + b64.length,
-          packets: newPackets.length ? [...(w[id]?.packets ?? []), ...newPackets] : w[id]?.packets,
-        },
+        [id]: { ...w[id], bytesReceived: (w[id]?.bytesReceived ?? 0) + b64.length },
       }));
     });
     s.on('done', (meta: { ok: boolean; packetCount?: number; fileSizeBytes?: number; resultText?: string; error?: string }) => {
@@ -182,9 +243,19 @@ export default function CapturesPage() {
         const blob = new Blob(parts as BlobPart[], { type: 'application/vnd.tcpdump.pcap' });
         blobUrl = URL.createObjectURL(blob);
       }
+      // captura terminou — comita de uma vez qualquer pacote que ainda
+      // estivesse esperando o próximo flush periódico, senão os últimos
+      // pacotes decodificados ficam de fora da visualização.
+      const pending = pendingPacketsRef.current.get(id) ?? [];
+      pendingPacketsRef.current.delete(id);
       setWatch((w) => ({
         ...w,
-        [id]: { ...w[id], done: true, ok: meta.ok, packetCount: meta.packetCount, fileSizeBytes: meta.fileSizeBytes, resultText: meta.resultText, error: meta.error, blobUrl },
+        [id]: {
+          ...w[id],
+          packets: capPackets(w[id]?.packets ?? [], pending),
+          totalPacketsParsed: parsersRef.current.get(id)?.totalParsed ?? w[id]?.totalPacketsParsed,
+          done: true, ok: meta.ok, packetCount: meta.packetCount, fileSizeBytes: meta.fileSizeBytes, resultText: meta.resultText, error: meta.error, blobUrl,
+        },
       }));
       loadSessions();
       s.disconnect();
@@ -276,6 +347,14 @@ export default function CapturesPage() {
                         número de porta sozinho (ex.: "5061" ou "5060,5061") é aceito direto; pra qualquer coisa mais específica, use sintaxe BPF completa (ex.: "host 10.0.0.5 and port 443").
                       </p>
                     </div>
+                    {kind === 'sip' && (
+                      <div className="md:col-span-2">
+                        <label className="flex items-center gap-1.5 text-xs text-muted">
+                          <input type="checkbox" checked={includeRtp} onChange={(e) => setIncludeRtp(e.target.checked)} disabled={!!filterExpr.trim()} />
+                          incluir mídia RTP (áudio) na captura — pesado, deixe desmarcado se só quer ver a sinalização SIP
+                        </label>
+                      </div>
+                    )}
                   </>
                 )}
 
@@ -409,7 +488,7 @@ export default function CapturesPage() {
                   {w?.kind !== 'ping' && w?.packets && w.packets.length > 0 && (
                     <tr className="border-t border-border">
                       <td colSpan={7} className="px-3 py-2 bg-panel2/40">
-                        <CaptureLiveView packets={w.packets} live={!w.done} />
+                        <CaptureLiveView packets={w.packets} live={!w.done} totalParsed={w.totalPacketsParsed} />
                       </td>
                     </tr>
                   )}
