@@ -11,7 +11,8 @@ FROM node:20-alpine AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 # bash, sudo, iproute2 (ss), procps (ps real), curl — necessários para terminal e discovery
-RUN apk add --no-cache bash sudo iproute2 procps curl
+# tcpdump — necessário para captura de pacotes SIP/RTP (feature de captures)
+RUN apk add --no-cache bash sudo iproute2 procps curl tcpdump
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/dist ./dist
 COPY package*.json ./

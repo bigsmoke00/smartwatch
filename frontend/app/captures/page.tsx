@@ -338,6 +338,11 @@ export default function CapturesPage() {
                       {s.status === 'running' && !w && (
                         <div className="text-[10px] text-muted mt-0.5">em execução — abra "assistir" pra acompanhar (sem replay depois)</div>
                       )}
+                      {s.status === 'pending' && w && !w.done && (
+                        <div className="text-[10px] text-muted mt-0.5">
+                          {w.connected ? 'conectado — aguardando aprovação para iniciar a captura...' : 'conectando ao stream...'}
+                        </div>
+                      )}
 
                       {w?.info && <div className="text-[10px] text-muted mt-0.5">{w.info}</div>}
 
@@ -353,7 +358,7 @@ export default function CapturesPage() {
                       {w?.done && w.kind === 'ping' && w.resultText && (
                         <pre className="text-[10px] text-muted mt-1 whitespace-pre-wrap max-w-md">{w.resultText}</pre>
                       )}
-                      {w?.error && <div className="text-[10px] text-danger mt-0.5">{w.error}</div>}
+                      {w?.error && !w?.done && <div className="text-[10px] text-danger mt-0.5">{w.error}</div>}
 
                       {s.status === 'completed' && s.kind !== 'ping' && !w && (
                         <div className="text-[10px] text-muted mt-0.5">
