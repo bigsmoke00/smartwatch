@@ -2,24 +2,25 @@
  * Captura de rede/SIP (Zero Trust) — roda só quando o backend manda (sessão
  * já aprovada por um humano, ver capture_sessions no backend).
  *
+ * Importante: a captura NUNCA toca disco, nem no agent nem no backend. O
+ * tcpdump escreve o .pcap em stdout (`-w -`) e cada chunk de bytes é
+ * repassado em tempo real pro backend via o mesmo canal de streaming
+ * genérico já usado pra progresso de `docker pull` (docker:stream,
+ * correlacionado por reqId — ver control.ts/control.gateway.ts). O backend
+ * só repassa pra quem estiver assistindo a sessão ao vivo (ws /ws/captures);
+ * não existe upload, não existe arquivo intermediário, não existe
+ * "salvar no servidor" — se ninguém estiver vendo em tempo real quando a
+ * captura rodar, o conteúdo se perde (por design, a pedido do usuário).
+ *
  * Dois fluxos:
  *  - kind='ping':            diagnóstico básico (ping + mtr se disponível),
  *                             resultado em texto, devolvido direto na
- *                             resposta do invoke() (sem upload de arquivo).
- *  - kind='sip'|'tcpdump':    tcpdump grava um .pcap local; ao terminar (por
- *                             tempo ou limite de pacotes), o agent faz o
- *                             upload do arquivo pro backend via HTTP (mesmo
- *                             padrão de ingest: JSON + gzip + x-api-key) e
- *                             apaga o arquivo local. O backend é quem marca
- *                             a sessão como concluída ao receber o upload.
+ *                             resposta do invoke().
+ *  - kind='sip'|'tcpdump':    tcpdump com -w - (stdout), cada chunk vai pro
+ *                             callback onChunk em base64, sem nunca ser
+ *                             persistido em arquivo.
  */
 import { spawn } from 'node:child_process';
-import { promises as fsp } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { gzipSync } from 'node:zlib';
-import { request } from 'undici';
-import { config } from './config.js';
 
 const MAX_CAPTURE_BYTES = parseInt(process.env.LOGWATCH_MAX_CAPTURE_BYTES ?? '52428800', 10); // 50MB
 
@@ -54,44 +55,78 @@ function defaultSipFilter(): string[] {
   return ['port', '5060', 'or', 'port', '5061', 'or', '(', 'udp', 'and', 'portrange', '10000-60000', ')'];
 }
 
-function runCmd(cmd: string, args: string[], timeoutMs: number): Promise<{ code: number; stdout: string; stderr: string; timedOut: boolean }> {
+function runCmd(cmd: string, args: string[], timeoutMs: number): Promise<{ code: number; stdout: string; stderr: string }> {
   return new Promise((resolveP) => {
     let child;
     try {
       child = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'] });
     } catch (e: any) {
-      resolveP({ code: -1, stdout: '', stderr: e.message, timedOut: false });
+      resolveP({ code: -1, stdout: '', stderr: e.message });
       return;
     }
     let stdout = '';
     let stderr = '';
-    let timedOut = false;
-    // SIGTERM primeiro — tcpdump fecha o .pcap corretamente ao receber esse
-    // sinal (flush do buffer). SIGKILL (5s depois, se ainda vivo) é só
-    // fallback de segurança.
-    const softTimer = setTimeout(() => {
-      timedOut = true;
-      try { child.kill('SIGTERM'); } catch {}
-    }, timeoutMs);
-    const hardTimer = setTimeout(() => {
-      try { child.kill('SIGKILL'); } catch {}
-    }, timeoutMs + 5000);
+    const softTimer = setTimeout(() => { try { child.kill('SIGTERM'); } catch {} }, timeoutMs);
+    const hardTimer = setTimeout(() => { try { child.kill('SIGKILL'); } catch {} }, timeoutMs + 5000);
     child.stdout.on('data', (b) => { stdout += b.toString(); });
     child.stderr.on('data', (b) => { stderr += b.toString(); });
     child.on('close', (code) => {
       clearTimeout(softTimer); clearTimeout(hardTimer);
-      resolveP({ code: code ?? -1, stdout, stderr, timedOut });
+      resolveP({ code: code ?? -1, stdout, stderr });
     });
     child.on('error', (e) => {
       clearTimeout(softTimer); clearTimeout(hardTimer);
-      resolveP({ code: -1, stdout, stderr: e.message, timedOut: false });
+      resolveP({ code: -1, stdout, stderr: e.message });
     });
   });
 }
 
-export async function runCapture(args: CaptureArgs): Promise<CaptureResult> {
+/** Roda um comando cujo stdout é o próprio .pcap (binário), repassando chunk a chunk via onChunk. */
+function runCaptureProcess(
+  cmd: string,
+  args: string[],
+  timeoutMs: number,
+  maxBytes: number,
+  onChunk?: (b64: string) => void,
+): Promise<{ code: number; stderr: string; totalBytes: number; exceeded: boolean }> {
+  return new Promise((resolveP) => {
+    let child;
+    try {
+      child = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    } catch (e: any) {
+      resolveP({ code: -1, stderr: e.message, totalBytes: 0, exceeded: false });
+      return;
+    }
+    let stderr = '';
+    let totalBytes = 0;
+    let exceeded = false;
+    // SIGTERM primeiro — tcpdump fecha o pcap (flush dos headers/trailers)
+    // corretamente ao receber esse sinal. SIGKILL é só fallback de segurança.
+    const softTimer = setTimeout(() => { try { child.kill('SIGTERM'); } catch {} }, timeoutMs);
+    const hardTimer = setTimeout(() => { try { child.kill('SIGKILL'); } catch {} }, timeoutMs + 5000);
+    child.stdout.on('data', (b: Buffer) => {
+      totalBytes += b.length;
+      onChunk?.(b.toString('base64'));
+      if (!exceeded && totalBytes > maxBytes) {
+        exceeded = true;
+        try { child.kill('SIGTERM'); } catch {}
+      }
+    });
+    child.stderr.on('data', (b) => { stderr += b.toString(); });
+    child.on('close', (code) => {
+      clearTimeout(softTimer); clearTimeout(hardTimer);
+      resolveP({ code: code ?? -1, stderr, totalBytes, exceeded });
+    });
+    child.on('error', (e) => {
+      clearTimeout(softTimer); clearTimeout(hardTimer);
+      resolveP({ code: -1, stderr: e.message, totalBytes, exceeded });
+    });
+  });
+}
+
+export async function runCapture(args: CaptureArgs, onChunk?: (b64: string) => void): Promise<CaptureResult> {
   if (args.kind === 'ping') return runPing(args);
-  return runPacketCapture(args);
+  return runPacketCapture(args, onChunk);
 }
 
 async function runPing(args: CaptureArgs): Promise<CaptureResult> {
@@ -111,8 +146,7 @@ async function runPing(args: CaptureArgs): Promise<CaptureResult> {
   return { ok: true, resultText: parts.join('\n') };
 }
 
-async function runPacketCapture(args: CaptureArgs): Promise<CaptureResult> {
-  const file = join(tmpdir(), `capture-${args.sessionId}.pcap`);
+async function runPacketCapture(args: CaptureArgs, onChunk?: (b64: string) => void): Promise<CaptureResult> {
   const durationSeconds = Math.min(Math.max(args.durationSeconds ?? 60, 5), 1800);
   const maxPackets = Math.min(Math.max(args.maxPackets ?? 200_000, 100), 1_000_000);
 
@@ -125,73 +159,29 @@ async function runPacketCapture(args: CaptureArgs): Promise<CaptureResult> {
 
   const cmdArgs = [
     '-i', args.iface || 'any',
-    '-w', file,
+    '-w', '-', // stdout — nunca toca disco
     '-c', String(maxPackets),
     '-s', '0',
-    '-U', // flush por pacote — reduz risco de perder dados se for morto antes do término natural
+    '-U', // flush por pacote — essencial pra streaming em tempo real (sem isso o buffer interno do tcpdump atrasa a entrega)
     ...filterArgs,
   ];
 
-  const r = await runCmd(tcpdumpPath(), cmdArgs, durationSeconds * 1000);
+  const r = await runCaptureProcess(tcpdumpPath(), cmdArgs, durationSeconds * 1000, MAX_CAPTURE_BYTES, onChunk);
 
-  let size = 0;
-  try {
-    const stat = await fsp.stat(file);
-    size = stat.size;
-  } catch {
-    return { ok: false, error: r.stderr.trim() || 'tcpdump não gerou arquivo de captura (sem permissão? interface inválida?)' };
+  if (r.totalBytes === 0) {
+    return { ok: false, error: r.stderr.trim() || 'nenhum pacote capturado no período/filtro informado (sem permissão? interface inválida?)' };
   }
-
-  if (size === 0) {
-    await fsp.unlink(file).catch(() => {});
-    return { ok: false, error: `nenhum pacote capturado no período/filtro informado.\n${r.stderr.trim()}` };
-  }
-  if (size > MAX_CAPTURE_BYTES) {
-    await fsp.unlink(file).catch(() => {});
-    return { ok: false, error: `captura excedeu o limite de tamanho (${size} > ${MAX_CAPTURE_BYTES} bytes) — reduza a duração/pacotes ou refine o filtro` };
-  }
-
-  const buf = await fsp.readFile(file);
-  await fsp.unlink(file).catch(() => {});
 
   const packetsLine = r.stderr.match(/(\d+) packets captured/);
   const packetCount = packetsLine ? parseInt(packetsLine[1], 10) : undefined;
 
-  const uploadOk = await uploadCapture(args.sessionId, buf, packetCount, size);
-  if (!uploadOk.ok) return { ok: false, error: uploadOk.error, packetCount, fileSizeBytes: size };
-
-  return { ok: true, packetCount, fileSizeBytes: size };
-}
-
-async function uploadCapture(
-  sessionId: string,
-  buf: Buffer,
-  packetCount: number | undefined,
-  fileSizeBytes: number,
-): Promise<{ ok: boolean; error?: string }> {
-  const wsBase = config.ingestUrl.replace(/\/api\/.*$/, '').replace(/\/api$/, '');
-  const uploadUrl = `${wsBase}/api/captures/${sessionId}/upload`;
-  const body = JSON.stringify({ fileBase64: buf.toString('base64'), packetCount, fileSizeBytes });
-  const gz = gzipSync(Buffer.from(body));
-  try {
-    const res = await request(uploadUrl, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        'content-encoding': 'gzip',
-        'x-api-key': config.apiKey,
-      },
-      body: gz,
-      bodyTimeout: 60_000,
-      headersTimeout: 30_000,
-    });
-    await res.body.text().then((t) => {
-      if (res.statusCode < 200 || res.statusCode >= 300) {
-        throw new Error(`upload falhou (${res.statusCode}): ${t.slice(0, 200)}`);
-      }
-    });
-    return { ok: true };
-  } catch (e: any) {
-    return { ok: false, error: `upload do .pcap falhou: ${e.message}` };
+  if (r.exceeded) {
+    return {
+      ok: false,
+      error: `captura excedeu o limite de tamanho (${MAX_CAPTURE_BYTES} bytes) — reduza a duração/pacotes ou refine o filtro`,
+      packetCount, fileSizeBytes: r.totalBytes,
+    };
   }
+
+  return { ok: true, packetCount, fileSizeBytes: r.totalBytes };
 }

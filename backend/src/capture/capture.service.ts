@@ -7,12 +7,9 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { Pool } from 'pg';
-import { promises as fsp } from 'fs';
-import { join } from 'path';
 import { PG_POOL } from '../db/db.module';
 import { ControlGateway } from '../docker-manager/control.gateway';
-
-const CAPTURES_DIR = process.env.CAPTURES_DIR || join(process.cwd(), 'data', 'captures');
+import { CaptureGateway } from './capture.gateway';
 
 export interface CaptureSessionRow {
   id: string;
@@ -27,7 +24,6 @@ export interface CaptureSessionRow {
   status: string;
   requested_by: string;
   approved_by: string | null;
-  file_path: string | null;
   file_size_bytes: number | null;
   packet_count: number | null;
   result_text: string | null;
@@ -37,13 +33,14 @@ export interface CaptureSessionRow {
 
 /**
  * Captura de rede/SIP sob aprovação — reusa o motor pedido→aprovação do
- * Terminal Web, mas a "execução" é assíncrona: approve() dispara o agent e
- * retorna na hora (não trava a requisição HTTP por até 30min). O resultado
- * chega depois por dois caminhos:
- *  - kind='ping': pela resolução do próprio invoke() (rápido, síncrono pro agent).
- *  - kind='sip'|'tcpdump': pelo upload do .pcap (handleUpload), que é quem
- *    efetivamente marca a sessão como 'completed' — o invoke() aqui só serve
- *    de sinalização de erro/timeout caso o agent nunca chegue a fazer o upload.
+ * Terminal Web, mas é 100% em tempo real e NADA fica salvo em disco (nem no
+ * agent, nem aqui): approve() dispara o agent via invokeStream() e cada
+ * chunk do .pcap (vindo direto do stdout do tcpdump) é repassado na hora
+ * pro CaptureGateway, que entrega pra quem estiver assistindo a sessão via
+ * ws /ws/captures. O navegador é quem monta o arquivo final e oferece
+ * "salvar". Se ninguém estiver olhando no momento, o conteúdo se perde —
+ * essa é a troca deliberada por não persistir tráfego de chamadas na
+ * plataforma.
  */
 @Injectable()
 export class CaptureService {
@@ -52,11 +49,8 @@ export class CaptureService {
   constructor(
     @Inject(PG_POOL) private readonly pool: Pool,
     private readonly control: ControlGateway,
+    private readonly gateway: CaptureGateway,
   ) {}
-
-  private async ensureDir() {
-    await fsp.mkdir(CAPTURES_DIR, { recursive: true });
-  }
 
   async listServersBasic() {
     const r = await this.pool.query(`SELECT id, name FROM servers ORDER BY name`);
@@ -123,7 +117,11 @@ export class CaptureService {
     return { ok: true };
   }
 
-  /** Aprova e dispara o agent — não espera o término (retorna logo). */
+  /**
+   * Aprova e dispara o agent — não espera o término (retorna logo). O
+   * cliente que chamou approve() deve já estar conectado em /ws/captures
+   * com esse sessionId pra não perder o início do stream.
+   */
   async approve(id: string, approverId: string) {
     const s = await this.getOrThrow(id);
     if (s.status !== 'pending') throw new BadRequestException('sessão não está pendente');
@@ -137,26 +135,45 @@ export class CaptureService {
     );
 
     const timeoutMs = (s.duration_seconds + 30) * 1000;
-    this.control.invoke(s.server_id, 'capture.run', {
+    const args = {
       sessionId: id, kind: s.kind, iface: s.iface, filterExpr: s.filter_expr ?? undefined,
       targetHost: s.target_host ?? undefined, durationSeconds: s.duration_seconds, maxPackets: s.max_packets,
-    }, { timeoutMs })
-      .then(async (result: any) => {
-        if (s.kind === 'ping') {
+    };
+
+    if (s.kind === 'ping') {
+      // Texto curto, sem stream — resolve direto na resposta do invoke().
+      this.control.invoke(s.server_id, 'capture.run', args, { timeoutMs })
+        .then(async (result: any) => {
           await this.pool.query(
             `UPDATE capture_sessions SET status=$2, result_text=$3, error_text=$4, finished_at=now() WHERE id=$1 AND status='running'`,
             [id, result?.ok ? 'completed' : 'failed', result?.resultText ?? null, result?.error ?? null],
           );
-          return;
-        }
-        // sip/tcpdump: o upload (handleUpload) já deve ter marcado 'completed'.
-        // Se o agent respondeu erro (não chegou a subir o arquivo), registra a falha.
-        if (!result?.ok) {
+          this.gateway.forwardDone(id, { ok: !!result?.ok, resultText: result?.resultText, error: result?.error });
+        })
+        .catch(async (e: any) => {
+          this.logger.warn(`capture.run (ping) falhou (session ${id.slice(0, 8)}): ${e.message}`);
           await this.pool.query(
             `UPDATE capture_sessions SET status='failed', error_text=$2, finished_at=now() WHERE id=$1 AND status='running'`,
-            [id, result?.error ?? 'falha desconhecida na captura'],
+            [id, e.message],
           );
-        }
+          this.gateway.forwardDone(id, { ok: false, error: e.message });
+        });
+      return { ok: true, status: 'running' };
+    }
+
+    // sip/tcpdump: streaming ao vivo, sem disco em nenhum dos dois lados.
+    this.control.invokeStream(s.server_id, 'capture.run', args, (chunkB64: string) => {
+      this.gateway.forwardChunk(id, chunkB64);
+    }, timeoutMs)
+      .then(async (result: any) => {
+        const status = result?.ok ? 'completed' : 'failed';
+        await this.pool.query(
+          `UPDATE capture_sessions SET status=$2, packet_count=$3, file_size_bytes=$4, error_text=$5, finished_at=now() WHERE id=$1 AND status='running'`,
+          [id, status, result?.packetCount ?? null, result?.fileSizeBytes ?? null, result?.error ?? null],
+        );
+        this.gateway.forwardDone(id, {
+          ok: !!result?.ok, packetCount: result?.packetCount, fileSizeBytes: result?.fileSizeBytes, error: result?.error,
+        });
       })
       .catch(async (e: any) => {
         this.logger.warn(`capture.run falhou (session ${id.slice(0, 8)}): ${e.message}`);
@@ -164,39 +181,9 @@ export class CaptureService {
           `UPDATE capture_sessions SET status='failed', error_text=$2, finished_at=now() WHERE id=$1 AND status='running'`,
           [id, e.message],
         );
+        this.gateway.forwardDone(id, { ok: false, error: e.message });
       });
 
     return { ok: true, status: 'running' };
-  }
-
-  /** Chamado pelo CaptureController via endpoint autenticado por API key do agent. */
-  async handleUpload(sessionId: string, serverId: string, opts: { fileBase64: string; packetCount?: number; fileSizeBytes?: number }) {
-    const s = await this.getOrThrow(sessionId);
-    if (s.server_id !== serverId) {
-      throw new ForbiddenException('sessão não pertence a este servidor');
-    }
-    await this.ensureDir();
-    const filePath = join(CAPTURES_DIR, `${sessionId}.pcap`);
-    const buf = Buffer.from(opts.fileBase64, 'base64');
-    await fsp.writeFile(filePath, buf);
-    await this.pool.query(
-      `UPDATE capture_sessions
-         SET status='completed', file_path=$2, file_size_bytes=$3, packet_count=$4, finished_at=now()
-       WHERE id=$1`,
-      [sessionId, filePath, opts.fileSizeBytes ?? buf.length, opts.packetCount ?? null],
-    );
-    return { ok: true };
-  }
-
-  /** Retorna o path físico pro controller fazer o stream — quem chama já validou permissão/ownership. */
-  async getDownloadPath(id: string, userId: string, canApproveAny: boolean): Promise<{ path: string; filename: string }> {
-    const s = await this.getOrThrow(id);
-    if (!canApproveAny && s.requested_by !== userId) {
-      throw new ForbiddenException('você só pode baixar capturas que você mesmo solicitou');
-    }
-    if (s.status !== 'completed' || !s.file_path) {
-      throw new BadRequestException('captura ainda não está concluída ou não gerou arquivo');
-    }
-    return { path: s.file_path, filename: `capture-${id.slice(0, 8)}.pcap` };
   }
 }

@@ -272,12 +272,18 @@ async function dispatch(docker: Docker, op: string, args: any, reqId: string): P
 
     // ========= Captura de rede/SIP (Zero Trust) =========
     // Só chega aqui depois de aprovado no backend (capture_sessions). Bloqueia
-    // até a captura terminar (ping é rápido; sip/tcpdump duram args.durationSeconds) —
-    // por isso o backend dispara isso de forma assíncrona (não espera a
-    // resposta HTTP da aprovação), só lê o resultado pelo polling normal de
-    // capture_sessions.
+    // até a captura terminar (ping é rápido; sip/tcpdump duram args.durationSeconds).
+    // Pra sip/tcpdump, cada chunk do .pcap (vindo de stdout do tcpdump, nunca
+    // de um arquivo) é repassado em tempo real via docker:stream — o mesmo
+    // canal genérico usado pro progresso de `docker pull` — correlacionado
+    // por reqId. O backend só repassa esses chunks pra quem estiver olhando a
+    // sessão ao vivo (ws /ws/captures); nada fica salvo em disco em nenhum
+    // lado. Por isso o backend dispara isso via invokeStream() sem travar a
+    // resposta HTTP da aprovação.
     case 'capture.run':
-      return runCapture(args);
+      return runCapture(args, (chunkB64) => {
+        socket?.emit('docker:stream', { reqId, data: chunkB64 });
+      });
 
     default:
       throw new Error(`Unknown op: ${op}`);

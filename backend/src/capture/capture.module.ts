@@ -1,18 +1,16 @@
 import {
-  Body, Controller, Get, Module, Param, Post, Query, Req, Res, UseGuards,
+  Body, Controller, Get, Module, Param, Post, Query,
 } from '@nestjs/common';
-import { Request, Response } from 'express';
-import { ApiBearerAuth, ApiSecurity, ApiTags } from '@nestjs/swagger';
+import { JwtModule } from '@nestjs/jwt';
+import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { IsIn, IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
 import { CaptureService } from './capture.service';
+import { CaptureGateway } from './capture.gateway';
 import { RequirePermission } from '../auth/permissions.decorator';
 import { Audit } from '../audit/audit.decorator';
 import { CurrentUser, JwtUserPayload } from '../auth/current-user.decorator';
-import { Public } from '../auth/public.decorator';
-import { ApiKeyGuard } from '../logs/api-key.guard';
 import { DockerManagerModule } from '../docker-manager/docker-manager.module';
 import { RolesModule } from '../roles/roles.module';
-import { RolesService } from '../roles/roles.service';
 
 class RequestCaptureDto {
   @IsString() serverId!: string;
@@ -25,20 +23,11 @@ class RequestCaptureDto {
   @IsString() reason!: string;
 }
 
-class UploadCaptureDto {
-  @IsString() fileBase64!: string;
-  @IsOptional() @IsInt() packetCount?: number;
-  @IsOptional() @IsInt() fileSizeBytes?: number;
-}
-
 @ApiTags('captures')
 @ApiBearerAuth()
 @Controller('captures')
 class CaptureController {
-  constructor(
-    private readonly svc: CaptureService,
-    private readonly roles: RolesService,
-  ) {}
+  constructor(private readonly svc: CaptureService) {}
 
   @RequirePermission('capture:request', 'capture:approve')
   @Get('servers')
@@ -68,38 +57,24 @@ class CaptureController {
     return this.svc.reject(id, u.sub);
   }
 
+  // Aprovar dispara a captura ao vivo — quem chama isso deve já estar
+  // conectado em /ws/captures com esse sessionId, senão perde o stream
+  // (não tem replay; nada fica salvo em disco, por design).
   @RequirePermission('capture:approve')
   @Audit('capture.approve')
   @Post(':id/approve')
   approve(@Param('id') id: string, @CurrentUser() u: JwtUserPayload) {
     return this.svc.approve(id, u.sub);
   }
-
-  // ===== Endpoint do agent (API key, não JWT) =====
-  @Public()
-  @UseGuards(ApiKeyGuard)
-  @ApiSecurity('api-key')
-  @Post(':id/upload')
-  upload(@Param('id') id: string, @Body() dto: UploadCaptureDto, @Req() req: Request & { server: any }) {
-    return this.svc.handleUpload(id, req.server.id, dto);
-  }
-
-  @RequirePermission('capture:request', 'capture:approve')
-  @Get(':id/download')
-  async download(
-    @Param('id') id: string,
-    @CurrentUser() u: JwtUserPayload,
-    @Res() res: Response,
-  ) {
-    const perms = await this.roles.permissionsOf(u.sub);
-    const { path, filename } = await this.svc.getDownloadPath(id, u.sub, perms.has('capture:approve'));
-    res.download(path, filename);
-  }
 }
 
 @Module({
-  imports: [DockerManagerModule, RolesModule],
-  providers: [CaptureService, ApiKeyGuard],
+  imports: [
+    DockerManagerModule,
+    RolesModule,
+    JwtModule.register({ secret: process.env.JWT_SECRET ?? 'dev-secret' }),
+  ],
+  providers: [CaptureService, CaptureGateway],
   controllers: [CaptureController],
 })
 export class CaptureModule {}

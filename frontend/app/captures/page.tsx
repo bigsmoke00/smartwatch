@@ -1,6 +1,7 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { io, Socket } from 'socket.io-client';
 import { AppShell } from '@/components/AppShell';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
@@ -9,8 +10,6 @@ import { Badge } from '@/components/ui/Badge';
 import { apiFetch, ApiError, Auth } from '@/lib/api';
 import { loadMyPermissions, hasPerm } from '@/lib/perms';
 import { fmtTime, safeArray } from '@/lib/utils';
-
-const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api';
 
 interface ServerRow { id: string; name: string }
 type Kind = 'sip' | 'tcpdump' | 'ping';
@@ -40,11 +39,32 @@ const KIND_LABEL: Record<Kind, string> = {
   ping: 'Diagnóstico (ping/mtr)',
 };
 
-function fmtBytes(n: number | null) {
+function fmtBytes(n: number | null | undefined) {
   if (!n) return '—';
   if (n < 1024) return `${n} B`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
   return `${(n / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function b64ToBytes(b64: string): Uint8Array {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes;
+}
+
+interface WatchState {
+  kind: Kind;
+  connected: boolean;
+  done: boolean;
+  ok?: boolean;
+  bytesReceived: number;
+  packetCount?: number;
+  fileSizeBytes?: number;
+  resultText?: string;
+  error?: string;
+  blobUrl?: string;
+  info?: string;
 }
 
 export default function CapturesPage() {
@@ -52,6 +72,10 @@ export default function CapturesPage() {
   const [servers, setServers] = useState<ServerRow[]>([]);
   const [sessions, setSessions] = useState<Session[]>([]);
   const [onlyPending, setOnlyPending] = useState(false);
+  const [watch, setWatch] = useState<Record<string, WatchState>>({});
+
+  const socketsRef = useRef<Map<string, Socket>>(new Map());
+  const chunksRef = useRef<Map<string, Uint8Array[]>>(new Map());
 
   const [serverId, setServerId] = useState('');
   const [kind, setKind] = useState<Kind>('sip');
@@ -78,6 +102,11 @@ export default function CapturesPage() {
     return () => clearInterval(t);
   }, [onlyPending]);
 
+  // Desconecta todos os sockets de captura ao desmontar a página.
+  useEffect(() => () => {
+    for (const s of socketsRef.current.values()) s.disconnect();
+  }, []);
+
   const canRequest = hasPerm(perms, 'capture:request');
   const canApprove = hasPerm(perms, 'capture:approve');
 
@@ -102,8 +131,59 @@ export default function CapturesPage() {
     }
   }
 
-  async function approve(id: string) {
-    if (!confirm('Aprovar dispara a captura agora no servidor (até a duração configurada). Confirmar?')) return;
+  /**
+   * Conecta no /ws/captures pra essa sessão (se ainda não estiver conectado).
+   * É essencial chamar isso ANTES de aprovar, senão os primeiros chunks do
+   * stream se perdem — a captura é só em tempo real, sem replay/sem disco.
+   */
+  function watchSession(id: string, kind: Kind) {
+    if (socketsRef.current.has(id)) return;
+    chunksRef.current.set(id, []);
+    setWatch((w) => ({ ...w, [id]: { kind, connected: false, done: false, bytesReceived: 0 } }));
+
+    const wsBase = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:4000';
+    const s = io(`${wsBase}/ws/captures`, {
+      transports: ['websocket'],
+      auth: { token: Auth.token() ?? '', sessionId: id },
+    });
+    socketsRef.current.set(id, s);
+
+    s.on('watching', () => {
+      setWatch((w) => ({ ...w, [id]: { ...w[id], connected: true } }));
+    });
+    s.on('info', (data: { message: string; status: string }) => {
+      setWatch((w) => ({ ...w, [id]: { ...w[id], connected: true, info: data.message } }));
+    });
+    s.on('chunk', (b64: string) => {
+      chunksRef.current.get(id)?.push(b64ToBytes(b64));
+      setWatch((w) => ({ ...w, [id]: { ...w[id], bytesReceived: (w[id]?.bytesReceived ?? 0) + b64.length } }));
+    });
+    s.on('done', (meta: { ok: boolean; packetCount?: number; fileSizeBytes?: number; resultText?: string; error?: string }) => {
+      const parts = chunksRef.current.get(id) ?? [];
+      let blobUrl: string | undefined;
+      if (meta.ok && parts.length) {
+        const blob = new Blob(parts as BlobPart[], { type: 'application/vnd.tcpdump.pcap' });
+        blobUrl = URL.createObjectURL(blob);
+      }
+      setWatch((w) => ({
+        ...w,
+        [id]: { ...w[id], done: true, ok: meta.ok, packetCount: meta.packetCount, fileSizeBytes: meta.fileSizeBytes, resultText: meta.resultText, error: meta.error, blobUrl },
+      }));
+      loadSessions();
+      s.disconnect();
+      socketsRef.current.delete(id);
+    });
+    s.on('error', (e: any) => {
+      setWatch((w) => ({ ...w, [id]: { ...w[id], connected: false, error: e?.message || 'erro de conexão' } }));
+    });
+    s.on('disconnect', () => {
+      setWatch((w) => (w[id] ? { ...w, [id]: { ...w[id], connected: false } } : w));
+    });
+  }
+
+  async function approve(id: string, kind: Kind) {
+    if (!confirm('Aprovar dispara a captura agora no servidor (até a duração configurada). É preciso manter esta página aberta — não tem replay, o conteúdo é só em tempo real. Confirmar?')) return;
+    watchSession(id, kind);
     try {
       await apiFetch(`/captures/${id}/approve`, { method: 'POST', body: '{}' });
       loadSessions();
@@ -117,15 +197,9 @@ export default function CapturesPage() {
     loadSessions();
   }
 
-  async function download(id: string) {
-    const res = await fetch(`${API}/captures/${id}/download`, {
-      headers: { Authorization: `Bearer ${Auth.token() ?? ''}` },
-    });
-    if (!res.ok) { alert(`Falha (${res.status})`); return; }
-    const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a'); a.href = url; a.download = `capture-${id.slice(0, 8)}.pcap`; a.click();
-    URL.revokeObjectURL(url);
+  function saveCapture(id: string, blobUrl: string) {
+    const a = document.createElement('a');
+    a.href = blobUrl; a.download = `capture-${id.slice(0, 8)}.pcap`; a.click();
   }
 
   return (
@@ -134,7 +208,8 @@ export default function CapturesPage() {
         <h1 className="text-2xl font-semibold">Captura de rede / SIP (Zero Trust)</h1>
         <p className="text-xs text-muted -mt-1">
           sngrep-like para SIP/RTP (Freeswitch, OpenSIPS, RTG engine), tcpdump genérico, e diagnóstico básico (ping/mtr).
-          Toda captura precisa de aprovação antes de rodar no servidor.
+          Toda captura é em tempo real e nada fica salvo na plataforma — é preciso manter a página aberta assistindo
+          enquanto a captura roda; se ninguém estiver acompanhando, o conteúdo se perde.
         </p>
 
         {canRequest && (
@@ -239,40 +314,74 @@ export default function CapturesPage() {
               </tr>
             </thead>
             <tbody>
-              {safeArray<Session>(sessions).map((s) => (
-                <tr key={s.id} className="border-t border-border align-top">
-                  <td className="px-3 py-1.5 text-xs text-muted whitespace-nowrap">{fmtTime(s.created_at)}</td>
-                  <td className="px-3 py-1.5 text-xs">{s.server_name}</td>
-                  <td className="px-3 py-1.5 text-xs">
-                    {KIND_LABEL[s.kind]}
-                    {s.kind !== 'ping' && <div className="text-[10px] text-muted">{s.iface} · {s.filter_expr || '(filtro padrão)'}</div>}
-                    {s.kind === 'ping' && <div className="text-[10px] text-muted">{s.target_host}</div>}
-                  </td>
-                  <td className="px-3 py-1.5 text-xs">{s.requested_by_email}</td>
-                  <td className="px-3 py-1.5 text-xs text-muted max-w-xs truncate" title={s.reason}>{s.reason}</td>
-                  <td className="px-3 py-1.5">
-                    <Badge className={STATUS_VARIANT[s.status] ?? ''}>{s.status}</Badge>
-                    {s.status === 'completed' && s.kind !== 'ping' && (
-                      <div className="text-[10px] text-muted mt-0.5">{fmtBytes(s.file_size_bytes)} · {s.packet_count ?? '?'} pacotes</div>
-                    )}
-                    {s.status === 'completed' && s.kind === 'ping' && s.result_text && (
-                      <pre className="text-[10px] text-muted mt-1 whitespace-pre-wrap max-w-md">{s.result_text}</pre>
-                    )}
-                    {s.error_text && <div className="text-[10px] text-danger mt-0.5">{s.error_text}</div>}
-                  </td>
-                  <td className="px-3 py-1.5 text-right whitespace-nowrap space-x-2">
-                    {s.status === 'pending' && canApprove && (
-                      <>
-                        <button onClick={() => approve(s.id)} className="text-success hover:underline text-xs">aprovar</button>
-                        <button onClick={() => reject(s.id)} className="text-danger hover:underline text-xs">rejeitar</button>
-                      </>
-                    )}
-                    {s.status === 'completed' && s.kind !== 'ping' && (
-                      <button onClick={() => download(s.id)} className="text-accent hover:underline text-xs">baixar .pcap</button>
-                    )}
-                  </td>
-                </tr>
-              ))}
+              {safeArray<Session>(sessions).map((s) => {
+                const w = watch[s.id];
+                return (
+                  <tr key={s.id} className="border-t border-border align-top">
+                    <td className="px-3 py-1.5 text-xs text-muted whitespace-nowrap">{fmtTime(s.created_at)}</td>
+                    <td className="px-3 py-1.5 text-xs">{s.server_name}</td>
+                    <td className="px-3 py-1.5 text-xs">
+                      {KIND_LABEL[s.kind]}
+                      {s.kind !== 'ping' && <div className="text-[10px] text-muted">{s.iface} · {s.filter_expr || '(filtro padrão)'}</div>}
+                      {s.kind === 'ping' && <div className="text-[10px] text-muted">{s.target_host}</div>}
+                    </td>
+                    <td className="px-3 py-1.5 text-xs">{s.requested_by_email}</td>
+                    <td className="px-3 py-1.5 text-xs text-muted max-w-xs truncate" title={s.reason}>{s.reason}</td>
+                    <td className="px-3 py-1.5">
+                      <Badge className={STATUS_VARIANT[s.status] ?? ''}>{s.status}</Badge>
+
+                      {s.status === 'running' && w && !w.done && (
+                        <div className="text-[10px] text-accent mt-0.5">
+                          {w.connected ? `assistindo ao vivo — ${fmtBytes(w.bytesReceived)} recebidos` : 'conectando ao stream...'}
+                        </div>
+                      )}
+                      {s.status === 'running' && !w && (
+                        <div className="text-[10px] text-muted mt-0.5">em execução — abra "assistir" pra acompanhar (sem replay depois)</div>
+                      )}
+
+                      {w?.info && <div className="text-[10px] text-muted mt-0.5">{w.info}</div>}
+
+                      {w?.done && w.kind !== 'ping' && (
+                        <div className="text-[10px] mt-0.5">
+                          {w.ok ? (
+                            <span className="text-success">capturado: {fmtBytes(w.fileSizeBytes)} · {w.packetCount ?? '?'} pacotes</span>
+                          ) : (
+                            <span className="text-danger">{w.error || 'falhou'}</span>
+                          )}
+                        </div>
+                      )}
+                      {w?.done && w.kind === 'ping' && w.resultText && (
+                        <pre className="text-[10px] text-muted mt-1 whitespace-pre-wrap max-w-md">{w.resultText}</pre>
+                      )}
+                      {w?.error && <div className="text-[10px] text-danger mt-0.5">{w.error}</div>}
+
+                      {s.status === 'completed' && s.kind !== 'ping' && !w && (
+                        <div className="text-[10px] text-muted mt-0.5">
+                          {fmtBytes(s.file_size_bytes)} · {s.packet_count ?? '?'} pacotes — não foi assistida ao vivo, conteúdo não ficou salvo
+                        </div>
+                      )}
+                      {s.status === 'completed' && s.kind === 'ping' && s.result_text && !w && (
+                        <pre className="text-[10px] text-muted mt-1 whitespace-pre-wrap max-w-md">{s.result_text}</pre>
+                      )}
+                      {s.error_text && !w && <div className="text-[10px] text-danger mt-0.5">{s.error_text}</div>}
+                    </td>
+                    <td className="px-3 py-1.5 text-right whitespace-nowrap space-x-2">
+                      {s.status === 'pending' && canApprove && (
+                        <>
+                          <button onClick={() => approve(s.id, s.kind)} className="text-success hover:underline text-xs">aprovar</button>
+                          <button onClick={() => reject(s.id)} className="text-danger hover:underline text-xs">rejeitar</button>
+                        </>
+                      )}
+                      {(s.status === 'pending' || s.status === 'running') && !w && s.kind !== 'ping' && (
+                        <button onClick={() => watchSession(s.id, s.kind)} className="text-accent hover:underline text-xs">assistir</button>
+                      )}
+                      {w?.done && w.ok && w.blobUrl && (
+                        <button onClick={() => saveCapture(s.id, w.blobUrl!)} className="text-accent hover:underline text-xs">salvar .pcap</button>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
               {!sessions.length && (
                 <tr><td colSpan={7} className="px-3 py-4 text-center text-muted text-xs">nenhuma sessão de captura ainda</td></tr>
               )}
