@@ -75,4 +75,31 @@ export class MonitoredPgClient {
     const r = await c.query(sql);
     return r.rows as T[];
   }
+
+  /** queryRaw() com um statement_timeout específico pra essa query (ex.: SELECT ad-hoc do db-access). */
+  async queryRawWithTimeout<T = any>(sql: string, timeoutMs: number): Promise<T[]> {
+    const c = await this.connect();
+    await c.query(`SET statement_timeout = ${Math.max(1000, Math.floor(timeoutMs))}`);
+    const r = await c.query(sql);
+    return r.rows as T[];
+  }
+
+  /**
+   * Roda `fn` dentro de BEGIN/COMMIT, com ROLLBACK automático em caso de
+   * erro — usado pelo db-access pra executar o UPDATE/INSERT/DELETE
+   * aprovado de forma segura (nunca commitado parcialmente).
+   */
+  async withTransaction<T = any>(fn: (query: (sql: string) => Promise<{ rowCount: number | null; rows: any[] }>) => Promise<T>, timeoutMs?: number): Promise<T> {
+    const c = await this.connect();
+    if (timeoutMs) await c.query(`SET statement_timeout = ${Math.max(1000, Math.floor(timeoutMs))}`);
+    await c.query('BEGIN');
+    try {
+      const result = await fn((sql: string) => c.query(sql));
+      await c.query('COMMIT');
+      return result;
+    } catch (e) {
+      await c.query('ROLLBACK').catch(() => {});
+      throw e;
+    }
+  }
 }

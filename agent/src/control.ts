@@ -22,6 +22,7 @@ import Docker from 'dockerode';
 import { config } from './config.js';
 import { listDir, readFile, writeFile, executeScript } from './fs-ops.js';
 import { spawnHostShell } from './host-shell.js';
+import { runCapture } from './capture.js';
 
 let socket: Socket | null = null;
 const activeTermStreams = new Map<string, NodeJS.ReadWriteStream>();
@@ -268,6 +269,15 @@ async function dispatch(docker: Docker, op: string, args: any, reqId: string): P
       }).catch((e) => ({ exitCode: -1, stdout: '', stderr: e.message, durationMs: 0 } as any));
       return { kind: 'syslog', content: fb.stdout, fallback: true, error: j.stderr };
     }
+
+    // ========= Captura de rede/SIP (Zero Trust) =========
+    // Só chega aqui depois de aprovado no backend (capture_sessions). Bloqueia
+    // até a captura terminar (ping é rápido; sip/tcpdump duram args.durationSeconds) —
+    // por isso o backend dispara isso de forma assíncrona (não espera a
+    // resposta HTTP da aprovação), só lê o resultado pelo polling normal de
+    // capture_sessions.
+    case 'capture.run':
+      return runCapture(args);
 
     default:
       throw new Error(`Unknown op: ${op}`);

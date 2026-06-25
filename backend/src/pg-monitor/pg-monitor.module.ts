@@ -136,5 +136,6 @@ class PgMonitorController {
   imports: [SecretsModule],
   providers: [PgMonitorService],
   controllers: [PgMonitorController],
+  exports: [PgMonitorService],
 })
 export class PgMonitorModule {}

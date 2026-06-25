@@ -22,6 +22,8 @@ import {
   Download,
   Terminal as TerminalIcon,
   Database as DbIcon,
+  TerminalSquare,
+  Radar,
 } from 'lucide-react';
 import { Auth, apiFetch } from '@/lib/api';
 import { loadMyPermissions, hasPerm } from '@/lib/perms';
@@ -104,6 +106,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       title: 'Acesso (Zero Trust)',
       items: [
         { href: '/terminal', label: 'Terminal web', icon: TerminalIcon, perms: ['terminal:request', 'terminal:open'] },
+        { href: '/db-access', label: 'Acesso a banco', icon: TerminalSquare, perms: ['db:query', 'db:write_request', 'db:write_approve'] },
+        { href: '/captures', label: 'Captura de rede/SIP', icon: Radar, perms: ['capture:request', 'capture:approve'] },
       ],
     },
     {

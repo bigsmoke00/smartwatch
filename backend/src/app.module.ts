@@ -25,6 +25,8 @@ import { ScriptsModule } from './scripts/scripts.module';
 import { LogExportModule } from './log-export/log-export.module';
 import { ZeroTrustModule } from './zero-trust/zero-trust.module';
 import { PgMonitorModule } from './pg-monitor/pg-monitor.module';
+import { DbAccessModule } from './db-access/db-access.module';
+import { CaptureModule } from './capture/capture.module';
 import { HealthModule } from './health/health.module';
 import { BootstrapService } from './bootstrap.service';
 
@@ -88,6 +90,8 @@ import { BootstrapService } from './bootstrap.service';
     LogExportModule,
     ZeroTrustModule,
     PgMonitorModule,
+    DbAccessModule,
+    CaptureModule,
     HealthModule,
   ],
   providers: [

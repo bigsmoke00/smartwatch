@@ -793,6 +793,24 @@ export class PgMonitorService {
     });
   }
 
+  /**
+   * Wrapper público de cluster()+getClient() pra módulos fora do pg-monitor
+   * (ex.: db-access) reusarem a mesma resolução de credenciais/vault sem
+   * duplicar a lógica. Quem chama é responsável por client.end().
+   */
+  async getAdhocClient(clusterId: string, database?: string): Promise<{ cluster: ClusterRow; client: MonitoredPgClient }> {
+    const cluster = await this.cluster(clusterId);
+    const client = await this.getClient(cluster, database);
+    return { cluster, client };
+  }
+
+  async listClustersBasic(): Promise<Array<{ id: string; name: string; database: string }>> {
+    const r = await this.pool.query<any>(
+      `SELECT id, name, database FROM pg_clusters WHERE deleted_at IS NULL ORDER BY name`,
+    );
+    return r.rows;
+  }
+
   private async cluster(id: string): Promise<ClusterRow> {
     const r = await this.pool.query<ClusterRow>(
       `SELECT * FROM pg_clusters WHERE id=$1 AND deleted_at IS NULL`,
