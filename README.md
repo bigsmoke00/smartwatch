@@ -1,70 +1,123 @@
-# LogWatch v2
+# LogWatch
 
-Plataforma profissional de **observabilidade e operações** para infraestrutura — pensada para times de cloud que administram dezenas/centenas de servidores em multi-cloud (AWS + OCI), clusters PostgreSQL Patroni e enxames de containers Docker.
+Plataforma de **observabilidade, operações e acesso controlado** para
+infraestrutura — agent num host/container, backend NestJS, frontend Next.js.
+Tudo persiste em **PostgreSQL/TimescaleDB**; sem Elasticsearch/OpenSearch.
 
-Tudo persiste em **PostgreSQL/TimescaleDB**. Sem Elasticsearch/OpenSearch — mantém o padrão da sua infra.
+Versão atual: ver `backend/package.json` / `frontend/package.json` /
+`agent/package.json` (sincronizados) ou o rodapé do menu / `GET /health`.
+Histórico de features por versão: [`CHANGELOG.md`](./CHANGELOG.md).
 
-## O que tem
+## O que tem hoje
 
 ### Observabilidade
-- **Logs** ingeridos por agent Docker; busca full-text (FTS + trigram), filtros por servidor/container/level/intervalo, tail em tempo real (WebSocket), export CSV, saved queries.
-- **Métricas de host** (CPU, mem, disco, rede, load, uptime) coletadas pelo agent via `systeminformation`.
-- **Containers** descobertos automaticamente (estado, image, ports, labels, health).
-- **Histograma** de volume de logs por minuto, com breakdown por severidade.
+- **Logs**: ingestão via agent, busca full-text (FTS + trigram + fallback
+  `ILIKE`), filtro por servidor/container/host/level/janela de tempo, tail ao
+  vivo via WebSocket, export CSV/JSON/log/gz, saved queries (próprias ou
+  compartilhadas). Sem limite artificial de linhas no backend.
+- **Métricas de host** (CPU/mem/disco/rede/load/uptime) e inventário de
+  containers, coletados pelo agent.
+- Endpoint Prometheus `GET /api/metrics`.
 
 ### Operações
-- **Alertas** baseados em queries de log + threshold em janela; notificações Slack/Discord/webhook (HMAC)/Telegram/PagerDuty.
-- **Audit log** de tudo (auth, mudanças, MFA, automações). Hypertable com retenção 365d.
-- **Automação Ansible Semaphore** integrada: lista projetos/templates, dispara playbooks, vê output, encerra tasks — direto da UI do LogWatch.
-- **Patroni cluster dashboard**: leader, replicas, lag, timeline, histórico de switchovers.
-- **Inventário multi-cloud** (AWS + OCI): sincroniza instâncias EC2 / Compute para popular automaticamente os servers.
+- **Alertas** por query + threshold em janela, com Slack / Discord / webhook
+  HMAC / Telegram / PagerDuty.
+- **Audit log** de toda ação sensível.
+- **Docker manager** completo via agent (containers, imagens, volumes).
+- **Script Manager**: edição/versionamento/execução de scripts no host, com
+  aprovação obrigatória apenas quando o servidor é de produção.
+- **Log exports agendados** (email ou S3).
+- **Patroni**: dashboard multi-cluster (leader/replica/lag/timeline),
+  clusters cadastrados via UI.
+- **PostgreSQL Monitor**: queries ativas, locks, top queries, sugestão de
+  índices, `EXPLAIN` ad-hoc, terminate de PID — multi-database por cluster.
+- **FinOps**: dashboard de custo e budgets. *Coleta real de custo AWS/OCI
+  ainda não está implementada (stub) — ver "Limitações conhecidas".*
+- **Rotação de credenciais**: CRUD + scheduler já registrado; a rotação de
+  fato (AWS IAM etc.) ainda não está implementada — ver "Limitações
+  conhecidas".
+
+### Acesso (Zero Trust)
+- **Terminal Web**: sessão de shell em host ou container via xterm.js, sob
+  fluxo de pedido → aprovação humana. Usuário do SO resolvido por mapeamento
+  (nunca informado livremente pelo cliente); `sudo` só é concedido na
+  aprovação. Todo I/O é gravado e os comandos digitados são capturados, com
+  transcript disponível depois.
+- **Console de banco**: `SELECT`/`WITH` roda direto (cap de linhas +
+  timeout); escrita exige pedido + aprovação por outra pessoa, em transação.
+- **Captura de rede/SIP** (estilo sngrep/Wireshark): pedido → aprovação →
+  `tcpdump` no agent → streaming ao vivo via WebSocket. Nada é gravado em
+  disco; se ninguém estiver assistindo, o conteúdo se perde por design.
+  Parser SIP no frontend com call-flow, filtro de método e BPF customizável.
 
 ### Segurança
-- Auth JWT (access 15m + refresh 7d com rotação) e bcrypt cost 12.
-- **2FA TOTP** (RFC 6238) com QR code.
-- **Brute-force protection**: lock temporário após 5 falhas.
-- **Sessões** revogáveis (lista por usuário, expiry, revoke).
-- **API keys** com prefixo + bcrypt no segredo, IP allowlist e scopes.
-- **Vault interno** AES-256-GCM (chave master via env) para guardar credenciais cloud, tokens de Slack, PagerDuty etc.
-- RBAC: `admin` / `operator` / `viewer`.
-- Helmet + CORS estrito + rate limit (`@nestjs/throttler`).
-- Logs **estruturados** (Pino) com redação automática de campos sensíveis.
-- Endpoint Prometheus `/api/metrics` (compatível com scraping).
+- Auth JWT (access curto + refresh com rotação), bcrypt, brute-force lock.
+- **2FA TOTP**, podendo ser obrigatório por usuário.
+- Fluxo "defina sua senha" por link único via email.
+- Sessões revogáveis; **API keys** com prefixo + bcrypt + IP allowlist.
+- **Vault interno** AES-256-GCM para credenciais cloud/SMTP/clusters PG.
+- **RBAC granular** baseado em tabelas (`permissions`/`roles`/
+  `role_permissions`/`user_roles`) — não é mais um enum fixo de 3 papéis.
+- Helmet + CORS estrito + rate limit (`@nestjs/throttler`: 30 req/s, 600/min).
+- Logs estruturados (Pino) com redação automática de campos sensíveis.
+
+## Limitações conhecidas (documentado de propósito, não escondido)
+
+- `finops/`: os clientes de custo AWS e OCI são **stubs** — retornam `[]`,
+  não chamam Cost Explorer/Usage API de verdade.
+- `credential-rotation/`: o scheduler roda, mas a rotação em si está
+  comentada como TODO; runs atuais só registram um evento simulado.
+- `opensearch/`: módulo morto, não importado em `app.module.ts` — resquício
+  de uma arquitetura anterior. O storage real de logs é TimescaleDB.
+- Existem tabelas de migration para "Terraform Control Plane", SLO/SLI e
+  GitHub Actions (e o Dockerfile do backend instala o binário do Terraform),
+  mas **nenhum módulo NestJS usa esse schema hoje** — é reserva para trabalho
+  futuro, não uma feature ativa.
+- As versões antigas deste README mencionavam integração com **Ansible
+  Semaphore** e **sincronização automática de inventário multi-cloud
+  (AWS/OCI EC2 e Compute)**. Nenhuma das duas existe no código atual — não há
+  módulo `automation/` nem `inventory/`, nem chamadas a APIs de EC2/OCI
+  Compute. Se isso for necessário, é trabalho a ser feito do zero, não uma
+  feature existente para "reconectar".
+- `SECRETS_MASTER_KEY` ausente em produção cai num fallback de chave fixa
+  derivada de string — funciona, mas é fraco; configure a env de verdade.
 
 ## Arquitetura
 
 ```
                   ┌─────────────────────────────┐
-                  │         Frontend             │  Next.js 14 + Tailwind + shadcn-style
-                  │   /logs, /metrics, /alerts   │
-                  │   /automation, /patroni…     │
-                  └──────────────┬──────────────┘
+                  │           Frontend           │  Next.js 14
+                  │  /logs /metrics /alerts      │
+                  │  /terminal /db-access         │
+                  │  /captures /scripts /docker   │
+                  │  /finops /credential-rotations│
+                  │  /patroni /databases …        │
+                  └──────────────┬───────────────┘
                                  │ HTTPS + WS
-                  ┌──────────────▼──────────────┐
-                  │           Backend           │  NestJS + Pino + Prom
-                  │  Auth · Logs · Metrics ·    │
-                  │  Alerts · Automation ·      │
-                  │  Patroni · Audit · Vault    │
-                  └──┬──────────┬──────────┬────┘
-                     │          │          │
-        ┌────────────▼────────┐ │  ┌───────▼────────┐
-        │ PostgreSQL          │ │  │ Ansible        │
-        │ + TimescaleDB       │ │  │ Semaphore (API)│
-        │  (logs, metrics,    │ │  │  +  inventário │
-        │   audit, alerts,    │ │  └────────────────┘
-        │   inventory…)       │ │
-        └─────────────────────┘ │
-                                ▼
-              ┌──────────────────────────────┐
-              │   Patroni REST (read only)   │  (cluster Postgres operacional)
-              └──────────────────────────────┘
+                  ┌──────────────▼───────────────┐
+                  │            Backend            │  NestJS
+                  │  ~23 módulos (auth, logs,     │
+                  │  zero-trust, capture,         │
+                  │  db-access, docker-manager,   │
+                  │  scripts, finops, pg-monitor, │
+                  │  patroni, secrets, roles…)    │
+                  └──┬───────────────────────┬────┘
+                     │                       │
+        ┌────────────▼────────┐    ┌─────────▼─────────┐
+        │ PostgreSQL          │    │ Patroni REST       │
+        │ + TimescaleDB       │    │ (clusters PG       │
+        │ (logs/metrics/audit │    │  monitorados)      │
+        │  /terminal/capture…)│    └────────────────────┘
+        └─────────────────────┘
 
        ┌─────────────────────────────────────────────────┐
        │                    Servidores                    │
-       │  cada um roda:  logwatch-agent (container)       │
-       │   • lê docker.sock (logs + inventário)           │
-       │   • coleta CPU/mem/disco/rede                    │
-       │   • envia em batch (gzip + retry exp.)           │
+       │  cada um roda o logwatch-agent (container):      │
+       │   • docker.sock (logs + inventário + manager)    │
+       │   • CPU/mem/disco/rede                            │
+       │   • shell/terminal (Zero Trust), fs-ops (scripts) │
+       │   • tcpdump (captura de rede/SIP sob aprovação)   │
+       │   • tudo via WebSocket de controle (/ws/control)  │
        └─────────────────────────────────────────────────┘
 ```
 
@@ -76,29 +129,39 @@ logwatch/
 │   ├── src/
 │   │   ├── auth/           JWT + MFA + sessions
 │   │   ├── audit/          interceptor + hypertable
-│   │   ├── users/
+│   │   ├── users/ roles/   usuários + RBAC granular
 │   │   ├── servers/        + API keys (bcrypt + IP allowlist)
 │   │   ├── logs/           ingest + FTS + WS gateway
 │   │   ├── metrics/        host metrics ingest + queries
-│   │   ├── notifications/  Slack/Discord/Webhook/PD/Telegram
-│   │   ├── alerts/         regras + scheduler
-│   │   ├── automation/     proxy Ansible Semaphore
-│   │   ├── inventory/      containers + cloud sync
-│   │   ├── patroni/
-│   │   ├── secrets/        AES-256-GCM vault
-│   │   ├── saved-queries/
+│   │   ├── notifications/ alerts/   regras, scheduler, canais
+│   │   ├── docker-manager/ scripts/  controle do agent via /ws/control
+│   │   ├── zero-trust/     terminal web com aprovação
+│   │   ├── db-access/      console de banco com aprovação
+│   │   ├── capture/        captura de rede/SIP com aprovação
+│   │   ├── pg-monitor/     dashboard + diagnósticos PostgreSQL
+│   │   ├── patroni/        dashboard multi-cluster
+│   │   ├── finops/         custo cloud (coleta real é stub)
+│   │   ├── credential-rotation/  CRUD + scheduler (rotação real é TODO)
+│   │   ├── log-export/     export síncrono + agendado
+│   │   ├── secrets/        vault AES-256-GCM
+│   │   ├── saved-queries/ mail/
+│   │   ├── opensearch/     morto, não registrado em app.module.ts
 │   │   ├── health/         health + readyz + Prom /metrics
-│   │   └── db/             pg pool central
-│   ├── migrations/         001_init.sql (schema completo)
+│   │   └── db/              pg pool central
+│   ├── migrations/         001 a 015 (ver CHANGELOG.md)
 │   └── Dockerfile          roda migrations e sobe
 ├── frontend/               Next.js 14
-│   ├── app/                login, /, /logs, /metrics, /alerts,
-│   │                       /automation, /patroni, /inventory,
-│   │                       /servers, /containers, /audit, /settings
+│   ├── app/                login, /, /logs, /metrics, /alerts, /servers,
+│   │                       /docker, /scripts, /databases, /patroni,
+│   │                       /exports, /audit, /terminal, /db-access,
+│   │                       /captures, /finops, /credential-rotations,
+│   │                       /settings, /users
 │   └── components/
-├── agent/                  Container Docker
-│   └── src/                logs.ts, metrics.ts, inventory.ts
-├── docker-compose.yml      stack completa + profiles
+├── agent/                  roda em cada host monitorado
+│   └── src/                logs/metrics/inventory + host-shell (terminal) +
+│                            fs-ops (scripts) + capture (tcpdump/SIP) +
+│                            docker manager via control.ts
+├── docker-compose.yml
 └── .env.example
 ```
 
@@ -107,49 +170,35 @@ logwatch/
 ```bash
 # 1. Configure
 cp .env.example .env
-# (edite as senhas e segredos. Gere SECRETS_MASTER_KEY com `openssl rand -hex 32`)
+# edite as senhas e segredos; gere SECRETS_MASTER_KEY com `openssl rand -hex 32`
 
-# 2. Suba a stack base
+# 2. Suba a stack
 docker compose up -d --build
 
-# 3. (opcional) Suba o Semaphore para automação
-docker compose --profile semaphore up -d
-
-# 4. (opcional) Suba o agent local para logs do próprio host
-docker compose --profile agent up -d
-
-# 5. Acesse
+# 3. Acesse
 #    Frontend:   http://localhost:3000
-#    Backend:    http://localhost:4000/api/docs
-#    Semaphore:  http://localhost:3001
-#    Prom:       http://localhost:4000/api/metrics
+#    Backend:    http://localhost:4000/api
+#    Health:     http://localhost:4000/api/health   (inclui "version")
+#    Prometheus: http://localhost:4000/api/metrics
 ```
 
-Login inicial: `admin@logwatch.local` / `ChangeMe!123` (troque imediatamente).
+Login inicial: ver `.env.example` / seed da primeira migration (troque a
+senha imediatamente).
 
 ## Conectar com Patroni (read-only)
-
-Configure no `.env`:
 
 ```
 PATRONI_NODES=http://pg1:8008,http://pg2:8008,http://pg3:8008
 PATRONI_BASIC_AUTH=monitor:senha
 ```
 
-A página **Cluster Patroni** mostra leader, replicas, lag e timeline a cada 10s.
+Ou cadastre o cluster direto pela UI (**Cluster Patroni**), sem precisar de
+env var — suporta múltiplos clusters desde a migration 007.
 
-## Conectar com Ansible Semaphore
+## Conectar um servidor (agent)
 
-```
-SEMAPHORE_URL=https://semaphore.suainfra.com
-SEMAPHORE_API_TOKEN=ey…  # gerado em Settings → Api Tokens
-```
-
-A aba **Automação** lista projetos/templates e permite executar playbooks com auditoria completa de quem disparou o quê.
-
-## Conectar um servidor
-
-No painel: **Servidores → Novo → Gerar API key**. Copie a chave (`sk_xxxx.yyyy`) e rode no host:
+No painel: **Servidores → Novo → Gerar API key**. Copie a chave
+(`sk_xxxx.yyyy`) e rode no host:
 
 ```bash
 docker run -d \
@@ -162,30 +211,33 @@ docker run -d \
   ghcr.io/suaorg/logwatch-agent:latest
 ```
 
-O agent envia automaticamente:
-- Logs de todos os containers
-- Métricas de host a cada 15s
-- Inventário de containers a cada 60s
-- Heartbeat com hostname, OS, arch, versão
+O agent expõe, sob controle do backend (`/ws/control`): coleta de logs,
+métricas e inventário de containers; gerenciamento Docker; terminal web
+(Zero Trust); leitura/escrita/execução de scripts no host; captura de
+rede/SIP via `tcpdump`. Veja [`agent/README.md`](./agent/README.md) para
+detalhes de cada um.
 
 ## Por dentro do TimescaleDB
 
-- **Hypertables**: `logs` (chunks de 6h), `host_metrics` (1d), `audit_events` (7d), `alert_events`, `automation_runs`.
-- **Compressão automática** dos logs após 6 horas.
-- **Retention policies**: logs 14d, métricas 180d, audit 365d.
+- **Hypertables**: `logs`, `host_metrics`, `audit_events`, entre outras.
+- **Retention policy de logs: 14 dias** (`006_log_storage_optimization.sql`),
+  não 90 — ajuste a policy diretamente no banco se precisar de mais.
+- Compressão automática dos logs após algumas horas.
 - Linhas idênticas no mesmo segundo são consolidadas em `repeat_count`.
-- Busca textual por período sem índices GIN, priorizando baixo uso de disco.
+
+## Rate limiting
+
+`@nestjs/throttler` configurado em `app.module.ts`: **30 req/s** (`short`) e
+**600 req/min** (`long`) por IP, globalmente — não é específico de logs.
 
 ## Segurança em profundidade
 
-Veja [`backend/SECURITY.md`](./backend/SECURITY.md) para o modelo completo (rotação de chaves, recomendações de TLS/mTLS, escopo mínimo do Patroni REST etc.).
+Veja [`backend/SECURITY.md`](./backend/SECURITY.md) para o modelo completo,
+e a seção "Limitações conhecidas" acima para o que ainda não está pronto.
 
-## Roadmap (próximos passos sugeridos)
+## Mais documentação
 
-- mTLS opcional entre agent e backend
-- Worker BullMQ dedicado para alertas (escalar avaliação)
-- Adapter Redis para WebSocket em modo cluster
-- Dashboard customizável (drag-and-drop de painéis)
-- Exec remoto via Semaphore ad-hoc (one-shot)
-- SSO OIDC (Keycloak/Authelia/Google Workspace)
-- TLS cert expiry monitor + auto-renew via cert-manager hook
+- [`CHANGELOG.md`](./CHANGELOG.md) — histórico de features por versão.
+- [`agent/README.md`](./agent/README.md) — o que o agent faz e como roda.
+- [`docs/LOGS.md`](./docs/LOGS.md) — detalhes da tela de Logs.
+- [`docs/SCRIPT_MANAGER.md`](./docs/SCRIPT_MANAGER.md) — Script Manager.

@@ -10,6 +10,14 @@ import { Pool } from 'pg';
 import * as prom from 'prom-client';
 import { Public } from '../auth/public.decorator';
 import { PG_POOL } from '../db/db.module';
+// Versão do backend — importada direto do package.json (resolveJsonModule),
+// fonte única que não desatualiza sozinha como um literal hardcoded faria.
+// Funciona em dev (src/health -> ../../package.json -> backend/package.json)
+// e em produção (dist/health -> ../../package.json -> backend/package.json,
+// já que o Dockerfile copia package.json lado a lado com dist/).
+import pkg from '../../package.json';
+
+const BACKEND_VERSION: string = (pkg as { version?: string }).version ?? '0.0.0-unknown';
 
 const registry = new prom.Registry();
 prom.collectDefaultMetrics({ register: registry });
@@ -45,6 +53,7 @@ class HealthController {
     } catch {}
     return {
       status: pgOk ? 'ok' : 'degraded',
+      version: BACKEND_VERSION,
       uptime: process.uptime(),
       pg: pgOk,
       ts: Date.now(),

@@ -1,3 +1,11 @@
+> **Arquivado.** Estas notas descrevem correções de uma fase antiga
+> (migration 005) sobre uma arquitetura que **não é mais a atual** — citam
+> `cloud_accounts`/`cloud_resources`/`cloud_sync_runs` (sync AWS multi-account),
+> `topology_nodes`/`host.connections` (mapa de topologia) e `runbooks`/
+> `bastion_sessions`, nenhum dos quais existe em `backend/src/` hoje. A
+> plataforma seguiu por outro caminho (ver [`../CHANGELOG.md`](../CHANGELOG.md)
+> e [`../README.md`](../README.md)). Mantido só como histórico.
+
 # Refactor — bugs reportados resolvidos
 
 Esta rodada **não refatorou** o código existente; apenas resolveu os problemas

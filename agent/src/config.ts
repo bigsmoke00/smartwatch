@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+
 function mustEnv(key: string): string {
   const v = process.env[key];
   if (!v) {
@@ -5,6 +7,25 @@ function mustEnv(key: string): string {
     process.exit(1);
   }
   return v;
+}
+
+/**
+ * Versão única do agent — lida do package.json em runtime (não duplicada
+ * como literal hardcoded, que é como ficava desatualizada — chegou a marcar
+ * "0.5.0" aqui enquanto o package.json dizia "0.2.0"). Funciona tanto em dev
+ * (`tsx src/config.ts`, package.json um nível acima de src/) quanto em
+ * produção (`dist/config.js`, package.json copiado lado a lado com dist/ no
+ * Dockerfile, também um nível acima). Se não achar o arquivo, cai num
+ * fallback óbvio em vez de derrubar o agent.
+ */
+function readAgentVersion(): string {
+  try {
+    const pkgUrl = new URL('../package.json', import.meta.url);
+    const pkg = JSON.parse(readFileSync(pkgUrl, 'utf-8'));
+    return pkg.version ?? '0.0.0-unknown';
+  } catch {
+    return '0.0.0-unknown';
+  }
 }
 
 export const config = {
@@ -42,7 +63,7 @@ export const config = {
     parseInt(process.env.LOGWATCH_HOST_LOG_MAX_LINE ?? '4096', 10),
   ),
 
-  agentVersion: '0.5.0',
+  agentVersion: readAgentVersion(),
 };
 
 function baseUrl(): string {

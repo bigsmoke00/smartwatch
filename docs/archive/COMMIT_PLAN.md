@@ -1,3 +1,14 @@
+> **Arquivado.** Este é um plano de commits de uma fase antiga do projeto e
+> **não reflete a arquitetura atual**. Vários módulos citados aqui
+> (`automation/` Semaphore, `terraform/github.client`, `topology/`,
+> `cloud-sync`/AWS multi-account sync, `runbooks`, `bastion`) **não existem**
+> em `backend/src/` hoje — foram substituídos por um caminho diferente
+> (zero-trust com terminal aprovado + mapeamento de usuário do SO, captura
+> de rede/SIP, console de banco com aprovação, FinOps com coleta de custo
+> ainda em stub). Para o estado real e atual da plataforma, veja
+> [`../README.md`](../README.md) e [`../CHANGELOG.md`](../CHANGELOG.md).
+> Mantido aqui só como histórico de planejamento.
+
 # Commit plan — todas as fases
 
 Conventional Commits, em sequência, branches separadas por escopo.

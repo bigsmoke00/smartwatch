@@ -52,7 +52,8 @@ Botão "Tail ao vivo / Pausar tail" controla o WebSocket. Quando ativo:
 
 ## Coleta de /var/log (host logs)
 
-O agent v0.3+ faz tail incremental dos arquivos abaixo (configurável):
+O agent faz tail incremental dos arquivos abaixo (configurável), quando
+`LOGWATCH_HOST_LOG_ENABLED=true`:
 
 ```
 /var/log/syslog
@@ -71,7 +72,7 @@ Cada linha vira um registro em `logs` com `containerName = host:<arquivo>`
 
 ```bash
 -e LOGWATCH_HOST_LOG_PATHS=/var/log/syslog,/var/log/myapp/,/var/log/nginx/
--e LOGWATCH_HOST_LOG_ENABLED=true            # default
+-e LOGWATCH_HOST_LOG_ENABLED=true            # default é "false" — precisa habilitar
 -e LOGWATCH_HOST_LOG_POLL_MS=2000             # frequência do polling
 -e LOGWATCH_HOST_LOG_MAX_LINE=8192            # bytes/linha
 ```
@@ -116,13 +117,17 @@ download manual via `/exports`.
 
 ## Performance / limites
 
-- Backend devolve até **300 linhas** por busca; tail mantém até 1000 em
-  memória no navegador
-- Backend tem rate limit (300 hits/s + 600/min)
+- Sem limite artificial de linhas no backend. O frontend mantém até
+  **5000 hits** em memória no tail ao vivo, e renderiza em páginas de 500
+  (botão "mostrar mais 500") em vez de jogar tudo na tela de uma vez.
+- Rate limit do backend é **global** (não específico de logs), via
+  `@nestjs/throttler`: **30 requisições/s** + **600/min** por IP.
 - A coluna `ts` é indexada (BRIN no hypertable); buscas com janela
-  pequena são instantâneas mesmo em bilhões de linhas
-- Logs ficam 90 dias (retention policy do TimescaleDB), comprimidos
-  após 7 dias
+  pequena são instantâneas mesmo em bilhões de linhas.
+- Logs ficam **14 dias** (retention policy do TimescaleDB —
+  `006_log_storage_optimization.sql`), comprimidos automaticamente algumas
+  horas após a ingestão. Se precisar reter por mais tempo, ajuste a policy
+  direto no banco ou exporte periodicamente via `/exports`.
 
 ## Troubleshooting
 

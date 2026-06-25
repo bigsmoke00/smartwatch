@@ -183,6 +183,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         >
           <LogOut size={16} /> Sair
         </button>
+        <div className="px-3 pb-2 text-[10px] text-muted/60">
+          v{process.env.NEXT_PUBLIC_APP_VERSION ?? '?'}
+        </div>
       </aside>
       <main className="flex-1 overflow-auto flex flex-col">
         {mfaSetupRequired && (
