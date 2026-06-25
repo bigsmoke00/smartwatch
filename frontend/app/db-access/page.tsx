@@ -70,7 +70,7 @@ export default function DbAccessPage() {
     try {
       const r = await apiFetch<QueryResult>('/db-access/query', {
         method: 'POST',
-        body: JSON.stringify({ clusterId, database: database || undefined, sql }),
+        body: JSON.stringify({ clusterId, database: database.trim() || undefined, sql }),
       });
       setResult(r);
     } catch (e) {
@@ -88,7 +88,7 @@ export default function DbAccessPage() {
       await apiFetch('/db-access/requests', {
         method: 'POST',
         body: JSON.stringify({
-          clusterId, database: database || undefined, sql: writeSql, reason: writeReason,
+          clusterId, database: database.trim() || undefined, sql: writeSql, reason: writeReason,
           contextQuery: sql.trim() || undefined,
         }),
       });

@@ -299,9 +299,14 @@ export class PgMonitorService {
   private async getClient(c: ClusterRow, dbOverride?: string): Promise<MonitoredPgClient> {
     const raw = await this.secrets.get(c.vault_secret);
     const cred = JSON.parse(raw);   // { user, password, ssl? }
+    // .trim() defensivo: dbOverride normalmente vem de input de usuário (ex.:
+    // tela de Acesso a banco) e um espaço sobrando vira um nome de database
+    // literal inválido — o erro do Postgres ecoa a string exata, então um
+    // espaço a mais é fácil de não notar ("database "foo " does not exist").
+    const dbTrimmed = dbOverride?.trim();
     return new MonitoredPgClient({
       hosts: c.hosts,
-      database: dbOverride ?? c.database,
+      database: dbTrimmed || c.database,
       user: cred.user, password: cred.password, ssl: cred.ssl ?? false,
     });
   }
