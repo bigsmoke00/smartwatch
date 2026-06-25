@@ -33,6 +33,12 @@ export interface ParsedPacket {
   sipTo?: string;
   sipIsRequest?: boolean;
   sipMethodOrStatus?: string; // 'INVITE' | '200 OK' | etc.
+  // Método do header CSeq (ex.: "CSeq: 102 INVITE" -> "INVITE"). É o que
+  // realmente diz a qual transação uma resposta pertence — sem isso, um
+  // "200 OK" de NOTIFY/REGISTER/SUBSCRIBE era confundido com resposta de
+  // INVITE só por também começar com "200" (bug: diálogo de NOTIFY sozinho
+  // aparecia como "IN CALL").
+  sipCseqMethod?: string;
 }
 
 function concatU8(a: Uint8Array, b: Uint8Array): Uint8Array {
@@ -62,6 +68,7 @@ const SIP_METHODS = new Set<string>(SIP_METHODS_LIST);
 
 function tryDecodeSip(payload: Uint8Array): {
   text: string; isRequest: boolean; methodOrStatus: string; callId?: string; from?: string; to?: string;
+  cseqMethod?: string;
 } | null {
   if (payload.length < 12) return null;
   let text: string;
@@ -90,6 +97,11 @@ function tryDecodeSip(payload: Uint8Array): {
   const callIdMatch = text.match(/^(?:Call-ID|i):\s*(.+?)\s*$/im);
   const fromMatch = text.match(/^(?:From|f):\s*(.+?)\s*$/im);
   const toMatch = text.match(/^(?:To|t):\s*(.+?)\s*$/im);
+  // "CSeq: 102 INVITE" -> método ao qual essa mensagem pertence. Pra
+  // requests isso é redundante com methodOrStatus, mas pra respostas é a
+  // única forma confiável de saber se um "200 OK" é de um INVITE, NOTIFY,
+  // REGISTER, SUBSCRIBE etc.
+  const cseqMatch = text.match(/^CSeq:\s*\d+\s+([A-Za-z]+)\s*$/im);
 
   return {
     text,
@@ -98,6 +110,7 @@ function tryDecodeSip(payload: Uint8Array): {
     callId: callIdMatch?.[1],
     from: fromMatch?.[1],
     to: toMatch?.[1],
+    cseqMethod: cseqMatch?.[1]?.toUpperCase(),
   };
 }
 
@@ -240,6 +253,7 @@ export class PcapStreamParser {
         base.sipCallId = sip.callId;
         base.sipFrom = sip.from;
         base.sipTo = sip.to;
+        base.sipCseqMethod = sip.cseqMethod;
         base.info = `${sip.isRequest ? 'Request' : 'Status'}: ${sip.methodOrStatus}`;
         return base;
       }
@@ -269,6 +283,7 @@ export class PcapStreamParser {
         base.sipCallId = sip.callId;
         base.sipFrom = sip.from;
         base.sipTo = sip.to;
+        base.sipCseqMethod = sip.cseqMethod;
         base.info = `${sip.isRequest ? 'Request' : 'Status'}: ${sip.methodOrStatus}`;
         return base;
       }
@@ -290,8 +305,11 @@ export class PcapStreamParser {
 // - cancelled   -> "CANCELLED" (CANCEL antes de atender)
 // - busy        -> "BUSY" (486/600 Busy)
 // - rejected    -> "REJECTED" (outro 4xx-6xx final, sem ser busy)
+// - other       -> diálogo sem INVITE (NOTIFY/REGISTER/SUBSCRIBE/OPTIONS
+//                  isolados etc.) — não é uma "chamada", não tem estado de
+//                  chamada. UI mostra o método em si em vez de um rótulo.
 export type SipDialogState =
-  | 'calling' | 'em_andamento' | 'completed' | 'cancelled' | 'busy' | 'rejected';
+  | 'calling' | 'em_andamento' | 'completed' | 'cancelled' | 'busy' | 'rejected' | 'other';
 
 export interface SipDialog {
   callId: string;
@@ -299,6 +317,11 @@ export interface SipDialog {
   to?: string;
   messages: ParsedPacket[];
   state: SipDialogState;
+  // Método que define o diálogo — 'INVITE' se for uma chamada de fato,
+  // senão o método do primeiro request visto (REGISTER, OPTIONS, NOTIFY...).
+  // É o que vai numa coluna "Método" pra dar pra saber o que é sem precisar
+  // abrir o diálogo.
+  primaryMethod: string;
 }
 
 /** Agrupa pacotes SIP já decodificados em diálogos por Call-ID, com estado estimado. */
@@ -308,7 +331,7 @@ export function buildDialogs(packets: ParsedPacket[]): SipDialog[] {
     if (p.proto !== 'SIP' || !p.sipCallId) continue;
     let d = map.get(p.sipCallId);
     if (!d) {
-      d = { callId: p.sipCallId, from: p.sipFrom, to: p.sipTo, messages: [], state: 'calling' };
+      d = { callId: p.sipCallId, from: p.sipFrom, to: p.sipTo, messages: [], state: 'calling', primaryMethod: '?' };
       map.set(p.sipCallId, d);
     }
     d.messages.push(p);
@@ -316,11 +339,25 @@ export function buildDialogs(packets: ParsedPacket[]): SipDialog[] {
     if (!d.to && p.sipTo) d.to = p.sipTo;
   }
   for (const d of map.values()) {
-    const hasBye = d.messages.some((m) => m.sipMethodOrStatus === 'BYE');
-    const hasCancel = d.messages.some((m) => m.sipMethodOrStatus === 'CANCEL');
-    const has200ToInvite = d.messages.some((m) => !m.sipIsRequest && m.sipMethodOrStatus?.startsWith('200'));
-    const isBusy = d.messages.some((m) => !m.sipIsRequest && /^(486|600)/.test(m.sipMethodOrStatus ?? ''));
-    const hasFailure = d.messages.some((m) => !m.sipIsRequest && /^[4-6]\d\d/.test(m.sipMethodOrStatus ?? ''));
+    const hasInvite = d.messages.some((m) => m.sipIsRequest && m.sipMethodOrStatus === 'INVITE');
+    if (!hasInvite) {
+      // Sem INVITE não tem "chamada" pra ter estado de chamada — diálogo é
+      // de outra transação (NOTIFY, REGISTER, SUBSCRIBE, OPTIONS...).
+      const firstReq = d.messages.find((m) => m.sipIsRequest);
+      d.primaryMethod = firstReq?.sipMethodOrStatus ?? '?';
+      d.state = 'other';
+      continue;
+    }
+    d.primaryMethod = 'INVITE';
+    // Só conta resposta como "pro INVITE" se o CSeq dela disser INVITE —
+    // antes isso checava só o código (ex.: "200..."), e um 200 OK de
+    // NOTIFY/REGISTER/SUBSCRIBE no mesmo diálogo virava "IN CALL" errado.
+    const respondsToInvite = (m: ParsedPacket) => !m.sipIsRequest && m.sipCseqMethod === 'INVITE';
+    const hasBye = d.messages.some((m) => m.sipIsRequest && m.sipMethodOrStatus === 'BYE');
+    const hasCancel = d.messages.some((m) => m.sipIsRequest && m.sipMethodOrStatus === 'CANCEL');
+    const has200ToInvite = d.messages.some((m) => respondsToInvite(m) && m.sipMethodOrStatus?.startsWith('200'));
+    const isBusy = d.messages.some((m) => respondsToInvite(m) && /^(486|600)/.test(m.sipMethodOrStatus ?? ''));
+    const hasFailure = d.messages.some((m) => respondsToInvite(m) && /^[4-6]\d\d/.test(m.sipMethodOrStatus ?? ''));
     if (hasBye && has200ToInvite) d.state = 'completed';
     else if (isBusy) d.state = 'busy';
     else if (hasFailure) d.state = 'rejected';

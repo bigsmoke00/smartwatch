@@ -20,8 +20,10 @@ const PROTO_COLOR: Record<string, string> = {
   TCP: 'text-muted',
 };
 
-// Estado do diálogo (estilo sngrep) -> rótulo exibido + cor.
-const DIALOG_STATE: Record<SipDialogState, { label: string; className: string }> = {
+// Estado do diálogo (estilo sngrep) -> rótulo exibido + cor. 'other' não tem
+// rótulo fixo aqui porque não é um estado de chamada — é resolvido dinamicamente
+// em dialogStateInfo() a partir do método real do diálogo (NOTIFY, REGISTER...).
+const DIALOG_STATE: Record<Exclude<SipDialogState, 'other'>, { label: string; className: string }> = {
   calling: { label: 'CALL SETUP', className: 'text-warn' },
   em_andamento: { label: 'IN CALL', className: 'text-accent' },
   completed: { label: 'COMPLETED', className: 'text-success' },
@@ -29,6 +31,14 @@ const DIALOG_STATE: Record<SipDialogState, { label: string; className: string }>
   busy: { label: 'BUSY', className: 'text-purple-400' },
   rejected: { label: 'REJECTED', className: 'text-danger' },
 };
+
+/** Rótulo + cor pro Estado de um diálogo, cobrindo o caso 'other' (sem INVITE). */
+function dialogStateInfo(d: SipDialog): { label: string; className: string } {
+  if (d.state === 'other') {
+    return { label: d.primaryMethod, className: 'text-muted' };
+  }
+  return DIALOG_STATE[d.state];
+}
 
 // Cor por método/resposta SIP, pra distinguir de cara INVITE de OPTIONS,
 // REGISTER, BYE etc. na lista de pacotes (igual o sngrep faz por cor).
@@ -69,6 +79,10 @@ export default function CaptureLiveView({ packets, totalParsed }: Props) {
   // filtro "só método" (INVITE/OPTIONS/REGISTER/...) — separado do filtro de
   // texto livre acima pra não precisar digitar o nome certinho do método.
   const [methodFilter, setMethodFilter] = useState('');
+  // filtro de métodos da aba diálogos — multi-seleção tipo sngrep
+  // (checkbox por método). Todos marcados por padrão = mostra tudo.
+  const [dialogMethods, setDialogMethods] = useState<Set<string>>(() => new Set(SIP_METHODS_LIST));
+  const [methodMenuOpen, setMethodMenuOpen] = useState(false);
   const [selected, setSelected] = useState<ParsedPacket | null>(null);
   const [selectedCallId, setSelectedCallId] = useState<string | null>(null);
   const [tab, setTab] = useState<'packets' | 'dialogs'>('dialogs');
@@ -78,6 +92,19 @@ export default function CaptureLiveView({ packets, totalParsed }: Props) {
   const [fullscreen, setFullscreen] = useState(false);
 
   const dialogs = useMemo(() => buildDialogs(packets), [packets]);
+
+  const filteredDialogs = useMemo(
+    () => dialogs.filter((d) => dialogMethods.has(d.primaryMethod)),
+    [dialogs, dialogMethods],
+  );
+
+  function toggleDialogMethod(m: string) {
+    setDialogMethods((prev) => {
+      const next = new Set(prev);
+      if (next.has(m)) next.delete(m); else next.add(m);
+      return next;
+    });
+  }
 
   const filteredPackets = useMemo(() => {
     let base = packets;
@@ -116,7 +143,7 @@ export default function CaptureLiveView({ packets, totalParsed }: Props) {
             onClick={() => setTab('dialogs')}
             className={`text-[11px] px-2 py-0.5 rounded ${tab === 'dialogs' ? 'bg-accent/20 text-accent' : 'text-muted'}`}
           >
-            diálogos SIP ({dialogs.length})
+            diálogos SIP ({filteredDialogs.length}{filteredDialogs.length !== dialogs.length ? ` de ${dialogs.length}` : ''})
           </button>
           <button
             onClick={() => setTab('packets')}
@@ -125,6 +152,30 @@ export default function CaptureLiveView({ packets, totalParsed }: Props) {
             pacotes ({packets.length}{totalParsed && totalParsed > packets.length ? ` de ${totalParsed}` : ''})
           </button>
         </div>
+        {tab === 'dialogs' && !selectedCallId && (
+          <div className="relative">
+            <button
+              onClick={() => setMethodMenuOpen((v) => !v)}
+              className="text-[11px] px-2 py-0.5 rounded border border-border text-muted hover:text-accent"
+            >
+              filtrar métodos {dialogMethods.size < SIP_METHODS_LIST.length ? `(${dialogMethods.size})` : ''}
+            </button>
+            {methodMenuOpen && (
+              <div className="absolute z-10 mt-1 bg-panel border border-border rounded-md shadow-lg p-2 grid grid-cols-2 gap-x-4 gap-y-1 w-56">
+                <div className="col-span-2 flex justify-between text-[10px] text-muted mb-1">
+                  <button className="hover:text-accent" onClick={() => setDialogMethods(new Set(SIP_METHODS_LIST))}>marcar todos</button>
+                  <button className="hover:text-accent" onClick={() => setDialogMethods(new Set())}>limpar</button>
+                </div>
+                {SIP_METHODS_LIST.map((m) => (
+                  <label key={m} className="flex items-center gap-1.5 text-[11px] cursor-pointer">
+                    <input type="checkbox" checked={dialogMethods.has(m)} onChange={() => toggleDialogMethod(m)} />
+                    {m}
+                  </label>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
         {tab === 'packets' && totalParsed && totalParsed > packets.length && (
           <span className="text-[10px] text-muted">
             exibindo só os últimos {packets.length} pacotes não-SIP (de {totalParsed} no total) — o .pcap baixado tem todos
@@ -168,11 +219,12 @@ export default function CaptureLiveView({ packets, totalParsed }: Props) {
                 <th className="text-left px-2 py-1">De</th>
                 <th className="text-left px-2 py-1">Para</th>
                 <th className="text-left px-2 py-1">Msgs</th>
+                <th className="text-left px-2 py-1">Método</th>
                 <th className="text-left px-2 py-1">Estado</th>
               </tr>
             </thead>
             <tbody>
-              {dialogs.map((d) => (
+              {filteredDialogs.map((d) => (
                 <tr
                   key={d.callId}
                   className="border-t border-border hover:bg-panel2 cursor-pointer"
@@ -182,15 +234,16 @@ export default function CaptureLiveView({ packets, totalParsed }: Props) {
                   <td className="px-2 py-1 truncate max-w-[160px]" title={d.from}>{d.from ?? '—'}</td>
                   <td className="px-2 py-1 truncate max-w-[160px]" title={d.to}>{d.to ?? '—'}</td>
                   <td className="px-2 py-1">{d.messages.length}</td>
+                  <td className={`px-2 py-1 font-medium ${METHOD_COLOR[d.primaryMethod] ?? ''}`}>{d.primaryMethod}</td>
                   <td className="px-2 py-1">
-                    <span className={`font-medium ${DIALOG_STATE[d.state].className}`}>
-                      {DIALOG_STATE[d.state].label}
+                    <span className={`font-medium ${dialogStateInfo(d).className}`}>
+                      {dialogStateInfo(d).label}
                     </span>
                   </td>
                 </tr>
               ))}
-              {!dialogs.length && (
-                <tr><td colSpan={5} className="px-2 py-3 text-center text-muted">nenhuma mensagem SIP decodificada ainda</td></tr>
+              {!filteredDialogs.length && (
+                <tr><td colSpan={6} className="px-2 py-3 text-center text-muted">{dialogs.length ? 'nenhum diálogo bate com o filtro de método' : 'nenhuma mensagem SIP decodificada ainda'}</td></tr>
               )}
             </tbody>
           </table>
@@ -291,7 +344,7 @@ function CallFlow({ dialog, onBack, maxH }: { dialog: SipDialog; onBack: () => v
       <button onClick={onBack} className="text-[11px] text-accent hover:underline mb-2">← voltar pros diálogos</button>
       <div className="text-[11px] text-muted mb-2">
         Call-ID: <span className="font-mono">{dialog.callId}</span> · estado:{' '}
-        <span className={`font-medium ${DIALOG_STATE[dialog.state].className}`}>{DIALOG_STATE[dialog.state].label}</span>
+        <span className={`font-medium ${dialogStateInfo(dialog).className}`}>{dialogStateInfo(dialog).label}</span>
       </div>
       <div className="flex gap-2">
         <div className="overflow-auto border border-border rounded bg-panel2" style={{ maxHeight: maxH ?? 320 }}>

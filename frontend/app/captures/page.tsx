@@ -115,8 +115,13 @@ export default function CapturesPage() {
   const [filterExpr, setFilterExpr] = useState('');
   const [includeRtp, setIncludeRtp] = useState(false);
   const [targetHost, setTargetHost] = useState('');
-  const [durationSeconds, setDurationSeconds] = useState(60);
-  const [maxPackets, setMaxPackets] = useState(200000);
+  // Strings (não number) de propósito: um <input type="number"> controlado
+  // que reclampa o valor a cada onChange trava o campo (apaga o "60" pra
+  // digitar "120" e o onChange já reescreve de volta pro mínimo/fallback
+  // antes do próximo dígito entrar — parecia "autocomplete" travando).
+  // Mantém o que foi digitado como string e só normaliza/clampa no blur.
+  const [durationInput, setDurationInput] = useState('60');
+  const [maxPacketsInput, setMaxPacketsInput] = useState('200000');
   const [reason, setReason] = useState('');
   const [showForm, setShowForm] = useState(false);
 
@@ -179,6 +184,8 @@ export default function CapturesPage() {
     const effectiveFilter = filterExpr.trim()
       ? filterExpr
       : (kind === 'sip' && !includeRtp ? 'port 5060 or port 5061' : undefined);
+    const durationSeconds = Math.min(1800, Math.max(5, Number(durationInput) || 60));
+    const maxPackets = Number(maxPacketsInput) || 200000;
     try {
       await apiFetch('/captures', {
         method: 'POST',
@@ -368,14 +375,19 @@ export default function CapturesPage() {
                 <div>
                   <label className="text-xs text-muted">Duração (segundos, 5–1800)</label>
                   <Input
-                    type="number" value={durationSeconds}
-                    onChange={(e) => setDurationSeconds(Math.min(1800, Math.max(5, Number(e.target.value) || 60)))}
+                    type="number" value={durationInput}
+                    onChange={(e) => setDurationInput(e.target.value)}
+                    onBlur={() => setDurationInput(String(Math.min(1800, Math.max(5, Number(durationInput) || 60))))}
                   />
                 </div>
                 {kind !== 'ping' && (
                   <div>
                     <label className="text-xs text-muted">Limite de pacotes</label>
-                    <Input type="number" value={maxPackets} onChange={(e) => setMaxPackets(Number(e.target.value) || 200000)} />
+                    <Input
+                      type="number" value={maxPacketsInput}
+                      onChange={(e) => setMaxPacketsInput(e.target.value)}
+                      onBlur={() => setMaxPacketsInput(String(Number(maxPacketsInput) || 200000))}
+                    />
                   </div>
                 )}
 
