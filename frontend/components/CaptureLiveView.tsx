@@ -88,6 +88,10 @@ export default function CaptureLiveView({ packets, totalParsed }: Props) {
   // (checkbox por método). Todos marcados por padrão = mostra tudo.
   const [dialogMethods, setDialogMethods] = useState<Set<string>>(() => new Set(SIP_METHODS_LIST));
   const [methodMenuOpen, setMethodMenuOpen] = useState(false);
+  // filtro de texto livre da aba diálogos — busca em qualquer campo do
+  // registro (Call-ID, De, Para, método, estado, e o texto SIP bruto das
+  // mensagens, que cobre ramal/número/nome que apareçam em From/To/Contact).
+  const [dialogFilter, setDialogFilter] = useState('');
   const [selected, setSelected] = useState<ParsedPacket | null>(null);
   const [selectedCallId, setSelectedCallId] = useState<string | null>(null);
   const [tab, setTab] = useState<'packets' | 'dialogs'>('dialogs');
@@ -98,10 +102,26 @@ export default function CaptureLiveView({ packets, totalParsed }: Props) {
 
   const dialogs = useMemo(() => buildDialogs(packets), [packets]);
 
-  const filteredDialogs = useMemo(
-    () => dialogs.filter((d) => dialogMethods.has(d.primaryMethod)),
-    [dialogs, dialogMethods],
-  );
+  const filteredDialogs = useMemo(() => {
+    let base = dialogs.filter((d) => dialogMethods.has(d.primaryMethod));
+    if (dialogFilter.trim()) {
+      const f = dialogFilter.toLowerCase();
+      base = base.filter((d) => {
+        const stateLabel = dialogStateInfo(d).label;
+        const fields = [d.callId, d.from, d.to, d.primaryMethod, stateLabel];
+        if (fields.some((v) => v && v.toLowerCase().includes(f))) return true;
+        // também busca dentro do texto bruto das mensagens (cobre ramal,
+        // nome, número que apareçam em headers tipo Contact/User-Agent e
+        // não só em From/To) e nos IPs de origem/destino das mensagens.
+        return d.messages.some((m) =>
+          (m.sipText && m.sipText.toLowerCase().includes(f)) ||
+          (m.srcIp && m.srcIp.toLowerCase().includes(f)) ||
+          (m.dstIp && m.dstIp.toLowerCase().includes(f)),
+        );
+      });
+    }
+    return base;
+  }, [dialogs, dialogMethods, dialogFilter]);
 
   function toggleDialogMethod(m: string) {
     setDialogMethods((prev) => {
@@ -181,6 +201,14 @@ export default function CaptureLiveView({ packets, totalParsed }: Props) {
             )}
           </div>
         )}
+        {tab === 'dialogs' && !selectedCallId && (
+          <input
+            value={dialogFilter}
+            onChange={(e) => setDialogFilter(e.target.value)}
+            placeholder='filtro (ex: número, nome, ramal...)'
+            className={`text-[11px] bg-panel border border-border rounded px-2 py-0.5 w-56 ${fullscreen ? '' : 'ml-auto'}`}
+          />
+        )}
         {tab === 'packets' && totalParsed && totalParsed > packets.length && (
           <span className="text-[10px] text-muted">
             exibindo só os últimos {packets.length} pacotes não-SIP (de {totalParsed} no total) — o .pcap baixado tem todos
@@ -248,7 +276,7 @@ export default function CaptureLiveView({ packets, totalParsed }: Props) {
                 </tr>
               ))}
               {!filteredDialogs.length && (
-                <tr><td colSpan={6} className="px-2 py-3 text-center text-muted">{dialogs.length ? 'nenhum diálogo bate com o filtro de método' : 'nenhuma mensagem SIP decodificada ainda'}</td></tr>
+                <tr><td colSpan={6} className="px-2 py-3 text-center text-muted">{dialogs.length ? 'nenhum diálogo bate com o filtro' : 'nenhuma mensagem SIP decodificada ainda'}</td></tr>
               )}
             </tbody>
           </table>
@@ -301,10 +329,10 @@ export default function CaptureLiveView({ packets, totalParsed }: Props) {
             </table>
           </div>
           {selected && (
-            <div className={`w-72 border-l border-border p-2 text-[11px] overflow-auto ${rowsMaxH}`}>
-              <div className="flex justify-between items-center mb-1">
+            <div className={`w-96 border-l border-border p-2.5 text-[13px] overflow-auto ${rowsMaxH}`}>
+              <div className="flex justify-between items-center mb-1.5">
                 <span className="font-medium">pacote #{selected.no}</span>
-                <button onClick={() => setSelected(null)} className="text-muted hover:text-accent">x</button>
+                <button onClick={() => setSelected(null)} className="text-muted hover:text-accent text-[14px]">x</button>
               </div>
               <div className="space-y-0.5 text-muted">
                 <div>tempo: <span className="font-mono">{fmtT(selected.relTime)}s</span></div>
@@ -314,7 +342,7 @@ export default function CaptureLiveView({ packets, totalParsed }: Props) {
                 <div>tamanho: {selected.length} bytes</div>
               </div>
               {selected.sipText && (
-                <pre className="mt-2 whitespace-pre-wrap text-[10px] bg-panel2 rounded p-1.5 border border-border">{selected.sipText}</pre>
+                <pre className="mt-2 whitespace-pre-wrap text-[12.5px] leading-relaxed bg-panel2 rounded p-1.5 border border-border">{selected.sipText}</pre>
               )}
             </div>
           )}
@@ -336,18 +364,18 @@ function CallFlow({ dialog, onBack, maxH }: { dialog: SipDialog; onBack: () => v
     return seen;
   }, [dialog]);
 
-  const colW = 160;
-  const rowH = 34;
-  const marginTop = 36;
-  const marginLeft = 70;
+  const colW = 200;
+  const rowH = 42;
+  const marginTop = 44;
+  const marginLeft = 90;
   const width = marginLeft + ips.length * colW + 20;
   const height = marginTop + dialog.messages.length * rowH + 20;
   const xOf = (ip?: string) => marginLeft + (ip ? ips.indexOf(ip) : 0) * colW + colW / 2;
 
   return (
     <div className="p-2">
-      <button onClick={onBack} className="text-[11px] text-accent hover:underline mb-2">← voltar pros diálogos</button>
-      <div className="text-[11px] text-muted mb-2">
+      <button onClick={onBack} className="text-[13px] text-accent hover:underline mb-2">← voltar pros diálogos</button>
+      <div className="text-[13px] text-muted mb-2">
         Call-ID: <span className="font-mono">{dialog.callId}</span> · estado:{' '}
         <span className={`font-medium ${dialogStateInfo(dialog).className}`}>{dialogStateInfo(dialog).label}</span>
       </div>
@@ -356,7 +384,7 @@ function CallFlow({ dialog, onBack, maxH }: { dialog: SipDialog; onBack: () => v
           <svg width={width} height={height} className="block">
             {ips.map((ip, i) => (
               <g key={ip}>
-                <text x={marginLeft + i * colW + colW / 2} y={16} textAnchor="middle" className="fill-current text-muted" fontSize={10}>
+                <text x={marginLeft + i * colW + colW / 2} y={20} textAnchor="middle" className="fill-current text-muted" fontSize={13} fontWeight={600}>
                   {ip}
                 </text>
                 <line
@@ -380,11 +408,11 @@ function CallFlow({ dialog, onBack, maxH }: { dialog: SipDialog; onBack: () => v
                   onClick={() => setSelectedMsg(m)}
                   className="cursor-pointer"
                 >
-                  <text x={4} y={y - 4} fontSize={9} className="fill-current text-muted">{fmtT(m.relTime)}</text>
-                  <line x1={x1} y1={y} x2={x2} y2={y} stroke={color} strokeWidth={1.5} markerEnd="url(#arrow)" />
+                  <text x={4} y={y - 6} fontSize={11} className="fill-current text-muted">{fmtT(m.relTime)}</text>
+                  <line x1={x1} y1={y} x2={x2} y2={y} stroke={color} strokeWidth={2} markerEnd="url(#arrow)" />
                   <text
-                    x={(x1 + x2) / 2} y={y - 4} textAnchor="middle" fontSize={10}
-                    fill={color} fontWeight={600}
+                    x={(x1 + x2) / 2} y={y - 6} textAnchor="middle" fontSize={13}
+                    fill={color} fontWeight={700}
                   >
                     {m.sipMethodOrStatus}
                   </text>
@@ -399,12 +427,12 @@ function CallFlow({ dialog, onBack, maxH }: { dialog: SipDialog; onBack: () => v
           </svg>
         </div>
         {selectedMsg && (
-          <div className="w-72 border border-border rounded bg-panel2 p-2 text-[11px] overflow-auto" style={{ maxHeight: maxH ?? 320 }}>
-            <div className="flex justify-between items-center mb-1">
-              <span className={`font-medium ${sipInfoColor(selectedMsg)}`}>{selectedMsg.sipMethodOrStatus}</span>
-              <button onClick={() => setSelectedMsg(null)} className="text-muted hover:text-accent">x</button>
+          <div className="w-96 border border-border rounded bg-panel2 p-2.5 text-[13px] overflow-auto" style={{ maxHeight: maxH ?? 320 }}>
+            <div className="flex justify-between items-center mb-1.5">
+              <span className={`font-semibold text-[14px] ${sipInfoColor(selectedMsg)}`}>{selectedMsg.sipMethodOrStatus}</span>
+              <button onClick={() => setSelectedMsg(null)} className="text-muted hover:text-accent text-[14px]">x</button>
             </div>
-            <pre className="whitespace-pre-wrap text-[10px]">{selectedMsg.sipText}</pre>
+            <pre className="whitespace-pre-wrap text-[12.5px] leading-relaxed">{selectedMsg.sipText}</pre>
           </div>
         )}
       </div>
