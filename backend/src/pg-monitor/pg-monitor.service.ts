@@ -715,17 +715,25 @@ export class PgMonitorService implements OnModuleInit {
    * no banco monitorado pra responder.
    */
   async tableHealth(clusterId: string) {
-    const cached = await this.redis.get(tableHealthKey(clusterId));
-    if (cached) {
-      try {
-        return JSON.parse(cached);
-      } catch {
-        // cache corrompido — ignora e cai no fallback abaixo
+    // O Redis aqui é só uma otimização (evita abrir conexão no cluster
+    // monitorado a cada request) — nunca pode ser motivo de 500 na tela. Se
+    // o Redis estiver fora do ar/inacessível neste ambiente, ignora o cache
+    // e cai direto pro cálculo em tempo real.
+    try {
+      const cached = await this.redis.get(tableHealthKey(clusterId));
+      if (cached) {
+        try {
+          return JSON.parse(cached);
+        } catch {
+          // cache corrompido — ignora e cai no fallback abaixo
+        }
       }
+    } catch (e: any) {
+      this.logger.error(`tableHealth redis.get: ${e.message}`);
     }
-    // Ainda sem nada no Redis (cluster recém-criado, ou primeiro refresh
-    // ainda não terminou) — calcula uma vez na hora pra não deixar a tela
-    // vazia, e já aproveita pra preencher o cache.
+    // Ainda sem nada no Redis (cluster recém-criado, primeiro refresh ainda
+    // não terminou, ou Redis indisponível) — calcula uma vez na hora pra
+    // não deixar a tela vazia.
     return this.collectTableHealth(clusterId);
   }
 
