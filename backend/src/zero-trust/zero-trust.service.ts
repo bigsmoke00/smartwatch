@@ -146,7 +146,7 @@ export class ZeroTrustService implements OnModuleInit {
               s.expires_at AS "expiresAt", s.closed_at AS "closedAt",
               s.last_activity_at AS "lastActivityAt", s.closed_reason AS "closedReason",
               s.created_at AS "createdAt",
-              u1.email AS "requestedByEmail", u2.email AS "approvedByEmail",
+              COALESCE(u1.email, s.requested_by_email) AS "requestedByEmail", u2.email AS "approvedByEmail",
               srv.name AS "serverName"
        FROM terminal_sessions s
        LEFT JOIN users u1 ON u1.id = s.requested_by
@@ -182,13 +182,13 @@ export class ZeroTrustService implements OnModuleInit {
 
     const r = await this.pool.query(
       `INSERT INTO terminal_sessions(
-         server_id, requested_by, reason, ttl_minutes, idle_timeout_minutes, command,
+         server_id, requested_by, requested_by_email, reason, ttl_minutes, idle_timeout_minutes, command,
          target, container_id, mode, sudo_requested, target_user
        )
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
        RETURNING id, status`,
       [
-        input.serverId, input.requestedBy, input.reason, input.ttlMinutes ?? 30,
+        input.serverId, input.requestedBy, u.rows[0].email, input.reason, input.ttlMinutes ?? 30,
         input.idleTimeoutMinutes ?? 15, input.command ?? '/bin/bash',
         target, target === 'container' ? input.containerId : null,
         mode, sudoRequested, login.osUsername,
@@ -268,7 +268,8 @@ export class ZeroTrustService implements OnModuleInit {
 
   async generateTranscript(sessionId: string, closeReason: string | null, persist = true): Promise<string> {
     const s = await this.pool.query(
-      `SELECT s.*, u1.email AS requested_by_email, u2.email AS approved_by_email, srv.name AS server_name
+      `SELECT s.*, COALESCE(u1.email, s.requested_by_email) AS requested_by_email,
+              u2.email AS approved_by_email, srv.name AS server_name
        FROM terminal_sessions s
        LEFT JOIN users u1 ON u1.id = s.requested_by
        LEFT JOIN users u2 ON u2.id = s.approved_by

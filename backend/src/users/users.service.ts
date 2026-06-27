@@ -238,18 +238,23 @@ export class UsersService {
     );
   }
 
+  /**
+   * Exclui o usuário. O histórico do que ele pediu (sessões de terminal,
+   * capturas de rede, pedidos de acesso a banco) NÃO é apagado — as
+   * migrations 020/021 desvincularam requested_by (ON DELETE SET NULL) e
+   * guardam uma cópia do e-mail (requested_by_email) no momento do pedido,
+   * então o registro de auditoria continua legível mesmo após a exclusão.
+   */
   async remove(id: string) {
     try {
       await this.pool.query(`DELETE FROM users WHERE id=$1`, [id]);
       return { ok: true };
     } catch (error: any) {
-      // 23503 = foreign_key_violation, 23502 = not_null_violation (esse
-      // último cobria o bug em que requested_by era NOT NULL mas a FK tinha
-      // ON DELETE SET NULL — corrigido na migration 020, mas mantemos o
-      // catch aqui também pra nunca devolver um 500 cru nesse endpoint).
+      // Defesa pra qualquer outra tabela/constraint que ainda não tenha
+      // sido ajustada pra ON DELETE SET NULL/CASCADE — nunca devolve 500 cru.
       if (error?.code === '23503' || error?.code === '23502') {
         throw new BadRequestException(
-          'Não é possível excluir este usuário: existem pedidos/sessões (terminal, captura, acesso a banco) vinculados a ele. Desative o usuário em vez de excluir, se precisar revogar o acesso.',
+          'Não é possível excluir este usuário: há um vínculo de dados que ainda não foi tratado. Avise a equipe de infra.',
         );
       }
       throw error;

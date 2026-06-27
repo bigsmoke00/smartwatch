@@ -74,17 +74,19 @@ export class DbAccessService {
       const sample = rows.slice(0, ROW_CAP);
       await this.pool.query(
         `INSERT INTO db_query_requests
-           (cluster_id, database, kind, sql_text, reason, status, requested_by,
+           (cluster_id, database, kind, sql_text, reason, status, requested_by, requested_by_email,
             executed_by, executed_at, row_count, result_sample)
-         VALUES ($1,$2,'read',$3,'leitura direta','executed',$4,$4, now(), $5, $6::jsonb)`,
+         VALUES ($1,$2,'read',$3,'leitura direta','executed',$4,
+                 (SELECT email FROM users WHERE id=$4),
+                 $4, now(), $5, $6::jsonb)`,
         [opts.clusterId, opts.database ?? null, opts.sql, opts.userId, rows.length, JSON.stringify(sample)],
       );
       return { rows: sample, rowCount: rows.length, truncated: rows.length > ROW_CAP, tookMs: Date.now() - startedAt };
     } catch (e: any) {
       await this.pool.query(
         `INSERT INTO db_query_requests
-           (cluster_id, database, kind, sql_text, reason, status, requested_by, error_text)
-         VALUES ($1,$2,'read',$3,'leitura direta','failed',$4,$5)`,
+           (cluster_id, database, kind, sql_text, reason, status, requested_by, requested_by_email, error_text)
+         VALUES ($1,$2,'read',$3,'leitura direta','failed',$4,(SELECT email FROM users WHERE id=$4),$5)`,
         [opts.clusterId, opts.database ?? null, opts.sql, opts.userId, e.message],
       );
       throw new BadRequestException(e.message);
@@ -102,7 +104,8 @@ export class DbAccessService {
     const where = conds.length ? `WHERE ${conds.join(' AND ')}` : '';
     const r = await this.pool.query(
       `SELECT q.*, c.name AS cluster_name,
-              ru.email AS requested_by_email, au.email AS approved_by_email, eu.email AS executed_by_email
+              COALESCE(ru.email, q.requested_by_email) AS requested_by_email,
+              au.email AS approved_by_email, eu.email AS executed_by_email
        FROM db_query_requests q
        JOIN pg_clusters c ON c.id = q.cluster_id
        LEFT JOIN users ru ON ru.id = q.requested_by
@@ -124,8 +127,8 @@ export class DbAccessService {
     }
     const r = await this.pool.query(
       `INSERT INTO db_query_requests
-         (cluster_id, database, kind, sql_text, reason, context_query, status, requested_by)
-       VALUES ($1,$2,'write',$3,$4,$5,'pending',$6) RETURNING id`,
+         (cluster_id, database, kind, sql_text, reason, context_query, status, requested_by, requested_by_email)
+       VALUES ($1,$2,'write',$3,$4,$5,'pending',$6,(SELECT email FROM users WHERE id=$6)) RETURNING id`,
       [opts.clusterId, opts.database ?? null, opts.sql, opts.reason, opts.contextQuery ?? null, opts.userId],
     );
     return { id: r.rows[0].id };

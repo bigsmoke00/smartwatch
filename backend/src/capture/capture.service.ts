@@ -65,7 +65,7 @@ export class CaptureService {
     const where = conds.length ? `WHERE ${conds.join(' AND ')}` : '';
     const r = await this.pool.query(
       `SELECT c.*, s.name AS server_name,
-              ru.email AS requested_by_email, au.email AS approved_by_email
+              COALESCE(ru.email, c.requested_by_email) AS requested_by_email, au.email AS approved_by_email
        FROM capture_sessions c
        JOIN servers s ON s.id = c.server_id
        LEFT JOIN users ru ON ru.id = c.requested_by
@@ -91,8 +91,8 @@ export class CaptureService {
     }
     const r = await this.pool.query(
       `INSERT INTO capture_sessions
-         (server_id, kind, iface, filter_expr, target_host, duration_seconds, max_packets, reason, status, requested_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'pending',$9) RETURNING id`,
+         (server_id, kind, iface, filter_expr, target_host, duration_seconds, max_packets, reason, status, requested_by, requested_by_email)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'pending',$9,(SELECT email FROM users WHERE id=$9)) RETURNING id`,
       [
         opts.serverId, opts.kind, opts.iface || 'any', opts.filterExpr ?? null, opts.targetHost ?? null,
         opts.durationSeconds ?? 60, opts.maxPackets ?? 200_000, opts.reason, opts.userId,
