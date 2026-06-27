@@ -5,14 +5,25 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  OnModuleInit,
 } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { randomUUID } from 'crypto';
 import { Pool } from 'pg';
+import type Redis from 'ioredis';
 import { PG_POOL } from '../db/db.module';
+import { REDIS_CLIENT } from '../redis/redis.module';
 import { SecretsService } from '../secrets/secrets.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { MonitoredPgClient } from './pg-client';
+
+// Chave Redis + TTL do cache de "Saúde" (bloat por tabela). TTL bem maior que
+// o intervalo do cron (30min) é de propósito: se um ciclo falhar (cluster
+// fora do ar, timeout etc.), a tela continua mostrando o último resultado
+// bom em vez de cair pra vazio — só expira de fato se passar muito tempo
+// sem nenhum ciclo bem-sucedido.
+const TABLE_HEALTH_TTL_SECONDS = 90 * 60;
+const tableHealthKey = (clusterId: string) => `pg:tableHealth:${clusterId}`;
 
 interface ClusterRow {
   id: string; name: string; vault_secret: string;
@@ -20,7 +31,7 @@ interface ClusterRow {
 }
 
 @Injectable()
-export class PgMonitorService {
+export class PgMonitorService implements OnModuleInit {
   private readonly logger = new Logger('PgMonitorService');
   // delta de TPS / bgwriter precisa do snapshot anterior
   private prevTx = new Map<string, { commits: number; rollbacks: number; ts: number }>();
@@ -29,6 +40,7 @@ export class PgMonitorService {
 
   constructor(
     @Inject(PG_POOL) private readonly pool: Pool,
+    @Inject(REDIS_CLIENT) private readonly redis: Redis,
     private readonly secrets: SecretsService,
     private readonly notif: NotificationsService,
   ) {}
@@ -234,6 +246,17 @@ export class PgMonitorService {
     await this.pool.query(`UPDATE pg_clusters SET deleted_at=now() WHERE id=$1`, [id]);
     await this.secrets.remove(cl.vault_secret).catch(() => {});
     return { ok: true };
+  }
+
+  /**
+   * Popula o cache do Redis assim que o backend sobe — sem isso, a tela
+   * "Saúde" ficaria vazia por até 30min após um deploy/restart, esperando o
+   * primeiro tick do cron abaixo.
+   */
+  async onModuleInit() {
+    this.refreshAllTableHealth().catch((e) =>
+      this.logger.error(`refreshAllTableHealth (boot): ${e.message}`),
+    );
   }
 
   // ---------- Cron: polling ----------
@@ -683,17 +706,91 @@ export class PgMonitorService {
     return r.rows;
   }
 
+  /**
+   * Lê o resultado já pronto do Redis — nunca abre conexão com o Postgres
+   * monitorado na hora do request. Quem mantém o dado fresco é o cron
+   * `refreshAllTableHealth()` (a cada 30min, ver mais abaixo). Isso resolve
+   * de vez o "fica presa e não traz nada": a tela sempre mostra o último
+   * resultado bom (cacheado com TTL generoso), nunca espera uma query lenta
+   * no banco monitorado pra responder.
+   */
   async tableHealth(clusterId: string) {
-    const r = await this.pool.query(
-      `SELECT DISTINCT ON (datname, schema_name, relname)
-              datname, schema_name, relname, n_live_tup, n_dead_tup, dead_pct,
-              last_autovacuum, last_autoanalyze, total_size_bytes
-       FROM pg_table_health
-       WHERE cluster_id=$1 AND ts >= now() - interval '1 day'
-       ORDER BY datname, schema_name, relname, ts DESC`,
-      [clusterId],
+    const cached = await this.redis.get(tableHealthKey(clusterId));
+    if (cached) {
+      try {
+        return JSON.parse(cached);
+      } catch {
+        // cache corrompido — ignora e cai no fallback abaixo
+      }
+    }
+    // Ainda sem nada no Redis (cluster recém-criado, ou primeiro refresh
+    // ainda não terminou) — calcula uma vez na hora pra não deixar a tela
+    // vazia, e já aproveita pra preencher o cache.
+    return this.collectTableHealth(clusterId);
+  }
+
+  /** Roda a cada 30min: recalcula a Saúde (bloat) de todos os clusters habilitados e guarda no Redis. */
+  @Cron(CronExpression.EVERY_30_MINUTES)
+  async refreshAllTableHealth() {
+    const clusters = await this.pool.query<ClusterRow>(
+      `SELECT id, name, vault_secret, hosts, database, enabled, poll_seconds
+       FROM pg_clusters WHERE enabled=true AND deleted_at IS NULL`,
     );
-    return r.rows;
+    for (const c of clusters.rows) {
+      try {
+        await this.collectTableHealth(c.id);
+      } catch (e: any) {
+        this.logger.error(`refreshAllTableHealth ${c.name}: ${e.message}`);
+      }
+    }
+  }
+
+  /**
+   * Calcula a Saúde (bloat por tabela) em tempo real — igual o
+   * indexSuggestions(): percorre todas as databases do servidor (não só a
+   * configurada no cluster) e lê pg_stat_user_tables direto, sem depender de
+   * nenhuma tabela histórica do Timescale. Grava o resultado no Redis.
+   */
+  private async collectTableHealth(clusterId: string) {
+    const c = await this.cluster(clusterId);
+    const main = await this.getClient(c);
+    let databases: string[];
+    try {
+      databases = await this.listServerDatabases(main);
+    } catch {
+      databases = [c.database];
+    } finally {
+      await main.end();
+    }
+
+    const out: any[] = [];
+    for (const datname of databases) {
+      const client = await this.getClient(c, datname);
+      try {
+        const rows = await client.query<any>(`
+          SELECT schemaname AS schema_name, relname,
+                 n_live_tup, n_dead_tup,
+                 CASE WHEN n_live_tup + n_dead_tup > 0
+                      THEN round(100.0 * n_dead_tup / (n_live_tup + n_dead_tup), 2)
+                      ELSE 0 END AS dead_pct,
+                 last_autovacuum, last_autoanalyze,
+                 pg_total_relation_size(relid) AS total_size_bytes
+          FROM pg_stat_user_tables
+        `);
+        for (const r of rows) out.push({ datname, ...r });
+      } catch (e: any) {
+        this.logger.error(`tableHealth ${c.name}/${datname}: ${e.message}`);
+      } finally {
+        await client.end();
+      }
+    }
+    out.sort((a, b) => Number(b.dead_pct ?? 0) - Number(a.dead_pct ?? 0));
+
+    await this.redis
+      .set(tableHealthKey(clusterId), JSON.stringify(out), 'EX', TABLE_HEALTH_TTL_SECONDS)
+      .catch((e: any) => this.logger.error(`tableHealth redis.set ${c.name}: ${e.message}`));
+
+    return out;
   }
 
   // ---------- Ações ----------

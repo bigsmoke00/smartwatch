@@ -6,6 +6,7 @@ import { APP_GUARD } from '@nestjs/core';
 import { LoggerModule } from 'nestjs-pino';
 
 import { DbModule } from './db/db.module';
+import { RedisModule } from './redis/redis.module';
 import { AuthModule } from './auth/auth.module';
 import { AuditModule } from './audit/audit.module';
 import { UsersModule } from './users/users.module';
@@ -71,6 +72,7 @@ import { BootstrapService } from './bootstrap.service';
     ]),
 
     DbModule,
+    RedisModule,
     AuditModule,
     AuthModule,
     UsersModule,
