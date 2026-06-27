@@ -46,6 +46,11 @@ export interface ParsedPacket {
   // automaticamente que duas pernas com Call-ID diferente são a mesma
   // ligação. Veja buildCallGroups().
   sipXCallId?: string;
+  // Payload Type RTP (header de 1 byte, 7 bits) — numérico, pra poder bater
+  // com os payload types anunciados no SDP (a=rtpmap) e assim agrupar os
+  // pacotes RTP de uma chamada num resumo "RTP (codec) N pacotes" estilo
+  // sngrep, em vez de listar pacote por pacote. Só preenchido quando proto === 'RTP'.
+  rtpPt?: number;
 }
 
 function concatU8(a: Uint8Array, b: Uint8Array): Uint8Array {
@@ -127,14 +132,14 @@ function tryDecodeSip(payload: Uint8Array): {
   };
 }
 
-function tryDecodeRtp(payload: Uint8Array): string | null {
+function tryDecodeRtp(payload: Uint8Array): { info: string; pt: number } | null {
   if (payload.length < 12) return null;
   const b0 = payload[0];
   const version = (b0 >> 6) & 0x3;
   if (version !== 2) return null;
   const pt = payload[1] & 0x7f;
   const seq = u16be(payload, 2);
-  return `RTP PT=${pt} seq=${seq}`;
+  return { info: `RTP PT=${pt} seq=${seq}`, pt };
 }
 
 export class PcapStreamParser {
@@ -274,7 +279,8 @@ export class PcapStreamParser {
       const rtp = tryDecodeRtp(payload);
       if (rtp) {
         base.proto = 'RTP';
-        base.info = rtp;
+        base.info = rtp.info;
+        base.rtpPt = rtp.pt;
         return base;
       }
       base.proto = 'UDP';
@@ -485,4 +491,98 @@ export function buildCallGroups(dialogs: SipDialog[], manualLinks?: string[][]):
       };
     })
     .sort((a, b) => a.messages[0].relTime - b.messages[0].relTime);
+}
+
+// Payload types estáticos da RFC 3551 mais comuns em telefonia — usado como
+// fallback quando a mensagem SDP não tem a=rtpmap explícito pro PT do m=audio
+// (caso raro, mas alguns UAs omitem rtpmap pros PTs estáticos 0-34).
+const STATIC_RTP_CODECS: Record<number, string> = {
+  0: 'g711u', 3: 'gsm', 4: 'g723', 8: 'g711a', 9: 'g722', 18: 'g729',
+};
+
+/** Normaliza nome de codec pro rótulo que o sngrep usa (g711a/g711u em vez de PCMA/PCMU). */
+function normalizeCodecName(raw: string): string {
+  const lower = raw.toLowerCase();
+  if (lower === 'pcma') return 'g711a';
+  if (lower === 'pcmu') return 'g711u';
+  return lower;
+}
+
+/**
+ * Extrai porta de mídia + codec principal do corpo SDP de uma mensagem SIP
+ * (INVITE, 200 OK, 183 Session Progress etc. com `Content-Type:
+ * application/sdp`). Pega o primeiro payload type da linha `m=audio` que não
+ * seja telephone-event (RFC 4733/2833 — sinalização de DTMF, não é áudio).
+ */
+function parseSdpMedia(text: string): { port: number; codec?: string } | null {
+  const mMatch = text.match(/\r?\nm=audio\s+(\d+)\s+RTP\/AVP\s+([\d ]+)/);
+  if (!mMatch) return null;
+  const port = parseInt(mMatch[1], 10);
+  const pts = mMatch[2].trim().split(/\s+/).map((s) => parseInt(s, 10));
+  let codec: string | undefined;
+  for (const pt of pts) {
+    const rtpmapMatch = text.match(new RegExp(`\\r?\\na=rtpmap:${pt}\\s+([\\w-]+)/`, 'i'));
+    const name = rtpmapMatch ? normalizeCodecName(rtpmapMatch[1]) : STATIC_RTP_CODECS[pt];
+    if (name && name !== 'telephone-event') { codec = name; break; }
+  }
+  return { port, codec };
+}
+
+export interface RtpFlowSummary {
+  aIp: string; aPort: number;
+  bIp: string; bPort: number;
+  codec?: string;
+  packetCount: number;
+  firstRelTime: number;
+  lastRelTime: number;
+}
+
+/**
+ * Correlaciona os pacotes RTP (proto === 'RTP') de uma captura com os
+ * endpoints de mídia anunciados nos corpos SDP das mensagens SIP do grupo —
+ * mesma ideia do sngrep ao mostrar uma linha "RTP (g711a) 357" resumindo o
+ * fluxo de áudio em vez de listar pacote a pacote (que seria inviável: uma
+ * chamada de alguns segundos já gera centenas de pacotes RTP).
+ *
+ * Heurística (sem isso não tem como saber, RTP não carrega Call-ID): pega o
+ * IP de quem enviou cada SDP (srcIp da mensagem SIP) + a porta anunciada no
+ * `m=audio`, monta a lista de endpoints de mídia conhecidos da ligação, e
+ * agrupa todo pacote RTP cujo par origem/destino bate com dois desses
+ * endpoints dentro da janela de tempo do grupo (com folga de alguns segundos
+ * depois da última mensagem SIP vista, pra cobrir o áudio que continua
+ * rolando até o BYE chegar).
+ */
+export function buildRtpFlows(group: CallGroup, allPackets: ParsedPacket[]): RtpFlowSummary[] {
+  const endpoints: { ip: string; port: number; codec?: string }[] = [];
+  for (const m of group.messages) {
+    if (!m.sipText || !m.srcIp) continue;
+    if (!/^v=0\r?$/m.test(m.sipText) && !/content-type:\s*application\/sdp/i.test(m.sipText)) continue;
+    const media = parseSdpMedia(m.sipText);
+    if (media) endpoints.push({ ip: m.srcIp, port: media.port, codec: media.codec });
+  }
+  if (endpoints.length < 2) return [];
+
+  const tStart = group.messages[0].relTime;
+  const tEnd = group.messages[group.messages.length - 1].relTime + 30;
+  const flows = new Map<string, RtpFlowSummary>();
+  for (const p of allPackets) {
+    if (p.proto !== 'RTP' || !p.srcIp || !p.dstIp || p.srcPort == null || p.dstPort == null) continue;
+    if (p.relTime < tStart - 2 || p.relTime > tEnd) continue;
+    const dstKnown = endpoints.find((e) => e.ip === p.dstIp && e.port === p.dstPort);
+    if (!dstKnown) continue;
+    const srcKnown = endpoints.find((e) => e.ip === p.srcIp && e.port === p.srcPort);
+    const key = [`${p.srcIp}:${p.srcPort}`, `${p.dstIp}:${p.dstPort}`].sort().join('|');
+    let f = flows.get(key);
+    if (!f) {
+      f = {
+        aIp: p.srcIp, aPort: p.srcPort, bIp: p.dstIp, bPort: p.dstPort,
+        codec: srcKnown?.codec ?? dstKnown.codec,
+        packetCount: 0, firstRelTime: p.relTime, lastRelTime: p.relTime,
+      };
+      flows.set(key, f);
+    }
+    f.packetCount++;
+    f.lastRelTime = p.relTime;
+  }
+  return [...flows.values()].sort((a, b) => a.firstRelTime - b.firstRelTime);
 }

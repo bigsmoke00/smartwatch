@@ -1,7 +1,7 @@
 'use client';
 
-import { useMemo, useState } from 'react';
-import { ParsedPacket, SipDialog, SipDialogState, SIP_METHODS_LIST, buildDialogs, buildCallGroups, CallGroup } from '@/lib/pcap';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { ParsedPacket, SipDialog, SipDialogState, SIP_METHODS_LIST, buildDialogs, buildCallGroups, buildRtpFlows, CallGroup, RtpFlowSummary } from '@/lib/pcap';
 
 interface Props {
   packets: ParsedPacket[];
@@ -421,7 +421,7 @@ export default function CaptureLiveView({ packets, totalParsed }: Props) {
                   <tr
                     key={d.callId}
                     className="border-t border-border hover:bg-panel2 cursor-pointer"
-                    onClick={() => setSelectedCallId(d.callId)}
+                    onClick={() => { setSelectedCallId(d.callId); setFullscreen(true); }}
                   >
                     <td className="px-2 py-1" onClick={(e) => e.stopPropagation()}>
                       <input
@@ -465,8 +465,8 @@ export default function CaptureLiveView({ packets, totalParsed }: Props) {
       )}
 
       {tab === 'dialogs' && selectedGroup && (
-        <div className={fullscreen ? 'flex-1 overflow-auto' : ''}>
-          <CallFlow group={selectedGroup} onBack={() => setSelectedCallId(null)} maxH={fullscreen ? 'calc(100vh - 220px)' : undefined} />
+        <div className={fullscreen ? 'flex-1 overflow-hidden flex flex-col' : 'h-[520px] flex flex-col'}>
+          <CallFlow group={selectedGroup} allPackets={packets} onBack={() => setSelectedCallId(null)} />
         </div>
       )}
 
@@ -542,13 +542,42 @@ export default function CaptureLiveView({ packets, totalParsed }: Props) {
   );
 }
 
-function CallFlow({ group, onBack, maxH }: { group: CallGroup; onBack: () => void; maxH?: string }) {
-  const [selectedMsg, setSelectedMsg] = useState<ParsedPacket | null>(null);
-  // largura/altura do painel de detalhe da mensagem — arrastável (ver
-  // ResizeHandle/ResizeHandleV); a letra escala junto com a largura via
-  // detailFontSize(), sem precisar abrir outro painel.
-  const [msgPanelW, setMsgPanelW] = useState(384);
-  const [msgPanelH, setMsgPanelH] = useState(320);
+// Linha unificada do fluxo mesclado — mensagem SIP ou resumo de um fluxo RTP
+// (RTP não tem Call-ID, então não dá pra listar pacote a pacote; um fluxo
+// inteiro de áudio entra como UMA linha, igual o sngrep faz).
+type FlowEvent =
+  | { kind: 'sip'; t: number; msg: ParsedPacket }
+  | { kind: 'rtp'; t: number; flow: RtpFlowSummary };
+
+function buildFlowEvents(group: CallGroup, rtpFlows: RtpFlowSummary[]): FlowEvent[] {
+  const events: FlowEvent[] = [
+    ...group.messages.map((m): FlowEvent => ({ kind: 'sip', t: m.relTime, msg: m })),
+    ...rtpFlows.map((f): FlowEvent => ({ kind: 'rtp', t: f.firstRelTime, flow: f })),
+  ];
+  return events.sort((a, b) => a.t - b.t);
+}
+
+/** Cor da linha/rótulo de uma mensagem SIP — pelo tipo de request/response, igual sngrep faz. */
+function sipEventColor(m: ParsedPacket): string {
+  if (m.sipIsRequest) return '#58a6ff';
+  if (m.sipMethodOrStatus?.startsWith('2')) return '#3fb950';
+  if (m.sipMethodOrStatus?.startsWith('1')) return '#d29922';
+  if (/^[4-6]/.test(m.sipMethodOrStatus ?? '')) return '#f85149';
+  return '#8b949e';
+}
+
+const MIN_COL_W = 190;
+const MAX_COL_W = 320;
+const ROW_H = 40;
+const MARGIN_TOP = 8;
+const MARGIN_LEFT = 118;
+const HEADER_H = 34;
+
+function CallFlow({ group, allPackets, onBack }: { group: CallGroup; allPackets: ParsedPacket[]; onBack: () => void }) {
+  const [selectedItem, setSelectedItem] = useState<{ kind: 'sip'; msg: ParsedPacket } | { kind: 'rtp'; flow: RtpFlowSummary } | null>(null);
+  // largura do painel de detalhe — arrastável; a altura agora acompanha 100%
+  // do espaço disponível (a tela cheia inteira), em vez de uma caixinha fixa.
+  const [msgPanelW, setMsgPanelW] = useState(420);
 
   const isLinked = group.callIds.length > 1;
   const messages = group.messages;
@@ -556,127 +585,223 @@ function CallFlow({ group, onBack, maxH }: { group: CallGroup; onBack: () => voi
   // mostrar quando não há pernas ligadas (estado de chamada é por dialog).
   const soloDialog = !isLinked ? group.dialogs[0] : undefined;
 
+  const rtpFlows = useMemo(() => buildRtpFlows(group, allPackets), [group, allPackets]);
+  const events = useMemo(() => buildFlowEvents(group, rtpFlows), [group, rtpFlows]);
+
   const ips = useMemo(() => {
     const seen: string[] = [];
     for (const m of messages) {
       if (m.srcIp && !seen.includes(m.srcIp)) seen.push(m.srcIp);
       if (m.dstIp && !seen.includes(m.dstIp)) seen.push(m.dstIp);
     }
+    for (const f of rtpFlows) {
+      if (!seen.includes(f.aIp)) seen.push(f.aIp);
+      if (!seen.includes(f.bIp)) seen.push(f.bIp);
+    }
     return seen;
+  }, [messages, rtpFlows]);
+
+  // porta "típica" (sinalização SIP) de cada IP, só pra exibir no cabeçalho
+  // da coluna (ex.: "10.10.1.130:5060") — pega a primeira mensagem SIP vista
+  // com esse IP como origem ou destino.
+  const portOf = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const msg of messages) {
+      if (msg.srcIp && msg.srcPort && !m.has(msg.srcIp)) m.set(msg.srcIp, msg.srcPort);
+      if (msg.dstIp && msg.dstPort && !m.has(msg.dstIp)) m.set(msg.dstIp, msg.dstPort);
+    }
+    return m;
   }, [messages]);
 
-  const colW = 200;
-  const rowH = 42;
-  const marginTop = 44;
-  const marginLeft = 90;
-  const width = marginLeft + ips.length * colW + 20;
-  const height = marginTop + messages.length * rowH + 20;
-  const xOf = (ip?: string) => marginLeft + (ip ? ips.indexOf(ip) : 0) * colW + colW / 2;
+  // Mede o espaço disponível (preenchido pelo container pai em tela cheia)
+  // pra espalhar as colunas pela largura inteira, igual sngrep — em vez de
+  // ficar uma caixinha pequena espremida num canto.
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [box, setBox] = useState({ w: 900, h: 500 });
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver((entries) => {
+      const r = entries[0]?.contentRect;
+      if (r) setBox({ w: r.width, h: r.height });
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  const colW = Math.max(MIN_COL_W, Math.min(MAX_COL_W, Math.floor((box.w - MARGIN_LEFT - 20) / Math.max(1, ips.length))));
+  const innerW = MARGIN_LEFT + ips.length * colW + 20;
+  const width = Math.max(box.w, innerW);
+  const innerH = MARGIN_TOP + events.length * ROW_H + 20;
+  const height = Math.max(box.h - HEADER_H, innerH);
+  const xOf = (ip?: string) => MARGIN_LEFT + (ip ? ips.indexOf(ip) : 0) * colW + colW / 2;
 
   return (
-    <div className="p-2">
-      <button onClick={onBack} className="text-[13px] text-accent hover:underline mb-2">← voltar pros diálogos</button>
-      <div className="text-[13px] text-muted mb-2">
-        {isLinked ? (
-          <>
-            <span className="text-accent font-medium">🔗 {group.callIds.length} pernas ligadas</span>
-            {' '}{group.manual ? '(união manual — sem header de correlação)' : 'via X-Call-ID/X-CID'} ·{' '}
-            <span className="font-mono">{group.callIds.join('  +  ')}</span>
-          </>
-        ) : (
-          <>
-            Call-ID: <span className="font-mono">{group.id}</span> · estado:{' '}
-            <span className={`font-medium ${dialogStateInfo(soloDialog!).className}`}>{dialogStateInfo(soloDialog!).label}</span>
-          </>
+    <div className="flex flex-col h-full min-h-0">
+      <div className="flex items-center gap-2 px-2 py-1.5 bg-cyan-950/60 border-b border-cyan-800/60 shrink-0">
+        <button onClick={onBack} className="text-[12px] text-accent hover:underline shrink-0">← voltar</button>
+        <div className="text-[12px] text-cyan-300 font-mono truncate">
+          {isLinked ? (
+            <>
+              fluxo de chamada — 🔗 {group.callIds.length} pernas {group.manual ? '(união manual)' : 'via X-Call-ID/X-CID'} ·{' '}
+              <span className="text-cyan-200">{group.callIds.join('  +  ')}</span>
+            </>
+          ) : (
+            <>
+              fluxo de chamada — <span className="text-cyan-200">{group.id}</span> · estado:{' '}
+              <span className={dialogStateInfo(soloDialog!).className}>{dialogStateInfo(soloDialog!).label}</span>
+            </>
+          )}
+        </div>
+        {isLinked && (
+          <div className="flex gap-2 ml-auto text-[10px] shrink-0">
+            {group.callIds.map((cid, i) => (
+              <span key={cid} className="flex items-center gap-1" title={cid}>
+                <span className="inline-block w-2 h-2 rounded-sm" style={{ background: LEG_COLORS[i % LEG_COLORS.length] }} />
+                perna {i + 1}
+              </span>
+            ))}
+          </div>
         )}
       </div>
-      {isLinked && (
-        <div className="flex gap-3 mb-2 text-[11px]">
-          {group.callIds.map((cid, i) => (
-            <span key={cid} className="flex items-center gap-1.5" title={cid}>
-              <span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ background: LEG_COLORS[i % LEG_COLORS.length] }} />
-              perna {i + 1}: <span className="font-mono text-muted">{cid.slice(0, 24)}{cid.length > 24 ? '…' : ''}</span>
-            </span>
-          ))}
-        </div>
-      )}
-      <div className="flex gap-2">
-        <div className="overflow-auto border border-border rounded bg-panel2" style={{ maxHeight: maxH ?? 320 }}>
-          <svg width={width} height={height} className="block">
+
+      <div className="flex flex-1 min-h-0">
+        <div ref={containerRef} className="flex-1 min-h-0 overflow-auto bg-panel2">
+          <svg width={width} height={height + HEADER_H} className="block font-mono">
+            {/* cabeçalho das colunas (ip:porta) — rola junto com o conteúdo, igual sngrep */}
+            <rect x={0} y={0} width={width} height={HEADER_H} className="fill-current text-panel" />
             {ips.map((ip, i) => (
               <g key={ip}>
-                <text x={marginLeft + i * colW + colW / 2} y={20} textAnchor="middle" className="fill-current text-muted" fontSize={13} fontWeight={600}>
-                  {ip}
+                <text
+                  x={MARGIN_LEFT + i * colW + colW / 2} y={HEADER_H / 2 + 4}
+                  textAnchor="middle" className="fill-current text-muted" fontSize={12} fontWeight={700}
+                >
+                  {ip}{portOf.get(ip) ? `:${portOf.get(ip)}` : ''}
                 </text>
                 <line
-                  x1={marginLeft + i * colW + colW / 2} y1={marginTop - 6}
-                  x2={marginLeft + i * colW + colW / 2} y2={height - 10}
-                  stroke="currentColor" className="text-border" strokeDasharray="2,3"
+                  x1={MARGIN_LEFT + i * colW + colW / 2} y1={HEADER_H}
+                  x2={MARGIN_LEFT + i * colW + colW / 2} y2={height + HEADER_H - 4}
+                  stroke="currentColor" className="text-border" strokeDasharray="2,4"
                 />
               </g>
             ))}
-            {messages.map((m, i) => {
-              const y = marginTop + i * rowH;
-              const x1 = xOf(m.srcIp);
-              const x2 = xOf(m.dstIp);
-              const isFinal = !m.sipIsRequest;
-              const color = isFinal
-                ? (m.sipMethodOrStatus?.startsWith('2') ? '#3fb950' : /^[4-6]/.test(m.sipMethodOrStatus ?? '') ? '#f85149' : '#d29922')
-                : '#58a6ff';
-              const leg = isLinked ? legIndexOf(group, m) : -1;
-              return (
-                <g
-                  key={i}
-                  onClick={() => setSelectedMsg(m)}
-                  className="cursor-pointer"
-                >
-                  <text x={4} y={y - 6} fontSize={11} className="fill-current text-muted">{fmtT(m.relTime)}</text>
-                  {leg >= 0 && (
-                    <rect x={2} y={y - 4} width={4} height={10} fill={LEG_COLORS[leg % LEG_COLORS.length]} />
-                  )}
-                  <line x1={x1} y1={y} x2={x2} y2={y} stroke={color} strokeWidth={2} markerEnd="url(#arrow)" />
-                  <text
-                    x={(x1 + x2) / 2} y={y - 6} textAnchor="middle" fontSize={13}
-                    fill={color} fontWeight={700}
-                  >
-                    {m.sipMethodOrStatus}
-                  </text>
-                  {leg >= 0 && (
-                    <text x={(x1 + x2) / 2} y={y + 12} textAnchor="middle" fontSize={9} fill={LEG_COLORS[leg % LEG_COLORS.length]}>
-                      perna {leg + 1}
+            {events.map((ev, i) => {
+              const y = HEADER_H + MARGIN_TOP + i * ROW_H + ROW_H / 2;
+              const prevT = i > 0 ? events[i - 1].t : ev.t;
+              const delta = ev.t - prevT;
+
+              if (ev.kind === 'sip') {
+                const m = ev.msg;
+                const x1 = xOf(m.srcIp);
+                const x2 = xOf(m.dstIp);
+                const color = sipEventColor(m);
+                const leg = isLinked ? legIndexOf(group, m) : -1;
+                return (
+                  <g key={i} onClick={() => setSelectedItem({ kind: 'sip', msg: m })} className="cursor-pointer">
+                    <text x={6} y={y - 5} fontSize={10.5} className="fill-current text-muted">{fmtT(m.relTime)}s</text>
+                    <text x={6} y={y + 9} fontSize={9.5} fill="#39c5cf">+{fmtT(delta)}</text>
+                    {leg >= 0 && <rect x={MARGIN_LEFT - 8} y={y - 9} width={3} height={18} fill={LEG_COLORS[leg % LEG_COLORS.length]} />}
+                    <line x1={x1} y1={y} x2={x2} y2={y} stroke={color} strokeWidth={2} markerEnd="url(#arrow)" />
+                    <text x={(x1 + x2) / 2} y={y - 6} textAnchor="middle" fontSize={12.5} fill={color} fontWeight={700}>
+                      {m.sipMethodOrStatus}
                     </text>
-                  )}
+                  </g>
+                );
+              }
+
+              const f = ev.flow;
+              const x1 = xOf(f.aIp);
+              const x2 = xOf(f.bIp);
+              return (
+                <g key={i} onClick={() => setSelectedItem({ kind: 'rtp', flow: f })} className="cursor-pointer">
+                  <text x={6} y={y - 5} fontSize={10.5} className="fill-current text-muted">{fmtT(f.firstRelTime)}s</text>
+                  <text x={6} y={y + 9} fontSize={9.5} fill="#39c5cf">+{fmtT(delta)}</text>
+                  <line x1={x1} y1={y} x2={x2} y2={y} stroke="#39c5cf" strokeWidth={1.5} strokeDasharray="6,3" markerEnd="url(#arrowRtp)" />
+                  <text x={(x1 + x2) / 2} y={y - 6} textAnchor="middle" fontSize={11.5} fill="#39c5cf" fontWeight={600}>
+                    RTP {f.codec ? `(${f.codec}) ` : ''}{f.packetCount} pacotes
+                  </text>
+                  <text x={(x1 + x2) / 2} y={y + 10} textAnchor="middle" fontSize={9.5} className="fill-current text-muted">
+                    {f.aPort} ⇄ {f.bPort}
+                  </text>
                 </g>
               );
             })}
+            {!events.length && (
+              <text x={MARGIN_LEFT} y={HEADER_H + 30} fontSize={12} className="fill-current text-muted">nenhuma mensagem nesse diálogo</text>
+            )}
             <defs>
               <marker id="arrow" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
                 <path d="M0,0 L6,3 L0,6 Z" fill="currentColor" className="text-muted" />
               </marker>
+              <marker id="arrowRtp" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+                <path d="M0,0 L6,3 L0,6 Z" fill="#39c5cf" />
+              </marker>
             </defs>
           </svg>
         </div>
-        {selectedMsg && (
+
+        {selectedItem && (
           <>
             <ResizeHandle onDelta={(dx) => setMsgPanelW((w) => Math.max(DETAIL_MIN_W, Math.min(DETAIL_MAX_W, w - dx)))} />
-            <div className="border border-border rounded bg-panel2 shrink-0 flex flex-col" style={{ width: msgPanelW }}>
-              <div
-                className="overflow-auto p-2.5 flex-1"
-                style={{ height: msgPanelH, fontSize: detailFontSize(msgPanelW) }}
-              >
-                <div className="flex justify-between items-center mb-1.5">
-                  <span className={`font-semibold ${sipInfoColor(selectedMsg)}`} style={{ fontSize: detailFontSize(msgPanelW) + 1 }}>
-                    {selectedMsg.sipMethodOrStatus}
-                  </span>
-                  <button onClick={() => setSelectedMsg(null)} className="text-muted hover:text-accent" style={{ fontSize: detailFontSize(msgPanelW) + 1 }}>x</button>
-                </div>
-                <pre className="whitespace-pre-wrap break-all leading-relaxed" style={{ fontSize: 'inherit' }}>{selectedMsg.sipText}</pre>
+            <div className="border-l border-border bg-panel2 shrink-0 flex flex-col overflow-auto" style={{ width: msgPanelW }}>
+              <div className="overflow-auto p-2.5 flex-1" style={{ fontSize: detailFontSize(msgPanelW) }}>
+                {selectedItem.kind === 'sip' ? (
+                  <>
+                    <div className="flex justify-between items-center mb-1.5">
+                      <span className={`font-semibold ${sipInfoColor(selectedItem.msg)}`} style={{ fontSize: detailFontSize(msgPanelW) + 1 }}>
+                        {selectedItem.msg.sipMethodOrStatus}
+                      </span>
+                      <button onClick={() => setSelectedItem(null)} className="text-muted hover:text-accent" style={{ fontSize: detailFontSize(msgPanelW) + 1 }}>x</button>
+                    </div>
+                    <pre className="whitespace-pre-wrap break-all leading-relaxed font-mono" style={{ fontSize: 'inherit' }}>
+                      {highlightSip(selectedItem.msg.sipText ?? '')}
+                    </pre>
+                  </>
+                ) : (
+                  <>
+                    <div className="flex justify-between items-center mb-1.5">
+                      <span className="font-semibold" style={{ fontSize: detailFontSize(msgPanelW) + 1, color: '#39c5cf' }}>
+                        fluxo RTP {selectedItem.flow.codec ? `(${selectedItem.flow.codec})` : ''}
+                      </span>
+                      <button onClick={() => setSelectedItem(null)} className="text-muted hover:text-accent" style={{ fontSize: detailFontSize(msgPanelW) + 1 }}>x</button>
+                    </div>
+                    <div className="space-y-1 text-muted font-mono">
+                      <div>{selectedItem.flow.aIp}:{selectedItem.flow.aPort} ⇄ {selectedItem.flow.bIp}:{selectedItem.flow.bPort}</div>
+                      <div>pacotes: {selectedItem.flow.packetCount}</div>
+                      <div>de {fmtT(selectedItem.flow.firstRelTime)}s até {fmtT(selectedItem.flow.lastRelTime)}s ({fmtT(selectedItem.flow.lastRelTime - selectedItem.flow.firstRelTime)}s de duração)</div>
+                      <div className="text-[10px] mt-1 opacity-70">resumo heurístico: correlaciona porta/IP anunciados no SDP das mensagens SIP com os pacotes RTP capturados na mesma janela de tempo — sem Call-ID nativo no RTP, não tem como ser 100% exato se houver troca de codec/porta no meio da chamada (re-INVITE).</div>
+                    </div>
+                  </>
+                )}
               </div>
-              <ResizeHandleV onDelta={(dy) => setMsgPanelH((h) => Math.max(150, Math.min(maxDetailPanelH(), h + dy)))} />
             </div>
           </>
         )}
       </div>
     </div>
   );
+}
+
+// Cores básicas pra realçar a mensagem SIP crua no painel de detalhe — nome
+// do header (antes dos dois-pontos) num tom, valores de Call-ID/branch/tag
+// (que ajudam a rastrear a correlação entre pernas) em outro.
+function highlightSip(text: string): ReactNode {
+  return text.split('\n').map((line, i) => {
+    const headerMatch = line.match(/^([\w-]+):\s*(.*)$/);
+    if (headerMatch) {
+      const [, name, rest] = headerMatch;
+      const isCorrelation = /^(call-id|x-call-id|x-cid)$/i.test(name);
+      return (
+        <div key={i}>
+          <span className={isCorrelation ? 'text-accent font-semibold' : 'text-success'}>{name}</span>
+          <span className="text-muted">: </span>
+          <span>{rest}</span>
+        </div>
+      );
+    }
+    if (/^(INVITE|ACK|BYE|CANCEL|OPTIONS|REGISTER|PRACK|SUBSCRIBE|NOTIFY|PUBLISH|INFO|REFER|MESSAGE|UPDATE)\s+sip:/i.test(line) || /^SIP\/2\.0\s+\d/.test(line)) {
+      return <div key={i} className="text-warn font-semibold">{line}</div>;
+    }
+    return <div key={i}>{line || ' '}</div>;
+  });
 }
