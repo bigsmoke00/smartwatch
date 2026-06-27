@@ -7,8 +7,9 @@ import { AppShell } from '@/components/AppShell';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';
+import { PageHeader } from '@/components/ui/PageHeader';
 import { apiFetch, Auth } from '@/lib/api';
-import { Copy, Key, Trash2 } from 'lucide-react';
+import { Copy, Key, Trash2, Server as ServerIcon } from 'lucide-react';
 import { fmtTime, safeArray } from '@/lib/utils';
 
 interface Detail {
@@ -62,15 +63,16 @@ export default function ServerDetail() {
   return (
     <AppShell>
       <div className="p-6 space-y-4 max-w-4xl">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-semibold">{detail.name}</h1>
-            <p className="text-sm text-muted">{detail.description || '—'}</p>
-          </div>
-          <Link href={`/logs?serverId=${detail.id}`}>
-            <Button variant="secondary">Ver logs deste servidor</Button>
-          </Link>
-        </div>
+        <PageHeader
+          title={detail.name}
+          description={detail.description || 'Detalhes do servidor, chaves de API e instalação do agent.'}
+          icon={<ServerIcon size={16} />}
+          actions={
+            <Link href={`/logs?serverId=${detail.id}`}>
+              <Button variant="secondary">Ver logs deste servidor</Button>
+            </Link>
+          }
+        />
 
         <Card className="p-4 grid grid-cols-3 gap-3 text-sm">
           <div>
@@ -136,7 +138,7 @@ export default function ServerDetail() {
               >
                 <div className="font-mono">{k.prefix}.…</div>
                 <div className="flex items-center gap-3">
-                  <Badge>{k.active ? 'ativa' : 'revogada'}</Badge>
+                  <Badge tone={k.active ? 'success' : 'default'}>{k.active ? 'ativa' : 'revogada'}</Badge>
                   <span className="text-xs text-muted">
                     {k.lastUsedAt
                       ? `usada ${fmtTime(k.lastUsedAt)}`

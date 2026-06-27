@@ -6,6 +6,8 @@ import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Badge } from '@/components/ui/Badge';
+import { PageHeader } from '@/components/ui/PageHeader';
+import { Select } from '@/components/ui/Select';
 import { apiFetch, Auth } from '@/lib/api';
 import { fmtTime, safeArray } from '@/lib/utils';
 import { Download, Package, Calendar, Trash2 } from 'lucide-react';
@@ -59,7 +61,7 @@ export default function ExportsPage() {
   return (
     <AppShell>
       <div className="p-6 space-y-4">
-        <h1 className="text-2xl font-semibold">Log exports</h1>
+        <PageHeader title="Log exports" description="Download manual e agendamentos recorrentes de exportação de logs." icon={<Download size={16} />} />
 
         <Card className="p-4">
           <h2 className="text-sm font-medium mb-3">Download por servidor</h2>
@@ -99,7 +101,7 @@ export default function ExportsPage() {
                   <td className="px-3 py-1.5 text-xs">
                     {s.lastRunAt ? fmtTime(s.lastRunAt) : '—'}{' '}
                     {s.lastStatus && (
-                      <Badge className={s.lastStatus === 'ok' ? 'border-success text-success' : 'border-danger text-danger'}>
+                      <Badge tone={s.lastStatus === 'ok' ? 'success' : 'danger'}>
                         {s.lastStatus}
                       </Badge>
                     )}
@@ -146,29 +148,21 @@ function ServerExportList({
       <div className="grid md:grid-cols-5 gap-2 items-end">
         <div>
           <label className="text-xs text-muted">Servidor</label>
-          <select
-            value={serverId}
-            onChange={(e) => setServerId(e.target.value)}
-            className="w-full rounded-md bg-panel2 border border-border px-3 py-2 text-sm"
-          >
+          <Select value={serverId} onChange={(e) => setServerId(e.target.value)}>
             <option value="">Todos</option>
             {safeArray<Server>(servers).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-          </select>
+          </Select>
         </div>
         <div><label className="text-xs text-muted">De</label><Input value={from} onChange={(e) => setFrom(e.target.value)} /></div>
         <div><label className="text-xs text-muted">Até</label><Input value={to} onChange={(e) => setTo(e.target.value)} /></div>
         <div>
           <label className="text-xs text-muted">Formato</label>
-          <select
-            value={format}
-            onChange={(e) => setFormat(e.target.value)}
-            className="w-full rounded-md bg-panel2 border border-border px-3 py-2 text-sm"
-          >
+          <Select value={format} onChange={(e) => setFormat(e.target.value)}>
             <option value="log">.log</option>
             <option value="csv">.csv</option>
             <option value="json">.json</option>
             <option value="gz">.log.gz</option>
-          </select>
+          </Select>
         </div>
         <div className="flex gap-2">
           <Button onClick={() => onExport({ serverId: serverId || undefined, from, to, format })}>
@@ -219,9 +213,9 @@ function NewScheduleForm({ onCreated }: { onCreated: () => void }) {
       <div><label className="text-xs text-muted">Cron</label><Input value={cron} onChange={(e) => setCron(e.target.value)} placeholder="0 2 * * *" /></div>
       <div>
         <label className="text-xs text-muted">Formato</label>
-        <select value={format} onChange={(e) => setFormat(e.target.value)} className="w-full rounded-md bg-panel2 border border-border px-3 py-2 text-sm">
+        <Select value={format} onChange={(e) => setFormat(e.target.value)}>
           <option>gz</option><option>log</option><option>csv</option><option>json</option>
-        </select>
+        </Select>
       </div>
       <div className="md:col-span-3">
         <label className="text-xs text-muted">Filtro (JSON: serverId/q/level/from/to)</label>
@@ -229,9 +223,9 @@ function NewScheduleForm({ onCreated }: { onCreated: () => void }) {
       </div>
       <div>
         <label className="text-xs text-muted">Destino</label>
-        <select value={destType} onChange={(e) => setDestType(e.target.value as any)} className="w-full rounded-md bg-panel2 border border-border px-3 py-2 text-sm">
+        <Select value={destType} onChange={(e) => setDestType(e.target.value as any)}>
           <option value="email">Email</option><option value="s3">S3</option>
-        </select>
+        </Select>
       </div>
       {destType === 'email' ? (
         <div className="md:col-span-2"><label className="text-xs text-muted">Email destino</label><Input value={destEmail} onChange={(e) => setDestEmail(e.target.value)} /></div>

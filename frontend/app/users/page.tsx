@@ -6,9 +6,10 @@ import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Badge } from '@/components/ui/Badge';
+import { PageHeader } from '@/components/ui/PageHeader';
 import { apiFetch } from '@/lib/api';
 import { safeArray } from '@/lib/utils';
-import { Mail, Save, ShieldCheck, Trash2, X, Lock, Unlock, KeyRound } from 'lucide-react';
+import { Mail, Save, ShieldCheck, Trash2, X, Lock, Unlock, KeyRound, Users as UsersIcon } from 'lucide-react';
 
 interface AssignedRole {
   id: string;
@@ -220,7 +221,7 @@ export default function UsersPage() {
   return (
     <AppShell>
       <div className="p-6 space-y-4 max-w-5xl">
-        <h1 className="text-2xl font-semibold">Usuários</h1>
+        <PageHeader title="Usuários" description="Contas da plataforma, perfis atribuídos e exigência de 2FA." icon={<UsersIcon size={16} />} />
 
         <Card className="p-4">
           <h2 className="text-sm font-medium mb-3">Criar usuário</h2>
@@ -327,16 +328,10 @@ export default function UsersPage() {
                     <div className="text-sm truncate flex items-center gap-2">
                       {user.email}
                       {user.mustChangePassword && (
-                        <Badge className="border-warn text-warn">convite pendente</Badge>
+                        <Badge tone="warn">convite pendente</Badge>
                       )}
                       {user.mfaRequired && (
-                        <Badge
-                          className={
-                            user.mfaEnabled
-                              ? 'border-success text-success'
-                              : 'border-warn text-warn'
-                          }
-                        >
+                        <Badge tone={user.mfaEnabled ? 'success' : 'warn'}>
                           2FA {user.mfaEnabled ? 'ativo' : 'obrigatório (pendente)'}
                         </Badge>
                       )}
@@ -347,7 +342,7 @@ export default function UsersPage() {
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
                     {safeArray<AssignedRole>(user.roles).map((item) => (
-                      <Badge key={item.id} className="border-accent text-accent">
+                      <Badge key={item.id} tone="accent">
                         {item.name}
                       </Badge>
                     ))}

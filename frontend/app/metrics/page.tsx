@@ -4,8 +4,10 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { AppShell } from '@/components/AppShell';
 import { Card } from '@/components/ui/Card';
+import { PageHeader } from '@/components/ui/PageHeader';
 import { apiFetch } from '@/lib/api';
 import { fmtTime, safeArray } from '@/lib/utils';
+import { Activity } from 'lucide-react';
 
 interface FleetRow {
   serverId: string;
@@ -47,7 +49,7 @@ export default function MetricsPage() {
   return (
     <AppShell>
       <div className="p-6 space-y-4">
-        <h1 className="text-2xl font-semibold">Métricas da frota</h1>
+        <PageHeader title="Métricas da frota" description="CPU, memória e load médio em tempo real por servidor." icon={<Activity size={16} />} />
         <Card className="p-0 overflow-hidden">
           <table className="w-full text-sm">
             <thead className="bg-panel2 text-muted text-xs uppercase tracking-wide">

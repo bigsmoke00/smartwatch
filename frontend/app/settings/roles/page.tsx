@@ -6,9 +6,11 @@ import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Badge } from '@/components/ui/Badge';
+import { PageHeader } from '@/components/ui/PageHeader';
+import { Select } from '@/components/ui/Select';
 import { apiFetch } from '@/lib/api';
 import { safeArray } from '@/lib/utils';
-import { Trash2, Plus, Save, Search, Copy } from 'lucide-react';
+import { Trash2, Plus, Save, Search, Copy, ShieldCheck } from 'lucide-react';
 
 interface Permission {
   key: string;
@@ -103,12 +105,16 @@ export default function RolesPage() {
   return (
     <AppShell>
       <div className="p-6 space-y-4">
-        <div className="flex items-center justify-between">
-          <h1 className="text-2xl font-semibold">Perfis e permissões</h1>
-          <Button onClick={startCreate}>
-            <Plus size={14} /> Novo perfil
-          </Button>
-        </div>
+        <PageHeader
+          title="Perfis e permissões"
+          description="Defina perfis de acesso e suas permissões granulares por categoria."
+          icon={<ShieldCheck size={16} />}
+          actions={
+            <Button onClick={startCreate}>
+              <Plus size={14} /> Novo perfil
+            </Button>
+          }
+        />
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
           <Card className="p-0 lg:col-span-1 overflow-hidden">
@@ -124,7 +130,7 @@ export default function RolesPage() {
                 >
                   <div className="font-medium flex items-center gap-2">
                     {r.name}
-                    {r.isSystem && <Badge>system</Badge>}
+                    {r.isSystem && <Badge tone="default">system</Badge>}
                   </div>
                   <div className="text-xs text-muted">{r.description || '—'}</div>
                   <div className="text-[10px] text-muted mt-0.5">
@@ -143,10 +149,10 @@ export default function RolesPage() {
             {creating && (
               <Card className="p-3 mb-3 flex items-center gap-2">
                 <span className="text-xs text-muted whitespace-nowrap">Começar a partir de:</span>
-                <select
+                <Select
                   value={cloneFromId}
                   onChange={(e) => setCloneFromId(e.target.value)}
-                  className="bg-panel2 border border-border rounded px-2 py-1 text-sm flex-1"
+                  className="flex-1"
                 >
                   <option value="">Perfil em branco</option>
                   {roles.map((r) => (
@@ -154,7 +160,7 @@ export default function RolesPage() {
                       {r.name} ({r.permissions.length} permissões)
                     </option>
                   ))}
-                </select>
+                </Select>
                 {cloneFromId && (
                   <span className="text-xs text-accent flex items-center gap-1 whitespace-nowrap">
                     <Copy size={12} /> copiando permissões

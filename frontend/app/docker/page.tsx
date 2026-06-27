@@ -6,6 +6,8 @@ import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Badge } from '@/components/ui/Badge';
+import { PageHeader } from '@/components/ui/PageHeader';
+import { Select } from '@/components/ui/Select';
 import { apiFetch } from '@/lib/api';
 import { safeArray } from '@/lib/utils';
 import {
@@ -18,6 +20,7 @@ import {
   Plus,
   Download,
   RefreshCw,
+  Boxes,
 } from 'lucide-react';
 
 interface ServerRow { id: string; name: string; lastSeenAt?: string }
@@ -52,27 +55,25 @@ export default function DockerPage() {
   return (
     <AppShell>
       <div className="p-6 space-y-4">
-        <div className="flex items-center justify-between flex-wrap gap-2">
-          <h1 className="text-2xl font-semibold">Docker manager</h1>
-          <div className="flex items-center gap-2">
-            <select
-              value={serverId}
-              onChange={(e) => setServerId(e.target.value)}
-              className="rounded-md bg-panel2 border border-border px-3 py-2 text-sm"
-            >
-              {safeArray<ServerRow>(servers).map((s) => (
-                <option key={s.id} value={s.id}>{s.name}</option>
-              ))}
-            </select>
-            {serverId && (
-              <Badge
-                className={online ? 'border-success text-success' : 'border-warn text-warn'}
-              >
-                {online ? '● agent online' : '● agent offline'}
-              </Badge>
-            )}
-          </div>
-        </div>
+        <PageHeader
+          title="Docker manager"
+          description="Containers, imagens, volumes e deploy remoto via agent."
+          icon={<Boxes size={16} />}
+          actions={
+            <div className="flex items-center gap-2">
+              <Select value={serverId} onChange={(e) => setServerId(e.target.value)} className="w-auto">
+                {safeArray<ServerRow>(servers).map((s) => (
+                  <option key={s.id} value={s.id}>{s.name}</option>
+                ))}
+              </Select>
+              {serverId && (
+                <Badge tone={online ? 'success' : 'warn'}>
+                  {online ? '● agent online' : '● agent offline'}
+                </Badge>
+              )}
+            </div>
+          }
+        />
 
         <div className="flex gap-1 border-b border-border">
           {(['containers', 'images', 'volumes', 'deploy'] as Tab[]).map((t) => (
@@ -178,9 +179,7 @@ function ContainersTab({ serverId }: { serverId: string }) {
                   <td className="px-3 py-2 font-medium">{name}</td>
                   <td className="px-3 py-2 text-xs text-muted">{c.Image}</td>
                   <td className="px-3 py-2">
-                    <Badge
-                      className={c.State === 'running' ? 'border-success text-success' : ''}
-                    >
+                    <Badge tone={c.State === 'running' ? 'success' : 'default'}>
                       {c.State}
                     </Badge>
                   </td>
@@ -480,16 +479,12 @@ function DeployTab({ serverId }: { serverId: string }) {
         <div className="grid grid-cols-2 gap-2">
           <div>
             <label className="text-xs text-muted">Restart policy</label>
-            <select
-              value={form.restartPolicy}
-              onChange={(e) => setForm({ ...form, restartPolicy: e.target.value })}
-              className="w-full rounded-md bg-panel2 border border-border px-3 py-2 text-sm"
-            >
+            <Select value={form.restartPolicy} onChange={(e) => setForm({ ...form, restartPolicy: e.target.value })}>
               <option>no</option>
               <option>always</option>
               <option>unless-stopped</option>
               <option>on-failure</option>
-            </select>
+            </Select>
           </div>
           <div>
             <label className="text-xs text-muted">Network</label>

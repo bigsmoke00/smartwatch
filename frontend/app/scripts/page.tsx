@@ -7,10 +7,12 @@ import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Badge } from '@/components/ui/Badge';
+import { PageHeader } from '@/components/ui/PageHeader';
+import { Select } from '@/components/ui/Select';
 import { apiFetch } from '@/lib/api';
 import { fmtTime, safeArray } from '@/lib/utils';
 import {
-  Folder, FileText, Save, Play, Download, Upload, History, ArrowUp, RefreshCw, FolderOpen,
+  Folder, FileText, Save, Play, Download, Upload, History, ArrowUp, RefreshCw, FolderOpen, Code2,
 } from 'lucide-react';
 
 // Monaco é client-only — carrega via dynamic import
@@ -158,27 +160,25 @@ export default function ScriptsPage() {
   return (
     <AppShell>
       <div className="p-6 space-y-3">
-        <div className="flex items-center justify-between flex-wrap gap-2">
-          <h1 className="text-2xl font-semibold">Script Manager</h1>
-          <div className="flex items-center gap-2">
-            <select
-              value={serverId}
-              onChange={(e) => setServerId(e.target.value)}
-              className="rounded-md bg-panel2 border border-border px-3 py-2 text-sm"
-            >
-              {safeArray<ServerRow>(servers).map((s) => (
-                <option key={s.id} value={s.id}>{s.name}</option>
-              ))}
-            </select>
-            {env && (
-              <Badge
-                className={env === 'production' ? 'border-danger text-danger' : 'border-info text-info'}
-              >
-                {env}
-              </Badge>
-            )}
-          </div>
-        </div>
+        <PageHeader
+          title="Script Manager"
+          description="Editor remoto de scripts, versionamento e execução auditada."
+          icon={<Code2 size={16} />}
+          actions={
+            <div className="flex items-center gap-2">
+              <Select value={serverId} onChange={(e) => setServerId(e.target.value)} className="w-auto">
+                {safeArray<ServerRow>(servers).map((s) => (
+                  <option key={s.id} value={s.id}>{s.name}</option>
+                ))}
+              </Select>
+              {env && (
+                <Badge tone={env === 'production' ? 'danger' : 'info'}>
+                  {env}
+                </Badge>
+              )}
+            </div>
+          }
+        />
 
         <div className="grid grid-cols-12 gap-3">
           {/* TREE */}
@@ -315,10 +315,10 @@ export default function ScriptsPage() {
                   <span>{fmtTime(e.ts)}</span>
                   <span className="font-mono text-muted truncate flex-1">{e.path}</span>
                   <Badge
-                    className={
-                      e.status === 'succeeded' ? 'border-success text-success' :
-                      e.status === 'failed'    ? 'border-danger text-danger' :
-                      e.status === 'pending'   ? 'border-warn text-warn'    : ''
+                    tone={
+                      e.status === 'succeeded' ? 'success' :
+                      e.status === 'failed'    ? 'danger' :
+                      e.status === 'pending'   ? 'warn'    : 'default'
                     }
                   >
                     {e.status}

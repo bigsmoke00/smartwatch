@@ -6,8 +6,11 @@ import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Badge } from '@/components/ui/Badge';
+import { PageHeader } from '@/components/ui/PageHeader';
+import { Select } from '@/components/ui/Select';
 import { apiFetch, Auth } from '@/lib/api';
 import { fmtTime, safeArray } from '@/lib/utils';
+import { KeyRound } from 'lucide-react';
 
 interface Rot {
   id: string;
@@ -53,12 +56,12 @@ export default function CredentialRotationsPage() {
   return (
     <AppShell>
       <div className="p-6 space-y-4">
-        <div className="flex items-center justify-between">
-          <h1 className="text-2xl font-semibold">Rotação de credenciais cloud</h1>
-          {role === 'admin' && (
-            <Button onClick={() => setShowNew(!showNew)}>Nova rotação</Button>
-          )}
-        </div>
+        <PageHeader
+          title="Rotação de credenciais cloud"
+          description="Rotação automática de chaves IAM e segredos no vault."
+          icon={<KeyRound size={16} />}
+          actions={role === 'admin' && <Button onClick={() => setShowNew(!showNew)}>Nova rotação</Button>}
+        />
 
         {showNew && <NewForm onCreated={() => { setShowNew(false); load(); }} />}
 
@@ -93,11 +96,11 @@ export default function CredentialRotationsPage() {
                   <td className="px-3 py-2">
                     {r.enabled ? (
                       r.status === 'error' ? (
-                        <Badge className="border-danger text-danger" title={r.lastError}>error</Badge>
+                        <Badge tone="danger" title={r.lastError}>error</Badge>
                       ) : r.status === 'rotating' ? (
-                        <Badge className="border-warn text-warn">rotating</Badge>
+                        <Badge tone="warn">rotating</Badge>
                       ) : (
-                        <Badge className="border-success text-success">ativa</Badge>
+                        <Badge tone="success">ativa</Badge>
                       )
                     ) : (
                       <Badge>desativada</Badge>
@@ -143,13 +146,9 @@ function NewForm({ onCreated }: { onCreated: () => void }) {
     <Card className="p-4 grid md:grid-cols-3 gap-2">
       <div>
         <label className="text-xs text-muted">Cloud</label>
-        <select
-          value={form.cloud}
-          onChange={(e) => setForm({ ...form, cloud: e.target.value })}
-          className="w-full rounded-md bg-panel2 border border-border px-3 py-2 text-sm"
-        >
+        <Select value={form.cloud} onChange={(e) => setForm({ ...form, cloud: e.target.value })}>
           <option>aws</option><option>oci</option>
-        </select>
+        </Select>
       </div>
       {[
         ['account', 'Conta / Tenancy'],

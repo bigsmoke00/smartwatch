@@ -6,9 +6,10 @@ import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Badge } from '@/components/ui/Badge';
+import { PageHeader } from '@/components/ui/PageHeader';
 import { apiFetch, Auth } from '@/lib/api';
 import { safeArray } from '@/lib/utils';
-import { Plus, Trash2, X } from 'lucide-react';
+import { Plus, Trash2, X, Layers } from 'lucide-react';
 
 interface PatroniCluster {
   id: string;
@@ -112,14 +113,18 @@ export default function PatroniPage() {
   return (
     <AppShell>
       <div className="p-6 space-y-4">
-        <div className="flex items-center justify-between">
-          <h1 className="text-2xl font-semibold">Cluster Patroni</h1>
-          {canManage && (
-            <Button onClick={() => setShowNew(!showNew)}>
-              <Plus size={16} /> Novo cluster
-            </Button>
-          )}
-        </div>
+        <PageHeader
+          title="Cluster Patroni"
+          description="Topologia, papéis e histórico de switchover dos clusters PostgreSQL/Patroni."
+          icon={<Layers size={16} />}
+          actions={
+            canManage && (
+              <Button onClick={() => setShowNew(!showNew)}>
+                <Plus size={16} /> Novo cluster
+              </Button>
+            )
+          }
+        />
 
         {showNew && canManage && (
           <Card className="p-4">
@@ -204,7 +209,7 @@ export default function PatroniPage() {
                   }`}
                 >
                   {c.name}
-                  {!c.enabled && <Badge className="ml-2">desativado</Badge>}
+                  {!c.enabled && <Badge className="ml-2" tone="default">desativado</Badge>}
                 </button>
                 {canManage && role === 'admin' && (
                   <button
@@ -254,7 +259,7 @@ export default function PatroniPage() {
                           <td className="px-3 py-2">{m.name}</td>
                           <td className="px-3 py-2">
                             {m.role === 'leader' ? (
-                              <Badge className="border-accent text-accent">leader</Badge>
+                              <Badge tone="accent">leader</Badge>
                             ) : (
                               <Badge>{m.role}</Badge>
                             )}

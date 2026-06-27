@@ -6,9 +6,12 @@ import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Badge } from '@/components/ui/Badge';
+import { PageHeader } from '@/components/ui/PageHeader';
+import { Select } from '@/components/ui/Select';
 import { apiFetch, Auth } from '@/lib/api';
 import { fmtTime, safeArray } from '@/lib/utils';
 import dynamic from 'next/dynamic';
+import { TerminalSquare } from 'lucide-react';
 
 const TerminalView = dynamic(() => import('@/components/TerminalView'), { ssr: false });
 
@@ -31,13 +34,13 @@ interface LoginMapping {
 }
 interface PlatformUser { id: string; email: string }
 
-const STATUS_VARIANT: Record<string, string> = {
-  pending: 'text-warn border-warn/40',
-  approved: 'text-accent border-accent/40',
-  active: 'text-success border-success/40',
-  closed: '',
-  rejected: 'text-danger border-danger/40',
-  expired: 'text-danger border-danger/40',
+const STATUS_TONE: Record<string, 'default' | 'accent' | 'success' | 'warn' | 'danger' | 'info'> = {
+  pending: 'warn',
+  approved: 'accent',
+  active: 'success',
+  closed: 'default',
+  rejected: 'danger',
+  expired: 'danger',
 };
 
 function downloadText(filename: string, text: string) {
@@ -159,60 +162,56 @@ export default function TerminalPage() {
   return (
     <AppShell>
       <div className="p-6 space-y-3">
-        <h1 className="text-2xl font-semibold">Terminal Web (Zero Trust)</h1>
+        <PageHeader
+          title="Terminal Web (Zero Trust)"
+          description="Acesso a shell de host ou container com aprovação, gravação e expiração automática."
+          icon={<TerminalSquare size={16} />}
+        />
 
         {!activeSession ? (
           <>
             <Card className="p-4 grid md:grid-cols-4 gap-2 items-end">
               <div>
                 <label className="text-xs text-muted">Servidor</label>
-                <select
-                  value={serverId} onChange={(e) => setServerId(e.target.value)}
-                  className="w-full rounded-md bg-panel2 border border-border px-3 py-2 text-sm"
-                >
+                <Select value={serverId} onChange={(e) => setServerId(e.target.value)}>
                   <option value="">—</option>
                   {safeArray<Server>(servers).map((s) => (
                     <option key={s.id} value={s.id}>{s.name}</option>
                   ))}
-                </select>
+                </Select>
               </div>
               <div>
                 <label className="text-xs text-muted">Alvo</label>
-                <select
+                <Select
                   value={target}
                   onChange={(e) => setTarget(e.target.value as any)}
-                  className="w-full rounded-md bg-panel2 border border-border px-3 py-2 text-sm"
                 >
                   <option value="host">Host Linux</option>
                   <option value="container">Container Docker</option>
-                </select>
+                </Select>
               </div>
               {target === 'container' && (
                 <div>
                   <label className="text-xs text-muted">Container</label>
-                  <select
-                    value={containerId} onChange={(e) => setContainerId(e.target.value)}
-                    className="w-full rounded-md bg-panel2 border border-border px-3 py-2 text-sm"
-                  >
+                  <Select value={containerId} onChange={(e) => setContainerId(e.target.value)}>
                     {safeArray<any>(containers).map((c) => (
                       <option key={c.Id} value={c.Id}>
                         {(c.Names?.[0] ?? c.Id).replace(/^\//, '')} ({c.Image})
                       </option>
                     ))}
-                  </select>
+                  </Select>
                 </div>
               )}
               {target === 'host' && (
                 <div>
                   <label className="text-xs text-muted">Modo</label>
-                  <select
+                  <Select
                     value={mode}
                     onChange={(e) => setMode(e.target.value as any)}
-                    className="w-full rounded-md bg-panel2 border border-border px-3 py-2 text-sm"
                   >
                     <option value="readwrite">Leitura e escrita</option>
                     <option value="readonly">Somente leitura</option>
-                  </select>
+                  </Select>
                   {mode === 'readwrite' && (
                     <label className="flex items-center gap-1 text-xs text-muted mt-1">
                       <input
@@ -251,17 +250,17 @@ export default function TerminalPage() {
                     <div className="grid md:grid-cols-5 gap-2 items-end text-xs">
                       <div>
                         <label className="text-muted">Usuário (plataforma)</label>
-                        <select value={mapUserId} onChange={(e) => setMapUserId(e.target.value)} className="w-full rounded-md bg-panel2 border border-border px-2 py-1.5">
+                        <Select value={mapUserId} onChange={(e) => setMapUserId(e.target.value)} className="text-xs py-1.5">
                           <option value="">—</option>
                           {safeArray<PlatformUser>(users).map((u) => <option key={u.id} value={u.id}>{u.email}</option>)}
-                        </select>
+                        </Select>
                       </div>
                       <div>
                         <label className="text-muted">Servidor (vazio = todos)</label>
-                        <select value={mapServerId} onChange={(e) => setMapServerId(e.target.value)} className="w-full rounded-md bg-panel2 border border-border px-2 py-1.5">
+                        <Select value={mapServerId} onChange={(e) => setMapServerId(e.target.value)} className="text-xs py-1.5">
                           <option value="">todos (default)</option>
                           {safeArray<Server>(servers).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-                        </select>
+                        </Select>
                       </div>
                       <div>
                         <label className="text-muted">Usuário no SO</label>
@@ -331,7 +330,7 @@ export default function TerminalPage() {
                       </td>
                       <td className="px-3 py-1.5 text-xs text-muted">{s.reason}</td>
                       <td className="px-3 py-1.5">
-                        <Badge className={STATUS_VARIANT[s.status] ?? ''}>{s.status}</Badge>
+                        <Badge tone={STATUS_TONE[s.status] ?? 'default'}>{s.status}</Badge>
                         {s.closedReason && <div className="text-[10px] text-muted mt-0.5">{s.closedReason}</div>}
                       </td>
                       <td className="px-3 py-1.5 text-xs">{s.expiresAt ? fmtTime(s.expiresAt) : '—'}</td>

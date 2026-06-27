@@ -6,8 +6,10 @@ import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Badge } from '@/components/ui/Badge';
+import { PageHeader } from '@/components/ui/PageHeader';
 import { apiFetch, Auth } from '@/lib/api';
 import { fmtTime, safeArray } from '@/lib/utils';
+import { Settings as SettingsIcon } from 'lucide-react';
 
 interface Session {
   id: string;
@@ -73,7 +75,7 @@ export default function SettingsPage() {
   return (
     <AppShell>
       <div className="p-6 space-y-4 max-w-3xl">
-        <h1 className="text-2xl font-semibold">Ajustes</h1>
+        <PageHeader title="Ajustes" description="Segurança da conta, autenticação de dois fatores e sessões ativas." icon={<SettingsIcon size={16} />} />
 
         <Card className="p-4">
           <h2 className="text-sm font-medium mb-3">Autenticação de dois fatores (TOTP)</h2>
@@ -86,7 +88,7 @@ export default function SettingsPage() {
           {me?.mfaEnabled ? (
             <div className="flex items-center justify-between">
               <div className="text-sm">
-                <Badge className="border-success text-success">Ativo</Badge>
+                <Badge tone="success">Ativo</Badge>
                 <span className="ml-2 text-muted">
                   Use seu app autenticador (Google Authenticator, 1Password, Authy) ao logar.
                 </span>
@@ -138,7 +140,7 @@ export default function SettingsPage() {
                 </div>
                 <div className="flex items-center gap-2">
                   {s.revokedAt ? (
-                    <Badge>revogada</Badge>
+                    <Badge tone="default">revogada</Badge>
                   ) : (
                     <button
                       onClick={() => revokeSession(s.id)}

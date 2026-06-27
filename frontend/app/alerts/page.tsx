@@ -6,8 +6,11 @@ import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Badge } from '@/components/ui/Badge';
+import { PageHeader } from '@/components/ui/PageHeader';
+import { Select } from '@/components/ui/Select';
 import { apiFetch } from '@/lib/api';
 import { fmtTime, safeArray } from '@/lib/utils';
+import { Bell } from 'lucide-react';
 
 interface Rule {
   id: string;
@@ -60,10 +63,12 @@ export default function AlertsPage() {
   return (
     <AppShell>
       <div className="p-6 space-y-4 max-w-5xl">
-        <div className="flex items-center justify-between">
-          <h1 className="text-2xl font-semibold">Alertas</h1>
-          <Button onClick={() => setShowNew(!showNew)}>Nova regra</Button>
-        </div>
+        <PageHeader
+          title="Alertas"
+          description="Regras de detecção e eventos disparados recentemente."
+          icon={<Bell size={16} />}
+          actions={<Button onClick={() => setShowNew(!showNew)}>Nova regra</Button>}
+        />
 
         {showNew && <NewRuleForm channels={channels} onCreated={() => { setShowNew(false); load(); }} />}
 
@@ -86,12 +91,12 @@ export default function AlertsPage() {
                   <td className="px-3 py-2 font-medium">{r.name}</td>
                   <td className="px-3 py-2">
                     <Badge
-                      className={
+                      tone={
                         r.severity === 'critical'
-                          ? 'border-danger text-danger'
+                          ? 'danger'
                           : r.severity === 'warning'
-                          ? 'border-warn text-warn'
-                          : 'border-info text-info'
+                          ? 'warn'
+                          : 'info'
                       }
                     >
                       {r.severity}
@@ -107,7 +112,7 @@ export default function AlertsPage() {
                   </td>
                   <td className="px-3 py-2">
                     {r.enabled ? (
-                      <Badge className="border-success text-success">ativa</Badge>
+                      <Badge tone="success">ativa</Badge>
                     ) : (
                       <Badge>desativada</Badge>
                     )}
@@ -187,15 +192,11 @@ function NewRuleForm({
         </div>
         <div>
           <label className="text-xs text-muted">Severidade</label>
-          <select
-            value={severity}
-            onChange={(e) => setSeverity(e.target.value as any)}
-            className="w-full rounded-md bg-panel2 border border-border px-3 py-2 text-sm"
-          >
+          <Select value={severity} onChange={(e) => setSeverity(e.target.value as any)}>
             <option value="info">info</option>
             <option value="warning">warning</option>
             <option value="critical">critical</option>
-          </select>
+          </Select>
         </div>
         <div className="col-span-2">
           <label className="text-xs text-muted">Query (FTS)</label>

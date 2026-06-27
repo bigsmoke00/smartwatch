@@ -6,8 +6,12 @@ import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Badge } from '@/components/ui/Badge';
+import { PageHeader } from '@/components/ui/PageHeader';
+import { StatCard } from '@/components/ui/StatCard';
+import { Select } from '@/components/ui/Select';
 import { apiFetch } from '@/lib/api';
 import { safeArray, sumBy } from '@/lib/utils';
+import { DollarSign } from 'lucide-react';
 import {
   ResponsiveContainer,
   AreaChart,
@@ -82,67 +86,48 @@ export default function FinopsPage() {
   return (
     <AppShell>
       <div className="p-6 space-y-4">
-        <div className="flex items-center justify-between">
-          <h1 className="text-2xl font-semibold">FinOps</h1>
-          <div className="flex items-center gap-2">
-            <Button variant="secondary" onClick={() => sync('aws')} disabled={syncing === 'aws'}>
-              {syncing === 'aws' ? 'Sincronizando…' : 'Sync AWS'}
-            </Button>
-            <Button variant="secondary" onClick={() => sync('oci')} disabled={syncing === 'oci'}>
-              {syncing === 'oci' ? 'Sincronizando…' : 'Sync OCI'}
-            </Button>
-          </div>
-        </div>
+        <PageHeader
+          title="FinOps"
+          description="Custos de nuvem, budgets e sincronização multi-cloud."
+          icon={<DollarSign size={16} />}
+          actions={
+            <div className="flex items-center gap-2">
+              <Button variant="secondary" onClick={() => sync('aws')} disabled={syncing === 'aws'}>
+                {syncing === 'aws' ? 'Sincronizando…' : 'Sync AWS'}
+              </Button>
+              <Button variant="secondary" onClick={() => sync('oci')} disabled={syncing === 'oci'}>
+                {syncing === 'oci' ? 'Sincronizando…' : 'Sync OCI'}
+              </Button>
+            </div>
+          }
+        />
 
         <div className="flex gap-3 items-end">
           <div>
             <label className="text-xs text-muted">Cloud</label>
-            <select
-              value={filterCloud}
-              onChange={(e) => setFilterCloud(e.target.value)}
-              className="rounded-md bg-panel2 border border-border px-3 py-2 text-sm"
-            >
+            <Select value={filterCloud} onChange={(e) => setFilterCloud(e.target.value)}>
               <option value="">Todas</option>
               <option value="aws">AWS</option>
               <option value="oci">OCI</option>
               <option value="gcp">GCP</option>
               <option value="azure">Azure</option>
-            </select>
+            </Select>
           </div>
           <div>
             <label className="text-xs text-muted">Janela</label>
-            <select
-              value={days}
-              onChange={(e) => setDays(parseInt(e.target.value, 10))}
-              className="rounded-md bg-panel2 border border-border px-3 py-2 text-sm"
-            >
+            <Select value={days} onChange={(e) => setDays(parseInt(e.target.value, 10))}>
               <option value="7">7 dias</option>
               <option value="30">30 dias</option>
               <option value="60">60 dias</option>
               <option value="90">90 dias</option>
-            </select>
+            </Select>
           </div>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <Card className="p-4">
-            <div className="text-xs text-muted">Custo total ({days}d)</div>
-            <div className="text-3xl font-semibold mt-1">
-              ${total.toLocaleString(undefined, { maximumFractionDigits: 2 })}
-            </div>
-          </Card>
-          <Card className="p-4">
-            <div className="text-xs text-muted">Contas únicas</div>
-            <div className="text-3xl font-semibold mt-1">
-              {safeArray(summary?.byAccount).length}
-            </div>
-          </Card>
-          <Card className="p-4">
-            <div className="text-xs text-muted">Serviços ativos</div>
-            <div className="text-3xl font-semibold mt-1">
-              {safeArray(summary?.byService).length}
-            </div>
-          </Card>
+          <StatCard label={`Custo total (${days}d)`} value={`$${total.toLocaleString(undefined, { maximumFractionDigits: 2 })}`} />
+          <StatCard label="Contas únicas" value={safeArray(summary?.byAccount).length} />
+          <StatCard label="Serviços ativos" value={safeArray(summary?.byService).length} />
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">

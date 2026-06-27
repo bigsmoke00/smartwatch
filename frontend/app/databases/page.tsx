@@ -6,8 +6,10 @@ import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Badge } from '@/components/ui/Badge';
+import { PageHeader } from '@/components/ui/PageHeader';
 import { apiFetch } from '@/lib/api';
 import { fmtTime, safeArray } from '@/lib/utils';
+import { Database as DbIcon } from 'lucide-react';
 import {
   ResponsiveContainer, AreaChart, Area, LineChart, Line,
   XAxis, YAxis, Tooltip, CartesianGrid,
@@ -58,10 +60,12 @@ export default function DatabasesPage() {
   return (
     <AppShell>
       <div className="p-6 space-y-3">
-        <div className="flex items-center justify-between flex-wrap gap-2">
-          <h1 className="text-2xl font-semibold">PostgreSQL</h1>
-          <Button onClick={() => setShowNew(!showNew)}><Plus size={14}/> Novo cluster</Button>
-        </div>
+        <PageHeader
+          title="PostgreSQL"
+          description="Clusters monitorados, queries ativas, locks e saúde das tabelas."
+          icon={<DbIcon size={16} />}
+          actions={<Button onClick={() => setShowNew(!showNew)}><Plus size={14}/> Novo cluster</Button>}
+        />
 
         {error && (
           <Card className="p-3 border border-danger/40 bg-danger/10 text-sm text-danger">
@@ -257,7 +261,7 @@ function ActiveTab({ cluster }: { cluster: Cluster }) {
               <td className="px-3 py-1.5 font-mono text-xs">{r.pid}</td>
               <td className="px-3 py-1.5 text-xs">{r.usename}@{r.datname}</td>
               <td className="px-3 py-1.5">
-                <Badge className={r.state === 'active' ? 'border-warn text-warn' : ''}>{r.state}</Badge>
+                <Badge tone={r.state === 'active' ? 'warn' : 'default'}>{r.state}</Badge>
               </td>
               <td className="px-3 py-1.5 text-xs text-muted">
                 {r.wait_event_type ? `${r.wait_event_type}/${r.wait_event}` : '—'}

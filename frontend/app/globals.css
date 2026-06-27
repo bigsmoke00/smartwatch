@@ -4,16 +4,33 @@
 
 html,
 body {
-  background: #0b0d12;
-  color: #e6e8ee;
+  background: #0a0b0f;
+  color: #eef0f5;
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-feature-settings: 'tnum' 1, 'cv11' 1;
 }
 
 * {
   box-sizing: border-box;
 }
 
+::selection {
+  background: rgba(124, 108, 255, 0.35);
+  color: #fff;
+}
+
+:focus-visible {
+  outline: 2px solid rgba(124, 108, 255, 0.55);
+  outline-offset: 1px;
+}
+
 ::-webkit-scrollbar { width: 10px; height: 10px; }
-::-webkit-scrollbar-track { background: #0b0d12; }
-::-webkit-scrollbar-thumb { background: #222632; border-radius: 6px; }
-::-webkit-scrollbar-thumb:hover { background: #2c3142; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #242832; border-radius: 6px; }
+::-webkit-scrollbar-thumb:hover { background: #33394a; }
+
+/* numerais tabulares por padrão em qualquer tabela/métrica numérica */
+.tabular {
+  font-variant-numeric: tabular-nums;
+}

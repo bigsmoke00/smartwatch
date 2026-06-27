@@ -5,8 +5,11 @@ import { AppShell } from '@/components/AppShell';
 import { Card } from '@/components/ui/Card';
 import { Input } from '@/components/ui/Input';
 import { Badge } from '@/components/ui/Badge';
+import { Button } from '@/components/ui/Button';
+import { PageHeader } from '@/components/ui/PageHeader';
 import { apiFetch } from '@/lib/api';
 import { fmtTime, safeArray } from '@/lib/utils';
+import { History } from 'lucide-react';
 
 interface AuditRow {
   id: string;
@@ -43,7 +46,7 @@ export default function AuditPage() {
   return (
     <AppShell>
       <div className="p-6 space-y-4">
-        <h1 className="text-2xl font-semibold">Audit log</h1>
+        <PageHeader title="Audit log" description="Trilha de auditoria de ações na plataforma." icon={<History size={16} />} />
 
         <Card className="p-3 flex gap-2 items-end">
           <div className="flex-1">
@@ -54,12 +57,7 @@ export default function AuditPage() {
             <label className="text-xs text-muted">Actor ID</label>
             <Input value={actorId} onChange={(e) => setActorId(e.target.value)} />
           </div>
-          <button
-            onClick={load}
-            className="px-3 py-2 rounded bg-accent text-white text-sm"
-          >
-            Buscar
-          </button>
+          <Button onClick={load}>Buscar</Button>
         </Card>
 
         <Card className="p-0">
@@ -86,11 +84,11 @@ export default function AuditPage() {
                   </td>
                   <td className="px-3 py-2">
                     {r.result === 'ok' ? (
-                      <Badge className="border-success text-success">ok</Badge>
+                      <Badge tone="success">ok</Badge>
                     ) : r.result === 'denied' ? (
-                      <Badge className="border-warn text-warn">denied</Badge>
+                      <Badge tone="warn">denied</Badge>
                     ) : (
-                      <Badge className="border-danger text-danger">error</Badge>
+                      <Badge tone="danger">error</Badge>
                     )}
                   </td>
                 </tr>

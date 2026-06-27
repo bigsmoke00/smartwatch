@@ -4,8 +4,11 @@ import { useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
 import { AppShell } from '@/components/AppShell';
 import { Card } from '@/components/ui/Card';
+import { PageHeader } from '@/components/ui/PageHeader';
+import { StatCard } from '@/components/ui/StatCard';
 import { apiFetch } from '@/lib/api';
 import { safeArray } from '@/lib/utils';
+import { Activity } from 'lucide-react';
 import {
   ResponsiveContainer,
   AreaChart,
@@ -45,21 +48,21 @@ export default function ServerMetricsPage() {
   return (
     <AppShell>
       <div className="p-6 space-y-4">
-        <h1 className="text-2xl font-semibold">Servidor {id.slice(0, 8)}</h1>
+        <PageHeader title={`Servidor ${id.slice(0, 8)}`} description="Histórico de CPU, memória, disco e rede." icon={<Activity size={16} />} />
 
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-          <Stat title="CPU" value={last?.cpu != null ? `${last.cpu.toFixed(0)}%` : '—'} />
-          <Stat
-            title="Memória"
+          <StatCard label="CPU" value={last?.cpu != null ? `${last.cpu.toFixed(0)}%` : '—'} />
+          <StatCard
+            label="Memória"
             value={
               last?.memUsed && last?.memTotal
                 ? `${((last.memUsed / last.memTotal) * 100).toFixed(0)}%`
                 : '—'
             }
           />
-          <Stat title="Load 1m" value={last?.load1?.toFixed(2) ?? '—'} />
-          <Stat
-            title="Uptime"
+          <StatCard label="Load 1m" value={last?.load1?.toFixed(2) ?? '—'} />
+          <StatCard
+            label="Uptime"
             value={last?.uptimeSec ? formatUptime(last.uptimeSec) : '—'}
           />
         </div>
@@ -103,14 +106,14 @@ export default function ServerMetricsPage() {
 
         {/* SWAP */}
         {last?.swapUsed != null && (
-          <Card className="p-4 grid md:grid-cols-3 gap-4 text-sm">
-            <Stat
-              title="Swap usado"
+          <div className="grid md:grid-cols-3 gap-4">
+            <StatCard
+              label="Swap usado"
               value={last?.swapUsed ? fmtBytes(last.swapUsed) : '0 B'}
             />
-            <Stat title="Procs total" value={last?.procsTotal ?? '—'} />
-            <Stat title="Procs running" value={last?.procsRunning ?? '—'} />
-          </Card>
+            <StatCard label="Procs total" value={last?.procsTotal ?? '—'} />
+            <StatCard label="Procs running" value={last?.procsRunning ?? '—'} />
+          </div>
         )}
 
         {/* DISCOS por partição */}
@@ -201,14 +204,6 @@ export default function ServerMetricsPage() {
   );
 }
 
-function Stat({ title, value }: { title: string; value: string }) {
-  return (
-    <Card className="p-4">
-      <div className="text-xs text-muted">{title}</div>
-      <div className="text-2xl font-semibold mt-1">{value}</div>
-    </Card>
-  );
-}
 function shortTime(v: string) {
   return new Date(v).toLocaleTimeString().slice(0, 5);
 }

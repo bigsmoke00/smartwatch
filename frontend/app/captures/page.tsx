@@ -7,11 +7,14 @@ import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Badge } from '@/components/ui/Badge';
+import { PageHeader } from '@/components/ui/PageHeader';
+import { Select } from '@/components/ui/Select';
 import { apiFetch, ApiError, Auth } from '@/lib/api';
 import { loadMyPermissions, hasPerm } from '@/lib/perms';
 import { fmtTime, safeArray } from '@/lib/utils';
 import { PcapStreamParser, ParsedPacket } from '@/lib/pcap';
 import CaptureLiveView from '@/components/CaptureLiveView';
+import { Radar } from 'lucide-react';
 
 interface ServerRow { id: string; name: string }
 type Kind = 'sip' | 'tcpdump' | 'ping';
@@ -25,14 +28,14 @@ interface Session {
   result_text: string | null; error_text: string | null; created_at: string;
 }
 
-const STATUS_VARIANT: Record<string, string> = {
-  pending: 'text-warn border-warn/40',
-  approved: 'text-accent border-accent/40',
-  running: 'text-accent border-accent/40',
-  completed: 'text-success border-success/40',
-  rejected: 'text-danger border-danger/40',
-  failed: 'text-danger border-danger/40',
-  expired: 'text-muted border-border',
+const STATUS_TONE: Record<string, 'default' | 'accent' | 'success' | 'warn' | 'danger' | 'info'> = {
+  pending: 'warn',
+  approved: 'accent',
+  running: 'accent',
+  completed: 'success',
+  rejected: 'danger',
+  failed: 'danger',
+  expired: 'default',
 };
 
 const KIND_LABEL: Record<Kind, string> = {
@@ -300,12 +303,11 @@ export default function CapturesPage() {
   return (
     <AppShell>
       <div className="p-6 space-y-3">
-        <h1 className="text-2xl font-semibold">Captura de rede / SIP (Zero Trust)</h1>
-        <p className="text-xs text-muted -mt-1">
-          sngrep-like para SIP/RTP (Freeswitch, OpenSIPS, RTG engine), tcpdump genérico, e diagnóstico básico (ping/mtr).
-          Toda captura é em tempo real e nada fica salvo na plataforma — é preciso manter a página aberta assistindo
-          enquanto a captura roda; se ninguém estiver acompanhando, o conteúdo se perde.
-        </p>
+        <PageHeader
+          title="Captura de rede / SIP (Zero Trust)"
+          description="sngrep-like para SIP/RTP, tcpdump genérico e diagnóstico (ping/mtr). Em tempo real — nada fica salvo na plataforma; mantenha a página aberta assistindo."
+          icon={<Radar size={16} />}
+        />
 
         {canRequest && (
           <Card className="p-4 space-y-2">
@@ -317,26 +319,20 @@ export default function CapturesPage() {
               <div className="grid md:grid-cols-2 gap-3 pt-2">
                 <div>
                   <label className="text-xs text-muted">Servidor</label>
-                  <select
-                    value={serverId} onChange={(e) => setServerId(e.target.value)}
-                    className="w-full rounded-md bg-panel2 border border-border px-3 py-2 text-sm"
-                  >
+                  <Select value={serverId} onChange={(e) => setServerId(e.target.value)}>
                     <option value="">—</option>
                     {safeArray<ServerRow>(servers).map((s) => (
                       <option key={s.id} value={s.id}>{s.name}</option>
                     ))}
-                  </select>
+                  </Select>
                 </div>
                 <div>
                   <label className="text-xs text-muted">Tipo</label>
-                  <select
-                    value={kind} onChange={(e) => setKind(e.target.value as Kind)}
-                    className="w-full rounded-md bg-panel2 border border-border px-3 py-2 text-sm"
-                  >
+                  <Select value={kind} onChange={(e) => setKind(e.target.value as Kind)}>
                     <option value="sip">{KIND_LABEL.sip}</option>
                     <option value="tcpdump">{KIND_LABEL.tcpdump}</option>
                     <option value="ping">{KIND_LABEL.ping}</option>
-                  </select>
+                  </Select>
                 </div>
 
                 {kind !== 'ping' && (
@@ -440,7 +436,7 @@ export default function CapturesPage() {
                     <td className="px-3 py-1.5 text-xs">{s.requested_by_email}</td>
                     <td className="px-3 py-1.5 text-xs text-muted max-w-xs truncate" title={s.reason}>{s.reason}</td>
                     <td className="px-3 py-1.5">
-                      <Badge className={STATUS_VARIANT[s.status] ?? ''}>{s.status}</Badge>
+                      <Badge tone={STATUS_TONE[s.status] ?? 'default'}>{s.status}</Badge>
 
                       {s.status === 'running' && w && !w.done && (
                         <div className="text-[10px] text-accent mt-0.5">

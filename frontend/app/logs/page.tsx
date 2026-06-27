@@ -7,9 +7,11 @@ import { AppShell } from '@/components/AppShell';
 import { Card } from '@/components/ui/Card';
 import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
+import { Select } from '@/components/ui/Select';
+import { PageHeader } from '@/components/ui/PageHeader';
 import { apiFetch, Auth, handleUnauthorized } from '@/lib/api';
 import { LEVEL_COLOR, fmtTime, safeArray } from '@/lib/utils';
-import { Pause, Play, Search, RefreshCw, Wifi, WifiOff, Server as ServerIcon, Container as ContainerIcon, FileText } from 'lucide-react';
+import { Pause, Play, Search, RefreshCw, Wifi, WifiOff, Server as ServerIcon, Container as ContainerIcon, FileText, ScrollText } from 'lucide-react';
 import { TimeRangePicker, DEFAULT_RANGE, TimeRange } from '@/components/ui/TimeRangePicker';
 
 interface LogHit {
@@ -373,36 +375,36 @@ function LogsPageInner() {
   return (
     <AppShell>
       <div className="p-6 space-y-3">
-        <div className="flex items-center justify-between">
-          <h1 className="text-2xl font-semibold">Logs</h1>
-          <div className="flex items-center gap-2">
-            <WsBadge status={wsStatus} attempt={wsAttempt} />
-            <Button
-              variant={live ? 'primary' : 'secondary'}
-              onClick={() => setLive(!live)}
-            >
-              {live ? (<><Pause size={14} /> Pausar tail</>) : (<><Play size={14} /> Tail ao vivo</>)}
-            </Button>
-            <Button variant="secondary" onClick={search} disabled={loading}>
-              <RefreshCw size={14} /> Buscar
-            </Button>
-          </div>
-        </div>
+        <PageHeader
+          title="Logs"
+          description="Busca e tail em tempo real dos logs da frota."
+          icon={<ScrollText size={16} />}
+          actions={
+            <div className="flex items-center gap-2">
+              <WsBadge status={wsStatus} attempt={wsAttempt} />
+              <Button
+                variant={live ? 'primary' : 'secondary'}
+                onClick={() => setLive(!live)}
+              >
+                {live ? (<><Pause size={14} /> Pausar tail</>) : (<><Play size={14} /> Tail ao vivo</>)}
+              </Button>
+              <Button variant="secondary" onClick={search} disabled={loading}>
+                <RefreshCw size={14} /> Buscar
+              </Button>
+            </div>
+          }
+        />
 
         <Card className="p-3">
           <div className="grid grid-cols-1 md:grid-cols-12 gap-2 items-end">
             <div className="md:col-span-3">
               <label className="text-xs text-muted">Servidor</label>
-              <select
-                value={serverId}
-                onChange={(e) => setServerId(e.target.value)}
-                className="w-full rounded-md bg-panel2 border border-border px-3 py-2 text-sm"
-              >
+              <Select value={serverId} onChange={(e) => setServerId(e.target.value)}>
                 <option value="">Todos</option>
                 {safeArray<ServerRow>(servers).map((s) => (
                   <option key={s.id} value={s.id}>{s.name}</option>
                 ))}
-              </select>
+              </Select>
             </div>
             <div className="md:col-span-6">
               <label className="text-xs text-muted">Query</label>
@@ -449,10 +451,10 @@ function LogsPageInner() {
                 {!serverId ? (
                   <span className="text-xs text-muted">selecione um servidor pra filtrar por container</span>
                 ) : (
-                  <select
+                  <Select
                     value={containerName}
                     onChange={(e) => setContainerName(e.target.value)}
-                    className="rounded-md bg-panel2 border border-border px-2 py-1 text-xs max-w-[260px]"
+                    className="text-xs max-w-[260px] py-1"
                   >
                     <option value="">Todos os containers</option>
                     {containerOptions.map((c) => (
@@ -460,7 +462,7 @@ function LogsPageInner() {
                         {c.containerName}{c.image ? ` (${c.image})` : ''}
                       </option>
                     ))}
-                  </select>
+                  </Select>
                 )}
               </>
             )}

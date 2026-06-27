@@ -7,8 +7,10 @@ import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Badge } from '@/components/ui/Badge';
+import { PageHeader } from '@/components/ui/PageHeader';
+import { Select } from '@/components/ui/Select';
 import { apiFetch, Auth } from '@/lib/api';
-import { Plus, ChevronRight, Trash2, Pencil, Check, X } from 'lucide-react';
+import { Plus, ChevronRight, Trash2, Pencil, Check, X, Server as ServerIcon } from 'lucide-react';
 import { fmtTime, safeArray } from '@/lib/utils';
 
 interface ServerRow {
@@ -95,22 +97,25 @@ export default function ServersPage() {
   return (
     <AppShell>
       <div className="p-6 space-y-4">
-        <div className="flex items-center justify-between">
-          <h1 className="text-2xl font-semibold">Servidores</h1>
-          {(role === 'admin' || role === 'operator') && (
-            <Button onClick={() => setShowNew(!showNew)}>
-              <Plus size={16} /> Novo servidor
-            </Button>
-          )}
-        </div>
+        <PageHeader
+          title="Servidores"
+          description="Frota de servidores monitorados, agentes e retenção de logs."
+          icon={<ServerIcon size={16} />}
+          actions={
+            (role === 'admin' || role === 'operator') && (
+              <Button onClick={() => setShowNew(!showNew)}>
+                <Plus size={16} /> Novo servidor
+              </Button>
+            )
+          }
+        />
 
         <div className="flex gap-2 items-end">
           <div>
             <label className="text-xs text-muted">Filtrar por cloud</label>
-            <select
+            <Select
               value={filter.cloud}
               onChange={(e) => setFilter({ ...filter, cloud: e.target.value })}
-              className="rounded-md bg-panel2 border border-border px-3 py-2 text-sm"
             >
               <option value="">Todos</option>
               <option value="aws">AWS</option>
@@ -118,7 +123,7 @@ export default function ServersPage() {
               <option value="gcp">GCP</option>
               <option value="azure">Azure</option>
               <option value="onprem">On-prem</option>
-            </select>
+            </Select>
           </div>
           <div>
             <label className="text-xs text-muted">Tag contém</label>
@@ -143,17 +148,13 @@ export default function ServersPage() {
               </div>
               <div>
                 <label className="text-xs text-muted">Cloud</label>
-                <select
-                  value={cloud}
-                  onChange={(e) => setCloud(e.target.value)}
-                  className="w-full rounded-md bg-panel2 border border-border px-3 py-2 text-sm"
-                >
+                <Select value={cloud} onChange={(e) => setCloud(e.target.value)}>
                   <option value="onprem">on-prem</option>
                   <option value="aws">aws</option>
                   <option value="oci">oci</option>
                   <option value="gcp">gcp</option>
                   <option value="azure">azure</option>
-                </select>
+                </Select>
               </div>
               <div>
                 <label className="text-xs text-muted">Região</label>
@@ -219,9 +220,7 @@ export default function ServersPage() {
                   <div className="space-y-1">
                     <div className="font-medium flex items-center gap-2">
                       {s.name}
-                      {s.cloud && (
-                        <Badge className="border-info text-info">{s.cloud}</Badge>
-                      )}
+                      {s.cloud && <Badge tone="info">{s.cloud}</Badge>}
                       {s.cloudRegion && <Badge>{s.cloudRegion}</Badge>}
                       {editingRetentionId === s.id ? (
                         <span

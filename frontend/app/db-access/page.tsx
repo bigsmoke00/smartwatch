@@ -6,9 +6,12 @@ import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Badge } from '@/components/ui/Badge';
+import { PageHeader } from '@/components/ui/PageHeader';
+import { Select } from '@/components/ui/Select';
 import { apiFetch, ApiError } from '@/lib/api';
 import { loadMyPermissions, hasPerm } from '@/lib/perms';
 import { fmtTime, safeArray } from '@/lib/utils';
+import { TerminalSquare } from 'lucide-react';
 
 interface Cluster { id: string; name: string; database: string }
 interface QueryResult { rows: any[]; rowCount: number; truncated: boolean; tookMs: number }
@@ -20,12 +23,12 @@ interface ReqRow {
   row_count: number | null; error_text: string | null; created_at: string;
 }
 
-const STATUS_VARIANT: Record<string, string> = {
-  pending: 'text-warn border-warn/40',
-  approved: 'text-accent border-accent/40',
-  executed: 'text-success border-success/40',
-  rejected: 'text-danger border-danger/40',
-  failed: 'text-danger border-danger/40',
+const STATUS_TONE: Record<string, 'default' | 'accent' | 'success' | 'warn' | 'danger' | 'info'> = {
+  pending: 'warn',
+  approved: 'accent',
+  executed: 'success',
+  rejected: 'danger',
+  failed: 'danger',
 };
 
 export default function DbAccessPage() {
@@ -118,23 +121,21 @@ export default function DbAccessPage() {
   return (
     <AppShell>
       <div className="p-6 space-y-3">
-        <h1 className="text-2xl font-semibold">Acesso a banco (Zero Trust)</h1>
-        <p className="text-xs text-muted -mt-1">
-          Leitura (SELECT/WITH) é direta. Qualquer UPDATE/INSERT/DELETE precisa de um pedido — quem aprova é quem executa, dentro de uma sessão auditada.
-        </p>
+        <PageHeader
+          title="Acesso a banco (Zero Trust)"
+          description="Leitura é direta. Qualquer UPDATE/INSERT/DELETE precisa de pedido aprovado — quem aprova é quem executa, em sessão auditada."
+          icon={<TerminalSquare size={16} />}
+        />
 
         <Card className="p-4 grid md:grid-cols-4 gap-2 items-end">
           <div>
             <label className="text-xs text-muted">Cluster</label>
-            <select
-              value={clusterId} onChange={(e) => setClusterId(e.target.value)}
-              className="w-full rounded-md bg-panel2 border border-border px-3 py-2 text-sm"
-            >
+            <Select value={clusterId} onChange={(e) => setClusterId(e.target.value)}>
               <option value="">—</option>
               {safeArray<Cluster>(clusters).map((c) => (
                 <option key={c.id} value={c.id}>{c.name}</option>
               ))}
-            </select>
+            </Select>
           </div>
           <div>
             <label className="text-xs text-muted">Database (opcional)</label>
@@ -235,7 +236,7 @@ export default function DbAccessPage() {
                   <td className="px-3 py-1.5 text-xs font-mono max-w-xs truncate" title={r.sql_text}>{r.sql_text}</td>
                   <td className="px-3 py-1.5 text-xs text-muted max-w-xs truncate" title={r.reason}>{r.reason}</td>
                   <td className="px-3 py-1.5">
-                    <Badge className={STATUS_VARIANT[r.status] ?? ''}>{r.status}</Badge>
+                    <Badge tone={STATUS_TONE[r.status] ?? 'default'}>{r.status}</Badge>
                     {r.status === 'executed' && r.row_count != null && (
                       <div className="text-[10px] text-muted mt-0.5">{r.row_count} linha(s) afetada(s)</div>
                     )}

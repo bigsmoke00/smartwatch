@@ -5,6 +5,8 @@ import Link from 'next/link';
 import { AppShell } from '@/components/AppShell';
 import { Card } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
+import { PageHeader } from '@/components/ui/PageHeader';
+import { StatCard } from '@/components/ui/StatCard';
 import { apiFetch } from '@/lib/api';
 import { fmtTime, safeArray, sumBy } from '@/lib/utils';
 import {
@@ -61,19 +63,23 @@ export default function HomePage() {
   return (
     <AppShell>
       <div className="p-6 space-y-6">
-        <h1 className="text-2xl font-semibold">Visão geral</h1>
+        <PageHeader
+          title="Visão geral"
+          description="Status em tempo real da frota, logs e alertas."
+          icon={<Activity size={16} />}
+        />
 
         <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
-          <Stat icon={<Server size={14} />} label="Servidores" value={servers.length} />
-          <Stat icon={<Activity size={14} />} label="Logs (1h)" value={totalLogs.toLocaleString()} />
-          <Stat
-            icon={<AlertTriangle size={14} />}
+          <StatCard icon={<Server size={13} />} label="Servidores" value={servers.length} />
+          <StatCard icon={<Activity size={13} />} label="Logs (1h)" value={totalLogs.toLocaleString()} />
+          <StatCard
+            icon={<AlertTriangle size={13} />}
             label="Erros (1h)"
             value={errors}
-            tone={errors > 50 ? 'danger' : errors > 0 ? 'warn' : undefined}
+            tone={errors > 50 ? 'danger' : errors > 0 ? 'warn' : 'default'}
           />
-          <Stat label="CPU média" value={`${cpuAvg.toFixed(0)}%`} tone={cpuAvg > 85 ? 'danger' : cpuAvg > 70 ? 'warn' : undefined} />
-          <Stat label="Memória média" value={`${memAvg.toFixed(0)}%`} tone={memAvg > 85 ? 'danger' : memAvg > 70 ? 'warn' : undefined} />
+          <StatCard label="CPU média" value={`${cpuAvg.toFixed(0)}%`} tone={cpuAvg > 85 ? 'danger' : cpuAvg > 70 ? 'warn' : 'default'} />
+          <StatCard label="Memória média" value={`${memAvg.toFixed(0)}%`} tone={memAvg > 85 ? 'danger' : memAvg > 70 ? 'warn' : 'default'} />
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
@@ -122,7 +128,7 @@ export default function HomePage() {
                     <span>{m.name}</span>
                     <div className="flex items-center gap-2">
                       {m.role === 'leader' ? (
-                        <Badge className="border-accent text-accent">leader</Badge>
+                        <Badge tone="accent">leader</Badge>
                       ) : (
                         <Badge>{m.role}</Badge>
                       )}
@@ -197,12 +203,12 @@ export default function HomePage() {
                 <div key={e.id} className="py-1.5 text-sm">
                   <div className="flex items-center gap-2">
                     <Badge
-                      className={
+                      tone={
                         e.severity === 'critical'
-                          ? 'border-danger text-danger'
+                          ? 'danger'
                           : e.severity === 'warning'
-                          ? 'border-warn text-warn'
-                          : 'border-info text-info'
+                          ? 'warn'
+                          : 'info'
                       }
                     >
                       {e.severity}
@@ -219,32 +225,5 @@ export default function HomePage() {
         </div>
       </div>
     </AppShell>
-  );
-}
-
-function Stat({
-  icon,
-  label,
-  value,
-  tone,
-}: {
-  icon?: React.ReactNode;
-  label: string;
-  value: any;
-  tone?: 'warn' | 'danger';
-}) {
-  return (
-    <Card className="p-3">
-      <div className="text-xs text-muted flex items-center gap-1">
-        {icon} {label}
-      </div>
-      <div
-        className={`text-xl font-semibold mt-0.5 ${
-          tone === 'danger' ? 'text-danger' : tone === 'warn' ? 'text-warn' : ''
-        }`}
-      >
-        {value}
-      </div>
-    </Card>
   );
 }
