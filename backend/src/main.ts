@@ -37,6 +37,21 @@ async function bootstrap() {
 
   const port = parseInt(process.env.PORT ?? '4000', 10);
   await app.listen(port, '0.0.0.0');
+
+  // Node 18+ mata a conexão sozinho se o servidor não terminar de enviar os
+  // headers da resposta em 60s (`headersTimeout`, proteção padrão contra
+  // slow-loris) ou não fechar a request inteira em 5min (`requestTimeout`).
+  // A busca de logs (/logs) pode legitimamente passar disso numa janela de
+  // tempo grande com volume alto — antes disso o socket caía sozinho
+  // ("ECONNRESET"/"socket hang up") no meio da query, e a tela de Logs
+  // ficava com o overlay "Atualizando para o novo filtro…" presa em cima
+  // dos dados antigos até a request falhar. Aumentando esses timeouts dá
+  // tempo da query (mesmo pesada) terminar e responder normalmente.
+  const httpServer = app.getHttpServer();
+  httpServer.headersTimeout = 120_000;  // 2min (padrão Node: 60s)
+  httpServer.requestTimeout = 600_000;  // 10min (padrão Node: 5min)
+  httpServer.keepAliveTimeout = 65_000; // > timeout típico de proxy (60s), evita corrida na reutilização da conexão
+
   new Logger('Bootstrap').log(`LogWatch backend listening on :${port}`);
 }
 
