@@ -109,8 +109,17 @@ export async function spawnHostShell(opts: HostSessionOpts) {
     // sobrevivem mesmo que `su -` zere o ambiente herdado.
     const envPrefix = `HISTFILE=${histFileInShell} HISTSIZE=10000 HISTFILESIZE=10000 ` +
       `HISTTIMEFORMAT='%s ' HISTCONTROL= PROMPT_COMMAND='history -a'`;
+    // sudo -i e sudo -E são mutuamente exclusivos (-i simula login e RESETA
+    // o ambiente; -E preserva o ambiente do chamador — daí o erro "você não
+    // pode especificar as opções -i e -E ao mesmo tempo", que fazia o `su -c`
+    // falhar de cara (exit 1) sem nunca abrir um shell de verdade — e é por
+    // isso que nenhum comando era capturado: a sessão morria antes de
+    // escrever qualquer coisa no HISTFILE. Em vez do -i do sudo (que tenta
+    // "logar" como root e por isso zera o ambiente), passamos -E pro sudo e
+    // pedimos o -i pro SHELL de destino (mesmo padrão do branch sem sudo
+    // abaixo) — preserva HISTFILE/HISTSIZE/etc. e ainda fica interativo.
     const innerCmd = opts.sudo
-      ? `${envPrefix} exec sudo -E -i`
+      ? `${envPrefix} exec sudo -E ${requestedShell} -i`
       : `${envPrefix} exec ${requestedShell} -i`;
     const suArgs = ['-', targetUser, '-c', innerCmd];
     if (hasHostRoot) {
