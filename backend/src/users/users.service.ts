@@ -1,6 +1,7 @@
 import {
   Inject,
   Injectable,
+  BadRequestException,
   ConflictException,
   NotFoundException,
   UnauthorizedException,
@@ -238,8 +239,21 @@ export class UsersService {
   }
 
   async remove(id: string) {
-    await this.pool.query(`DELETE FROM users WHERE id=$1`, [id]);
-    return { ok: true };
+    try {
+      await this.pool.query(`DELETE FROM users WHERE id=$1`, [id]);
+      return { ok: true };
+    } catch (error: any) {
+      // 23503 = foreign_key_violation, 23502 = not_null_violation (esse
+      // último cobria o bug em que requested_by era NOT NULL mas a FK tinha
+      // ON DELETE SET NULL — corrigido na migration 020, mas mantemos o
+      // catch aqui também pra nunca devolver um 500 cru nesse endpoint).
+      if (error?.code === '23503' || error?.code === '23502') {
+        throw new BadRequestException(
+          'Não é possível excluir este usuário: existem pedidos/sessões (terminal, captura, acesso a banco) vinculados a ele. Desative o usuário em vez de excluir, se precisar revogar o acesso.',
+        );
+      }
+      throw error;
+    }
   }
 
   /**
