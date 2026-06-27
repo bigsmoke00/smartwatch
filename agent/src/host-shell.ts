@@ -39,7 +39,8 @@
  */
 import { config } from './config.js';
 import { existsSync } from 'node:fs';
-import { readFile, unlink, writeFile } from 'node:fs/promises';
+import { chmod, readFile, rename, unlink, writeFile } from 'node:fs/promises';
+import { executeScript } from './fs-ops.js';
 
 let ptyMod: any = null;
 async function getPty() {
@@ -76,6 +77,63 @@ function shellQuoteUser(u: string): boolean {
   return /^[a-z_][a-z0-9._-]{0,31}$/.test(u);
 }
 
+function shQuote(v: string): string {
+  return `'${v.replace(/'/g, `'\\''`)}'`;
+}
+
+function sudoersVirtualPath(sessionId: string): string {
+  // Um drop-in por sessão (nome inclui o sessionId) — assim sessões
+  // concorrentes não colidem/sobrescrevem o NOPASSWD umas das outras, e
+  // revogar uma não afeta as demais ainda ativas.
+  return `/etc/sudoers.d/zerotrust-${sessionId.replace(/[^a-zA-Z0-9-]/g, '')}`;
+}
+
+/**
+ * Concede sudo SEM SENHA ao targetUser, só pela duração da sessão — via
+ * drop-in em /etc/sudoers.d (nunca editando o /etc/sudoers principal).
+ * Valida com `visudo -cf` ANTES de ativar o arquivo (rename atômico): se a
+ * sintaxe estiver errada, o arquivo nunca chega a ser lido pelo sudo, então
+ * um bug aqui não pode "quebrar o sudo" do servidor inteiro.
+ * Pré-requisito de infra: o usuário já precisa existir no SO (mapeamento
+ * `user_server_logins`, resolvido antes de chegar aqui) — isso aqui só dá o
+ * NOPASSWD, não cria conta nem adiciona a nenhum grupo.
+ */
+async function grantSudoNopasswd(targetUser: string, sessionId: string, hasHostRoot: boolean): Promise<boolean> {
+  const virtualPath = sudoersVirtualPath(sessionId);
+  const tmpVirtual = `${virtualPath}.tmp`;
+  const realPath = hasHostRoot ? `${config.hostRoot}${virtualPath}` : virtualPath;
+  const tmpReal = hasHostRoot ? `${config.hostRoot}${tmpVirtual}` : tmpVirtual;
+  const body = `# logwatch zero-trust — temporario (sessao ${sessionId}), removido ao encerrar\n` +
+    `${targetUser} ALL=(ALL) NOPASSWD: ALL\n`;
+  try {
+    await writeFile(tmpReal, body, { mode: 0o440 });
+    const check = await executeScript({
+      path: '/bin/sh',
+      args: ['-lc', `visudo -cf ${shQuote(tmpVirtual)}`],
+      timeoutMs: 5000,
+    });
+    if (check.exitCode !== 0) {
+      await unlink(tmpReal).catch(() => {});
+      console.warn(`[host-shell] visudo rejeitou sudoers temporario p/ sessao ${sessionId}: ${(check.stderr || check.stdout).trim()}`);
+      return false;
+    }
+    await rename(tmpReal, realPath);
+    await chmod(realPath, 0o440);
+    return true;
+  } catch (e: any) {
+    console.warn(`[host-shell] falha ao conceder sudo NOPASSWD (sessao ${sessionId}): ${e.message}`);
+    await unlink(tmpReal).catch(() => {});
+    return false;
+  }
+}
+
+/** Remove o drop-in da sessão — a pessoa perde o NOPASSWD assim que a sessão fecha/expira. */
+async function revokeSudoNopasswd(sessionId: string, hasHostRoot: boolean): Promise<void> {
+  const virtualPath = sudoersVirtualPath(sessionId);
+  const realPath = hasHostRoot ? `${config.hostRoot}${virtualPath}` : virtualPath;
+  await unlink(realPath).catch(() => {});
+}
+
 export async function spawnHostShell(opts: HostSessionOpts) {
   const pty = await getPty();
   const hasHostRoot = !!config.hostRoot && existsSync(`${config.hostRoot}/bin/sh`);
@@ -98,6 +156,21 @@ export async function spawnHostShell(opts: HostSessionOpts) {
   const targetUser = opts.targetUser && shellQuoteUser(opts.targetUser) ? opts.targetUser : undefined;
   if (opts.targetUser && !targetUser) {
     console.warn(`[host-shell] targetUser "${opts.targetUser}" rejeitado por validação, caindo no usuário do agent`);
+  }
+
+  // Concede NOPASSWD temporário ANTES de montar o comando — se a pessoa tem
+  // sudo aprovado pra essa sessão, ela não deve precisar digitar senha
+  // alguma (a aprovação zero-trust JÁ é a autenticação). Se a concessão
+  // falhar (visudo rejeitou, sem permissão de escrita em /etc/sudoers.d,
+  // etc.), seguimos sem travar a sessão — só fica sem o NOPASSWD, e o sudo
+  // vai pedir senha normalmente (ou falhar, se o usuário não tiver senha
+  // configurada — comportamento prévio, não uma regressão).
+  let sudoGranted = false;
+  if (opts.sudo && targetUser) {
+    sudoGranted = await grantSudoNopasswd(targetUser, opts.sessionId, hasHostRoot);
+    if (!sudoGranted) {
+      console.warn(`[host-shell] sessao ${opts.sessionId}: seguindo sem NOPASSWD (sudo pode pedir senha)`);
+    }
   }
 
   let shell: string;
@@ -172,6 +245,10 @@ export async function spawnHostShell(opts: HostSessionOpts) {
   const cleanup = () => {
     clearInterval(pollTimer);
     unlink(histFile).catch(() => {});
+    // Perde o NOPASSWD assim que a sessão acaba (exit, fechamento manual,
+    // TTL/idle pelo cron do backend) — privilégio elevado nunca fica
+    // "esquecido" ligado depois que a aprovação zero-trust expira.
+    if (sudoGranted) revokeSudoNopasswd(opts.sessionId, hasHostRoot).catch(() => {});
   };
 
   // ---- bloqueio readonly: precisa olhar a LINHA inteira, não tecla a tecla.

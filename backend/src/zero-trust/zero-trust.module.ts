@@ -11,7 +11,7 @@ import {
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { JwtModule } from '@nestjs/jwt';
 import {
-  IsBoolean, IsIn, IsOptional, IsString,
+  IsBoolean, IsIn, IsInt, IsOptional, IsString, Max, Min,
 } from 'class-validator';
 import { ZeroTrustService } from './zero-trust.service';
 import { TerminalGateway } from './terminal.gateway';
@@ -29,6 +29,10 @@ class RequestSessionDto {
   @IsOptional() @IsIn(['readonly', 'readwrite']) mode?: 'readonly' | 'readwrite';
   /** "Quero usar sudo" — só vale se mode=readwrite e o mapeamento liberar; decidido no approve(). */
   @IsOptional() @IsBoolean() sudo?: boolean;
+  /** Quanto tempo a sessão fica de pé após aprovada (TTL absoluto). Default 30min se omitido. */
+  @IsOptional() @IsInt() @Min(1) @Max(1440) ttlMinutes?: number;
+  /** Encerra antes do TTL se ficar esse tempo sem nenhum input. Default 15min se omitido. */
+  @IsOptional() @IsInt() @Min(1) @Max(1440) idleTimeoutMinutes?: number;
 }
 
 class UpsertLoginDto {
@@ -67,6 +71,7 @@ class ZeroTrustController {
       serverId: dto.serverId, reason: dto.reason, command: dto.command,
       target: dto.target, containerId: dto.containerId,
       mode: dto.mode, sudoRequested: dto.sudo,
+      ttlMinutes: dto.ttlMinutes, idleTimeoutMinutes: dto.idleTimeoutMinutes,
       requestedBy: u.sub,
     });
   }

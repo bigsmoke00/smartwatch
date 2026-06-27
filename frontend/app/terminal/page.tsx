@@ -64,6 +64,7 @@ export default function TerminalPage() {
   const [target, setTarget] = useState<'host' | 'container'>('host');
   const [mode, setMode] = useState<'readonly' | 'readwrite'>('readwrite');
   const [sudo, setSudo] = useState(false);
+  const [ttlMinutes, setTtlMinutes] = useState(30);
   const [login, setLogin] = useState<LoginResolution | null>(null);
   const [viewing, setViewing] = useState<{ id: string; commands: any[] } | null>(null);
 
@@ -109,6 +110,7 @@ export default function TerminalPage() {
         serverId, reason, target,
         containerId: target === 'container' ? containerId : undefined,
         mode, sudo: mode === 'readwrite' ? sudo : false,
+        ttlMinutes: ttlMinutes && ttlMinutes > 0 ? ttlMinutes : undefined,
       }),
     });
     setReason('');
@@ -214,9 +216,18 @@ export default function TerminalPage() {
                   </Select>
                 </div>
               )}
-              <div className="md:col-span-2">
+              <div>
                 <label className="text-xs text-muted">Motivo / contexto (auditável)</label>
                 <Input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="ex: investigar memleak no api-1" />
+              </div>
+              <div>
+                <label className="text-xs text-muted">Duração (min)</label>
+                <Input
+                  type="number" min={1} max={1440}
+                  value={ttlMinutes}
+                  onChange={(e) => setTtlMinutes(parseInt(e.target.value, 10) || 0)}
+                  placeholder="30"
+                />
               </div>
               <Button onClick={request}>Solicitar acesso</Button>
               {/*
