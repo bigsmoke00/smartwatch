@@ -16,7 +16,7 @@ FROM timescale/timescaledb:2.14.2-pg16
 # pg_repack é o backend (ver backend/src/db-maintenance), via @Cron, não
 # daqui.
 RUN apk add --no-cache --virtual .pgrepack-build-deps \
-        build-base curl tar openssl-dev zlib-dev \
+        build-base curl tar openssl-dev zlib-dev zstd-dev lz4-dev \
     && curl -fsSL https://github.com/reorg/pg_repack/archive/refs/tags/ver_1.5.0.tar.gz -o /tmp/pg_repack.tar.gz \
     && mkdir -p /tmp/pg_repack \
     && tar -xzf /tmp/pg_repack.tar.gz -C /tmp/pg_repack --strip-components=1 \
