@@ -29,6 +29,7 @@ import { PgMonitorModule } from './pg-monitor/pg-monitor.module';
 import { DbAccessModule } from './db-access/db-access.module';
 import { CaptureModule } from './capture/capture.module';
 import { HealthModule } from './health/health.module';
+import { DbMaintenanceModule } from './db-maintenance/db-maintenance.module';
 import { BootstrapService } from './bootstrap.service';
 
 @Module({
@@ -95,6 +96,7 @@ import { BootstrapService } from './bootstrap.service';
     DbAccessModule,
     CaptureModule,
     HealthModule,
+    DbMaintenanceModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: ThrottlerGuard },

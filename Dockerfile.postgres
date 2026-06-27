@@ -1,0 +1,9 @@
+FROM timescale/timescaledb:2.14.2-pg16
+
+# pg_repack: reescreve tabelas com bloat (MVCC) devolvendo o espaço pro disco
+# de fato, sem o lock ACCESS EXCLUSIVE longo do VACUUM FULL. O pacote Debian
+# já traz a extensão (.so/.control/.sql) — o binário cliente quem chama é o
+# backend (ver backend/Dockerfile), via rotina interna (@Cron), não daqui.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends postgresql-16-repack \
+    && rm -rf /var/lib/apt/lists/*
