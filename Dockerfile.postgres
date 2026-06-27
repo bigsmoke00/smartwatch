@@ -1,9 +1,22 @@
 FROM timescale/timescaledb:2.14.2-pg16
 
 # pg_repack: reescreve tabelas com bloat (MVCC) devolvendo o espaço pro disco
-# de fato, sem o lock ACCESS EXCLUSIVE longo do VACUUM FULL. O pacote Debian
-# já traz a extensão (.so/.control/.sql) — o binário cliente quem chama é o
-# backend (ver backend/Dockerfile), via rotina interna (@Cron), não daqui.
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends postgresql-16-repack \
-    && rm -rf /var/lib/apt/lists/*
+# de fato, sem o lock ACCESS EXCLUSIVE longo do VACUUM FULL.
+#
+# Essa imagem (timescale/timescaledb) é baseada em `postgres:alpine`, não em
+# Debian — não existe pacote apk pronto pra pg_repack, então a extensão é
+# compilada aqui a partir do código-fonte contra a postgresql16-dev já
+# presente na imagem (mesmo padrão usado no backend/Dockerfile pro binário
+# cliente). Versão fixada (1.5.0) suporta PG 10-16.
+#
+# Aqui só entram os arquivos da extensão (.so/.control/.sql) — quem CHAMA o
+# pg_repack é o backend (ver backend/src/db-maintenance), via @Cron, não
+# daqui.
+RUN apk add --no-cache --virtual .pgrepack-build-deps \
+        build-base postgresql16-dev curl tar \
+    && curl -fsSL https://github.com/reorg/pg_repack/archive/refs/tags/ver_1.5.0.tar.gz -o /tmp/pg_repack.tar.gz \
+    && mkdir -p /tmp/pg_repack \
+    && tar -xzf /tmp/pg_repack.tar.gz -C /tmp/pg_repack --strip-components=1 \
+    && make -C /tmp/pg_repack USE_PGXS=1 PG_CONFIG=/usr/local/bin/pg_config install \
+    && apk del .pgrepack-build-deps \
+    && rm -rf /tmp/pg_repack /tmp/pg_repack.tar.gz
