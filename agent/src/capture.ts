@@ -22,7 +22,18 @@
  */
 import { spawn } from 'node:child_process';
 
-const MAX_CAPTURE_BYTES = parseInt(process.env.LOGWATCH_MAX_CAPTURE_BYTES ?? '52428800', 10); // 50MB
+// Limite de bytes é só uma rede de segurança contra disco/memória — quem
+// efetivamente fecha a captura agora é o tempo (ver MAX_DURATION_SECONDS).
+// Por isso o valor default subiu bem acima do que 15min de SIP/RTP real
+// costuma gerar, e excedê-lo não é mais tratado como falha (ver
+// runPacketCapture): a captura simplesmente termina com o que já tinha.
+const MAX_CAPTURE_BYTES = parseInt(process.env.LOGWATCH_MAX_CAPTURE_BYTES ?? '524288000', 10); // 500MB
+
+// Teto absoluto de duração — 15 minutos. Decisão do usuário: a captura deve
+// fechar sozinha ao bater esse tempo, e esse teto vale tanto pro clamp local
+// abaixo quanto pra validação no backend (DTO) e no banco (CHECK constraint
+// em capture_sessions.duration_seconds) — os três precisam ficar em sincronia.
+const MAX_DURATION_SECONDS = 900;
 
 export interface CaptureArgs {
   sessionId: string;
@@ -196,7 +207,7 @@ async function runPing(args: CaptureArgs): Promise<CaptureResult> {
 }
 
 async function runPacketCapture(args: CaptureArgs, onChunk?: (b64: string) => void): Promise<CaptureResult> {
-  const durationSeconds = Math.min(Math.max(args.durationSeconds ?? 60, 5), 1800);
+  const durationSeconds = Math.min(Math.max(args.durationSeconds ?? 60, 5), MAX_DURATION_SECONDS);
   const maxPackets = Math.min(Math.max(args.maxPackets ?? 200_000, 100), 1_000_000);
 
   let filterArgs: string[] = [];
@@ -225,11 +236,15 @@ async function runPacketCapture(args: CaptureArgs, onChunk?: (b64: string) => vo
   const packetsLine = r.stderr.match(/(\d+) packets captured/);
   const packetCount = packetsLine ? parseInt(packetsLine[1], 10) : undefined;
 
+  // Antes isso era tratado como falha (status='failed' no banco). Agora o
+  // corte por tempo (15min) é o limite real — bater no teto de bytes (rede
+  // de segurança, bem mais alto) só encerra a captura mais cedo com o que
+  // já tinha sido coletado, sem virar erro pro usuário.
   if (r.exceeded) {
     return {
-      ok: false,
-      error: `captura excedeu o limite de tamanho (${MAX_CAPTURE_BYTES} bytes) — reduza a duração/pacotes ou refine o filtro`,
+      ok: true,
       packetCount, fileSizeBytes: r.totalBytes,
+      resultText: `captura encerrada antecipadamente ao atingir ${MAX_CAPTURE_BYTES} bytes (limite de segurança) — ${packetCount ?? '?'} pacotes capturados até aqui`,
     };
   }
 

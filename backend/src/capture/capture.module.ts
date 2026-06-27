@@ -18,7 +18,10 @@ class RequestCaptureDto {
   @IsOptional() @IsString() iface?: string;
   @IsOptional() @IsString() filterExpr?: string;
   @IsOptional() @IsString() targetHost?: string;
-  @IsOptional() @IsInt() @Min(5) @Max(1800) durationSeconds?: number;
+  // Teto absoluto: 15min (900s) — a captura fecha sozinha ao bater isso.
+  // Precisa ficar em sincronia com MAX_DURATION_SECONDS em agent/src/capture.ts
+  // e com o CHECK constraint de duration_seconds em capture_sessions.
+  @IsOptional() @IsInt() @Min(5) @Max(900) durationSeconds?: number;
   @IsOptional() @IsInt() maxPackets?: number;
   @IsString() reason!: string;
 }

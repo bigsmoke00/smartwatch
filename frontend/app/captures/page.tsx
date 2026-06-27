@@ -184,7 +184,7 @@ export default function CapturesPage() {
     const effectiveFilter = filterExpr.trim()
       ? filterExpr
       : (kind === 'sip' && !includeRtp ? 'port 5060 or port 5061' : undefined);
-    const durationSeconds = Math.min(1800, Math.max(5, Number(durationInput) || 60));
+    const durationSeconds = Math.min(900, Math.max(5, Number(durationInput) || 60));
     const maxPackets = Number(maxPacketsInput) || 200000;
     try {
       await apiFetch('/captures', {
@@ -373,11 +373,11 @@ export default function CapturesPage() {
                 )}
 
                 <div>
-                  <label className="text-xs text-muted">Duração (segundos, 5–1800)</label>
+                  <label className="text-xs text-muted">Duração (segundos, 5–900 · teto de 15min)</label>
                   <Input
                     type="number" value={durationInput}
                     onChange={(e) => setDurationInput(e.target.value)}
-                    onBlur={() => setDurationInput(String(Math.min(1800, Math.max(5, Number(durationInput) || 60))))}
+                    onBlur={() => setDurationInput(String(Math.min(900, Math.max(5, Number(durationInput) || 60))))}
                   />
                 </div>
                 {kind !== 'ping' && (

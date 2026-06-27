@@ -1,7 +1,7 @@
 'use client';
 
 import { useMemo, useState } from 'react';
-import { ParsedPacket, SipDialog, SipDialogState, SIP_METHODS_LIST, buildDialogs } from '@/lib/pcap';
+import { ParsedPacket, SipDialog, SipDialogState, SIP_METHODS_LIST, buildDialogs, buildCallGroups, CallGroup } from '@/lib/pcap';
 
 interface Props {
   packets: ParsedPacket[];
@@ -77,6 +77,17 @@ function sipInfoColor(p: ParsedPacket): string {
 
 function fmtT(t: number) {
   return t.toFixed(6);
+}
+
+// Paleta pra distinguir visualmente cada "perna" dentro de uma ligação
+// agrupada (ex.: perna proxy↔FreeSWITCH vs perna FreeSWITCH↔operadora).
+// Repete em ciclo se houver mais pernas que cores.
+const LEG_COLORS = ['#58a6ff', '#d29922', '#a371f7', '#3fb950', '#f85149', '#39c5cf'];
+
+/** Índice da perna (posição do Call-ID da mensagem dentro do grupo) — usado pra cor/rótulo no call-flow mesclado. */
+function legIndexOf(group: CallGroup, m: ParsedPacket): number {
+  const i = m.sipCallId ? group.callIds.indexOf(m.sipCallId) : -1;
+  return i < 0 ? 0 : i;
 }
 
 // largura mínima/máxima (px) do painel de detalhe arrastável, e a faixa de
@@ -183,6 +194,39 @@ export default function CaptureLiveView({ packets, totalParsed }: Props) {
   const [fullscreen, setFullscreen] = useState(false);
 
   const dialogs = useMemo(() => buildDialogs(packets), [packets]);
+  // Uniões manuais entre diálogos — pro caso (comum) de B2BUA sem nenhum
+  // header de correlação configurado (ex.: OpenSIPS↔FreeSWITCH e
+  // OpenSIPS↔operadora): aí não tem como ligar automaticamente, então o
+  // usuário marca os diálogos na tabela e clica "unir selecionados". Cada
+  // item é um grupo de Call-IDs unidos à força.
+  const [manualLinks, setManualLinks] = useState<string[][]>([]);
+  const [mergeSelection, setMergeSelection] = useState<Set<string>>(new Set());
+  function toggleMergeSelection(callId: string) {
+    setMergeSelection((prev) => {
+      const next = new Set(prev);
+      if (next.has(callId)) next.delete(callId); else next.add(callId);
+      return next;
+    });
+  }
+  function confirmMerge() {
+    if (mergeSelection.size < 2) return;
+    setManualLinks((prev) => [...prev, [...mergeSelection]]);
+    setMergeSelection(new Set());
+  }
+  function removeManualLink(idx: number) {
+    setManualLinks((prev) => prev.filter((_, i) => i !== idx));
+  }
+  // Liga diálogos com Call-ID diferente quando uma das pernas carrega header
+  // X-Call-ID/X-CID apontando pra outra (mesmo mecanismo do "extended call
+  // flow" do sngrep), MAIS as uniões manuais acima — pra dar pra ver as 2+
+  // pernas de uma ligação (ex.: proxy↔FreeSWITCH e FreeSWITCH↔operadora)
+  // como uma coisa só mesmo quando não existe header nenhum ligando elas.
+  const callGroups = useMemo(() => buildCallGroups(dialogs, manualLinks), [dialogs, manualLinks]);
+  const groupByCallId = useMemo(() => {
+    const m = new Map<string, CallGroup>();
+    for (const g of callGroups) for (const cid of g.callIds) m.set(cid, g);
+    return m;
+  }, [callGroups]);
 
   const filteredDialogs = useMemo(() => {
     let base = dialogs.filter((d) => dialogMethods.has(d.primaryMethod));
@@ -226,8 +270,8 @@ export default function CaptureLiveView({ packets, totalParsed }: Props) {
     );
   }, [packets, filter, methodFilter]);
 
-  const selectedDialog: SipDialog | undefined = selectedCallId
-    ? dialogs.find((d) => d.callId === selectedCallId)
+  const selectedGroup: CallGroup | undefined = selectedCallId
+    ? groupByCallId.get(selectedCallId)
     : undefined;
 
   if (!packets.length) {
@@ -325,49 +369,104 @@ export default function CaptureLiveView({ packets, totalParsed }: Props) {
         </button>
       </div>
 
-      {tab === 'dialogs' && !selectedDialog && (
+      {tab === 'dialogs' && !selectedGroup && (mergeSelection.size > 0 || manualLinks.length > 0) && (
+        <div className="flex flex-wrap items-center gap-2 px-2 py-1.5 bg-panel2 border-b border-border text-[11px]">
+          {mergeSelection.size > 0 && (
+            <>
+              <span className="text-muted">{mergeSelection.size} diálogo(s) marcado(s) pra unir</span>
+              <button
+                onClick={confirmMerge}
+                disabled={mergeSelection.size < 2}
+                className="px-2 py-0.5 rounded border border-accent text-accent disabled:opacity-40 disabled:cursor-not-allowed hover:bg-accent/10"
+              >
+                🔗 unir selecionados (sem header)
+              </button>
+              <button onClick={() => setMergeSelection(new Set())} className="text-muted hover:text-accent">limpar marcação</button>
+            </>
+          )}
+          {manualLinks.length > 0 && (
+            <div className="flex flex-wrap items-center gap-2 ml-auto">
+              <span className="text-muted">ligações manuais:</span>
+              {manualLinks.map((group, i) => (
+                <span key={i} className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-accent/10 text-accent" title={group.join(' + ')}>
+                  🔗 {group.length} pernas
+                  <button onClick={() => removeManualLink(i)} className="text-muted hover:text-danger" title="desfazer essa união">✕</button>
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {tab === 'dialogs' && !selectedGroup && (
         <div className={`${rowsMaxH} overflow-auto ${fullscreen ? 'flex-1' : ''}`}>
           <table className="w-full text-[11px]">
             <thead className="bg-panel2 text-muted uppercase sticky top-0">
               <tr>
+                <th className="px-2 py-1 w-6" title="marcar pra unir manualmente (sem header de correlação)">🔗</th>
                 <th className="text-left px-2 py-1">Call-ID</th>
                 <th className="text-left px-2 py-1">De</th>
                 <th className="text-left px-2 py-1">Para</th>
                 <th className="text-left px-2 py-1">Msgs</th>
                 <th className="text-left px-2 py-1">Método</th>
                 <th className="text-left px-2 py-1">Estado</th>
+                <th className="text-left px-2 py-1">Pernas</th>
               </tr>
             </thead>
             <tbody>
-              {filteredDialogs.map((d) => (
-                <tr
-                  key={d.callId}
-                  className="border-t border-border hover:bg-panel2 cursor-pointer"
-                  onClick={() => setSelectedCallId(d.callId)}
-                >
-                  <td className="px-2 py-1 font-mono truncate max-w-[180px]" title={d.callId}>{d.callId}</td>
-                  <td className="px-2 py-1 truncate max-w-[160px]" title={d.from}>{d.from ?? '—'}</td>
-                  <td className="px-2 py-1 truncate max-w-[160px]" title={d.to}>{d.to ?? '—'}</td>
-                  <td className="px-2 py-1">{d.messages.length}</td>
-                  <td className={`px-2 py-1 font-medium ${METHOD_COLOR[d.primaryMethod] ?? ''}`}>{d.primaryMethod}</td>
-                  <td className="px-2 py-1">
-                    <span className={`font-medium ${dialogStateInfo(d).className}`}>
-                      {dialogStateInfo(d).label}
-                    </span>
-                  </td>
-                </tr>
-              ))}
+              {filteredDialogs.map((d) => {
+                const group = groupByCallId.get(d.callId);
+                const legCount = group?.callIds.length ?? 1;
+                return (
+                  <tr
+                    key={d.callId}
+                    className="border-t border-border hover:bg-panel2 cursor-pointer"
+                    onClick={() => setSelectedCallId(d.callId)}
+                  >
+                    <td className="px-2 py-1" onClick={(e) => e.stopPropagation()}>
+                      <input
+                        type="checkbox"
+                        checked={mergeSelection.has(d.callId)}
+                        onChange={() => toggleMergeSelection(d.callId)}
+                        title="marcar pra unir manualmente a outro(s) diálogo(s) sem header de correlação"
+                      />
+                    </td>
+                    <td className="px-2 py-1 font-mono truncate max-w-[180px]" title={d.callId}>{d.callId}</td>
+                    <td className="px-2 py-1 truncate max-w-[160px]" title={d.from}>{d.from ?? '—'}</td>
+                    <td className="px-2 py-1 truncate max-w-[160px]" title={d.to}>{d.to ?? '—'}</td>
+                    <td className="px-2 py-1">{d.messages.length}</td>
+                    <td className={`px-2 py-1 font-medium ${METHOD_COLOR[d.primaryMethod] ?? ''}`}>{d.primaryMethod}</td>
+                    <td className="px-2 py-1">
+                      <span className={`font-medium ${dialogStateInfo(d).className}`}>
+                        {dialogStateInfo(d).label}
+                      </span>
+                    </td>
+                    <td className="px-2 py-1">
+                      {legCount > 1 ? (
+                        <span
+                          className="font-medium text-accent"
+                          title={`Ligado ${group!.manual ? 'manualmente' : 'via X-Call-ID/X-CID'} com ${legCount - 1} outra(s) perna(s): ${group!.callIds.filter((c) => c !== d.callId).join(', ')}`}
+                        >
+                          🔗 {legCount} pernas{group!.manual ? ' (manual)' : ''}
+                        </span>
+                      ) : (
+                        <span className="text-muted">—</span>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
               {!filteredDialogs.length && (
-                <tr><td colSpan={6} className="px-2 py-3 text-center text-muted">{dialogs.length ? 'nenhum diálogo bate com o filtro' : 'nenhuma mensagem SIP decodificada ainda'}</td></tr>
+                <tr><td colSpan={8} className="px-2 py-3 text-center text-muted">{dialogs.length ? 'nenhum diálogo bate com o filtro' : 'nenhuma mensagem SIP decodificada ainda'}</td></tr>
               )}
             </tbody>
           </table>
         </div>
       )}
 
-      {tab === 'dialogs' && selectedDialog && (
+      {tab === 'dialogs' && selectedGroup && (
         <div className={fullscreen ? 'flex-1 overflow-auto' : ''}>
-          <CallFlow dialog={selectedDialog} onBack={() => setSelectedCallId(null)} maxH={fullscreen ? 'calc(100vh - 220px)' : undefined} />
+          <CallFlow group={selectedGroup} onBack={() => setSelectedCallId(null)} maxH={fullscreen ? 'calc(100vh - 220px)' : undefined} />
         </div>
       )}
 
@@ -443,7 +542,7 @@ export default function CaptureLiveView({ packets, totalParsed }: Props) {
   );
 }
 
-function CallFlow({ dialog, onBack, maxH }: { dialog: SipDialog; onBack: () => void; maxH?: string }) {
+function CallFlow({ group, onBack, maxH }: { group: CallGroup; onBack: () => void; maxH?: string }) {
   const [selectedMsg, setSelectedMsg] = useState<ParsedPacket | null>(null);
   // largura/altura do painel de detalhe da mensagem — arrastável (ver
   // ResizeHandle/ResizeHandleV); a letra escala junto com a largura via
@@ -451,30 +550,56 @@ function CallFlow({ dialog, onBack, maxH }: { dialog: SipDialog; onBack: () => v
   const [msgPanelW, setMsgPanelW] = useState(384);
   const [msgPanelH, setMsgPanelH] = useState(320);
 
+  const isLinked = group.callIds.length > 1;
+  const messages = group.messages;
+  // diálogo único representando o "estado de chamada" — só faz sentido
+  // mostrar quando não há pernas ligadas (estado de chamada é por dialog).
+  const soloDialog = !isLinked ? group.dialogs[0] : undefined;
+
   const ips = useMemo(() => {
     const seen: string[] = [];
-    for (const m of dialog.messages) {
+    for (const m of messages) {
       if (m.srcIp && !seen.includes(m.srcIp)) seen.push(m.srcIp);
       if (m.dstIp && !seen.includes(m.dstIp)) seen.push(m.dstIp);
     }
     return seen;
-  }, [dialog]);
+  }, [messages]);
 
   const colW = 200;
   const rowH = 42;
   const marginTop = 44;
   const marginLeft = 90;
   const width = marginLeft + ips.length * colW + 20;
-  const height = marginTop + dialog.messages.length * rowH + 20;
+  const height = marginTop + messages.length * rowH + 20;
   const xOf = (ip?: string) => marginLeft + (ip ? ips.indexOf(ip) : 0) * colW + colW / 2;
 
   return (
     <div className="p-2">
       <button onClick={onBack} className="text-[13px] text-accent hover:underline mb-2">← voltar pros diálogos</button>
       <div className="text-[13px] text-muted mb-2">
-        Call-ID: <span className="font-mono">{dialog.callId}</span> · estado:{' '}
-        <span className={`font-medium ${dialogStateInfo(dialog).className}`}>{dialogStateInfo(dialog).label}</span>
+        {isLinked ? (
+          <>
+            <span className="text-accent font-medium">🔗 {group.callIds.length} pernas ligadas</span>
+            {' '}{group.manual ? '(união manual — sem header de correlação)' : 'via X-Call-ID/X-CID'} ·{' '}
+            <span className="font-mono">{group.callIds.join('  +  ')}</span>
+          </>
+        ) : (
+          <>
+            Call-ID: <span className="font-mono">{group.id}</span> · estado:{' '}
+            <span className={`font-medium ${dialogStateInfo(soloDialog!).className}`}>{dialogStateInfo(soloDialog!).label}</span>
+          </>
+        )}
       </div>
+      {isLinked && (
+        <div className="flex gap-3 mb-2 text-[11px]">
+          {group.callIds.map((cid, i) => (
+            <span key={cid} className="flex items-center gap-1.5" title={cid}>
+              <span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ background: LEG_COLORS[i % LEG_COLORS.length] }} />
+              perna {i + 1}: <span className="font-mono text-muted">{cid.slice(0, 24)}{cid.length > 24 ? '…' : ''}</span>
+            </span>
+          ))}
+        </div>
+      )}
       <div className="flex gap-2">
         <div className="overflow-auto border border-border rounded bg-panel2" style={{ maxHeight: maxH ?? 320 }}>
           <svg width={width} height={height} className="block">
@@ -490,7 +615,7 @@ function CallFlow({ dialog, onBack, maxH }: { dialog: SipDialog; onBack: () => v
                 />
               </g>
             ))}
-            {dialog.messages.map((m, i) => {
+            {messages.map((m, i) => {
               const y = marginTop + i * rowH;
               const x1 = xOf(m.srcIp);
               const x2 = xOf(m.dstIp);
@@ -498,6 +623,7 @@ function CallFlow({ dialog, onBack, maxH }: { dialog: SipDialog; onBack: () => v
               const color = isFinal
                 ? (m.sipMethodOrStatus?.startsWith('2') ? '#3fb950' : /^[4-6]/.test(m.sipMethodOrStatus ?? '') ? '#f85149' : '#d29922')
                 : '#58a6ff';
+              const leg = isLinked ? legIndexOf(group, m) : -1;
               return (
                 <g
                   key={i}
@@ -505,6 +631,9 @@ function CallFlow({ dialog, onBack, maxH }: { dialog: SipDialog; onBack: () => v
                   className="cursor-pointer"
                 >
                   <text x={4} y={y - 6} fontSize={11} className="fill-current text-muted">{fmtT(m.relTime)}</text>
+                  {leg >= 0 && (
+                    <rect x={2} y={y - 4} width={4} height={10} fill={LEG_COLORS[leg % LEG_COLORS.length]} />
+                  )}
                   <line x1={x1} y1={y} x2={x2} y2={y} stroke={color} strokeWidth={2} markerEnd="url(#arrow)" />
                   <text
                     x={(x1 + x2) / 2} y={y - 6} textAnchor="middle" fontSize={13}
@@ -512,6 +641,11 @@ function CallFlow({ dialog, onBack, maxH }: { dialog: SipDialog; onBack: () => v
                   >
                     {m.sipMethodOrStatus}
                   </text>
+                  {leg >= 0 && (
+                    <text x={(x1 + x2) / 2} y={y + 12} textAnchor="middle" fontSize={9} fill={LEG_COLORS[leg % LEG_COLORS.length]}>
+                      perna {leg + 1}
+                    </text>
+                  )}
                 </g>
               );
             })}

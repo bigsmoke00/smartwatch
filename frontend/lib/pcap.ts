@@ -39,6 +39,13 @@ export interface ParsedPacket {
   // INVITE só por também começar com "200" (bug: diálogo de NOTIFY sozinho
   // aparecia como "IN CALL").
   sipCseqMethod?: string;
+  // Header X-Call-ID / X-CID, se presente: é como B2BUAs (FreeSWITCH, SBCs,
+  // proxies) marcam a perna nova com o Call-ID da perna original, pra dar
+  // pra ligar as duas. É o MESMO mecanismo que o sngrep usa pra "extended
+  // call flow" — sem esse header (de qualquer lado), não tem como saber
+  // automaticamente que duas pernas com Call-ID diferente são a mesma
+  // ligação. Veja buildCallGroups().
+  sipXCallId?: string;
 }
 
 function concatU8(a: Uint8Array, b: Uint8Array): Uint8Array {
@@ -68,7 +75,7 @@ const SIP_METHODS = new Set<string>(SIP_METHODS_LIST);
 
 function tryDecodeSip(payload: Uint8Array): {
   text: string; isRequest: boolean; methodOrStatus: string; callId?: string; from?: string; to?: string;
-  cseqMethod?: string;
+  cseqMethod?: string; xCallId?: string;
 } | null {
   if (payload.length < 12) return null;
   let text: string;
@@ -102,6 +109,11 @@ function tryDecodeSip(payload: Uint8Array): {
   // única forma confiável de saber se um "200 OK" é de um INVITE, NOTIFY,
   // REGISTER, SUBSCRIBE etc.
   const cseqMatch = text.match(/^CSeq:\s*\d+\s+([A-Za-z]+)\s*$/im);
+  // X-Call-ID e X-CID são os dois nomes de header que o sngrep reconhece pra
+  // correlação de pernas B2BUA (configurável lá via `sip.xcid`). Aceitamos
+  // os dois aqui pelo mesmo motivo: depende de como o FreeSWITCH/proxy/SBC
+  // foi configurado pra propagar o Call-ID original na perna nova.
+  const xCallIdMatch = text.match(/^X-(?:Call-ID|CID):\s*(.+?)\s*$/im);
 
   return {
     text,
@@ -111,6 +123,7 @@ function tryDecodeSip(payload: Uint8Array): {
     from: fromMatch?.[1],
     to: toMatch?.[1],
     cseqMethod: cseqMatch?.[1]?.toUpperCase(),
+    xCallId: xCallIdMatch?.[1],
   };
 }
 
@@ -254,6 +267,7 @@ export class PcapStreamParser {
         base.sipFrom = sip.from;
         base.sipTo = sip.to;
         base.sipCseqMethod = sip.cseqMethod;
+        base.sipXCallId = sip.xCallId;
         base.info = `${sip.isRequest ? 'Request' : 'Status'}: ${sip.methodOrStatus}`;
         return base;
       }
@@ -284,6 +298,7 @@ export class PcapStreamParser {
         base.sipFrom = sip.from;
         base.sipTo = sip.to;
         base.sipCseqMethod = sip.cseqMethod;
+        base.sipXCallId = sip.xCallId;
         base.info = `${sip.isRequest ? 'Request' : 'Status'}: ${sip.methodOrStatus}`;
         return base;
       }
@@ -366,4 +381,108 @@ export function buildDialogs(packets: ParsedPacket[]): SipDialog[] {
     else d.state = 'calling';
   }
   return [...map.values()].sort((a, b) => a.messages[0].relTime - b.messages[0].relTime);
+}
+
+/**
+ * Grupo de diálogos que são, na prática, a MESMA ligação vista em pernas
+ * diferentes (Call-ID diferente cada uma) — ex.: perna do seu proxy SIP
+ * pro FreeSWITCH + perna do FreeSWITCH pra operadora. Junta tudo numa lista
+ * só de mensagens, ordenada por tempo, com `legOf` dizendo de qual Call-ID
+ * original cada mensagem veio (pra UI poder rotular/colorir por perna).
+ */
+export interface CallGroup {
+  /** Call-ID "representante" do grupo — o da primeira perna que apareceu. */
+  id: string;
+  /** Todos os Call-IDs que compõem essa ligação (1 item = não tem perna ligada). */
+  callIds: string[];
+  dialogs: SipDialog[];
+  messages: ParsedPacket[];
+  /** true se ao menos uma das uniões desse grupo veio de manualLinks (sem header X-Call-ID/X-CID), não só automática. */
+  manual: boolean;
+}
+
+/**
+ * Liga diálogos com Call-ID diferente quando um deles carrega um header
+ * X-Call-ID/X-CID apontando pro Call-ID do outro — o mesmo mecanismo que o
+ * sngrep usa pro "extended call flow" (ver wiki do sngrep / sip.xcid). Sem
+ * esse header em pelo menos uma das pernas, não tem correlação automática
+ * possível — diálogos sem nenhuma referência cruzada saem como grupo de 1.
+ *
+ * Implementado com union-find simples: cada Call-ID começa como seu próprio
+ * grupo; toda vez que uma mensagem de um diálogo referencia (via
+ * sipXCallId) o Call-ID de outro diálogo que também apareceu na captura,
+ * os dois grupos são unidos.
+ *
+ * `manualLinks` cobre o caso em que NÃO existe header nenhum ligando as
+ * pernas (ex.: OpenSIPS↔FreeSWITCH e OpenSIPS↔operadora sem nenhum
+ * X-Call-ID/X-CID configurado) — aí a única forma de juntar é o usuário
+ * escolher manualmente, na UI, quais diálogos são a mesma ligação. Cada
+ * item da lista é um grupo de Call-IDs que devem ser unidos à força,
+ * independente de header.
+ */
+export function buildCallGroups(dialogs: SipDialog[], manualLinks?: string[][]): CallGroup[] {
+  const parent = new Map<string, string>();
+  function find(x: string): string {
+    let r = x;
+    while (parent.get(r) !== r) r = parent.get(r)!;
+    // compressão de caminho
+    let cur = x;
+    while (parent.get(cur) !== r) {
+      const next = parent.get(cur)!;
+      parent.set(cur, r);
+      cur = next;
+    }
+    return r;
+  }
+  function union(a: string, b: string) {
+    const ra = find(a);
+    const rb = find(b);
+    if (ra !== rb) parent.set(ra, rb);
+  }
+
+  for (const d of dialogs) parent.set(d.callId, d.callId);
+  const byCallId = new Map(dialogs.map((d) => [d.callId, d] as const));
+  for (const d of dialogs) {
+    for (const m of d.messages) {
+      if (m.sipXCallId && byCallId.has(m.sipXCallId)) {
+        union(d.callId, m.sipXCallId);
+      }
+    }
+  }
+
+  // Uniões manuais (sem header) — ignora Call-IDs que não existem mais na
+  // captura atual (filtro/janela mudou) em vez de quebrar.
+  const manualTainted = new Set<string>();
+  if (manualLinks) {
+    for (const group of manualLinks) {
+      const present = group.filter((cid) => byCallId.has(cid));
+      for (let i = 1; i < present.length; i++) union(present[0], present[i]);
+      if (present.length > 1) for (const cid of present) manualTainted.add(cid);
+    }
+  }
+  // root final (pós todas as uniões) de cada Call-ID envolvido em algum
+  // link manual — pra marcar o grupo resultante como "manual" na UI.
+  const manualRoots = new Set<string>([...manualTainted].map((cid) => find(cid)));
+
+  const grouped = new Map<string, SipDialog[]>();
+  for (const d of dialogs) {
+    const root = find(d.callId);
+    if (!grouped.has(root)) grouped.set(root, []);
+    grouped.get(root)!.push(d);
+  }
+
+  return [...grouped.values()]
+    .map((ds): CallGroup => {
+      const sortedDs = [...ds].sort((a, b) => a.messages[0].relTime - b.messages[0].relTime);
+      const messages = sortedDs.flatMap((d) => d.messages).sort((a, b) => a.relTime - b.relTime);
+      const root = find(sortedDs[0].callId);
+      return {
+        id: sortedDs[0].callId,
+        callIds: sortedDs.map((d) => d.callId),
+        dialogs: sortedDs,
+        messages,
+        manual: manualRoots.has(root),
+      };
+    })
+    .sort((a, b) => a.messages[0].relTime - b.messages[0].relTime);
 }
