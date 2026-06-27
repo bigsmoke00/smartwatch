@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { AppShell } from '@/components/AppShell';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
@@ -120,6 +120,19 @@ function ContainersTab({ serverId }: { serverId: string }) {
   const [logs, setLogs] = useState<{ id: string; text: string; name: string } | null>(null);
   const [inspect, setInspect] = useState<{ name: string; data: any } | null>(null);
   const [loading, setLoading] = useState(false);
+  const logsRef = useRef<HTMLDivElement>(null);
+  const inspectRef = useRef<HTMLDivElement>(null);
+
+  // Os painéis de Logs/Inspect abrem embaixo da tabela de containers — em
+  // listas longas isso fica fora da área visível e parecia que o clique não
+  // tinha feito nada. Rolando até o painel assim que ele aparece resolve sem
+  // precisar o usuário descobrir que precisa rolar a página pra baixo.
+  useEffect(() => {
+    if (logs) logsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, [logs]);
+  useEffect(() => {
+    if (inspect) inspectRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, [inspect]);
 
   async function load() {
     setLoading(true);
@@ -224,7 +237,7 @@ function ContainersTab({ serverId }: { serverId: string }) {
       </Card>
 
       {logs && (
-        <Card className="p-3">
+        <Card className="p-3" ref={logsRef}>
           <div className="flex items-center justify-between mb-2">
             <h2 className="text-sm font-medium">Logs — {logs.name}</h2>
             <button onClick={() => setLogs(null)} className="text-xs text-muted">fechar</button>
@@ -236,7 +249,7 @@ function ContainersTab({ serverId }: { serverId: string }) {
       )}
 
       {inspect && (
-        <Card className="p-3">
+        <Card className="p-3" ref={inspectRef}>
           <div className="flex items-center justify-between mb-2">
             <h2 className="text-sm font-medium">Inspect — {inspect.name}</h2>
             <button onClick={() => setInspect(null)} className="text-xs text-muted">fechar</button>

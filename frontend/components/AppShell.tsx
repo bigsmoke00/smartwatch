@@ -92,15 +92,27 @@ const NAV_GROUPS: { title: string; items: NavItem[] }[] = [
   },
 ];
 
-function currentPageLabel(pathname: string): string {
+/**
+ * Acha o NavItem cujo `href` melhor descreve a rota atual — usado tanto pro
+ * label do header quanto (mais importante) pro guard de acesso abaixo.
+ * Pega o match MAIS ESPECÍFICO (maior href), pra rotas como
+ * "/settings/roles" não caírem no item genérico "/settings".
+ */
+function matchNavItem(pathname: string): NavItem | null {
+  let best: NavItem | null = null;
   for (const g of NAV_GROUPS) {
     for (const i of g.items) {
-      if (i.href === pathname || (i.href !== '/' && pathname.startsWith(i.href))) {
-        return i.label;
+      const matches = i.href === pathname || (i.href !== '/' && pathname.startsWith(i.href + '/')) || i.href === pathname;
+      if (matches && (!best || i.href.length > best.href.length)) {
+        best = i;
       }
     }
   }
-  return 'LogWatch';
+  return best;
+}
+
+function currentPageLabel(pathname: string): string {
+  return matchNavItem(pathname)?.label ?? 'LogWatch';
 }
 
 export function AppShell({ children }: { children: React.ReactNode }) {
@@ -311,7 +323,47 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </div>
         )}
 
-        <main className="flex-1 overflow-auto">{children}</main>
+        <main className="flex-1 overflow-auto">
+          {(() => {
+            // Guard de rota: antes disso, a sidebar só ESCONDIA o link de
+            // páginas sem permissão, mas o componente da página em si
+            // sempre renderizava por completo pra quem digitasse a URL
+            // direto (ex.: /users) — o backend bloqueava só a chamada de
+            // API (403 "Missing permission..."), mas o formulário, campos e
+            // estrutura da tela inteira ficavam visíveis e "navegáveis"
+            // mesmo sem a permissão. Isso é exatamente o que foi reportado:
+            // a aplicação "abre a tela" mesmo sem permissão. Esse bloco
+            // espelha a mesma lista de perms já usada na sidebar (NAV_GROUPS)
+            // pra decidir se renderiza a página ou uma tela de acesso negado
+            // — é defesa em profundidade: o backend continua sendo a fonte
+            // de verdade (guards em cada endpoint), isso aqui é só a UI
+            // parar de expor a tela antes mesmo da chamada falhar.
+            const navItem = matchNavItem(pathname);
+            const requiredPerms = navItem?.perms;
+            if (!requiredPerms || requiredPerms.length === 0) return children;
+            if (perms === null) return null; // ainda carregando /me/permissions — evita flash indevido
+            if (hasPerm(perms, ...requiredPerms)) return children;
+            return <AccessDenied />;
+          })()}
+        </main>
+      </div>
+    </div>
+  );
+}
+
+function AccessDenied() {
+  return (
+    <div className="h-full flex items-center justify-center px-6">
+      <div className="max-w-sm text-center">
+        <div className="w-10 h-10 rounded-lg bg-danger/10 border border-danger/25 flex items-center justify-center mx-auto mb-3">
+          <Shield size={18} className="text-danger" />
+        </div>
+        <div className="text-sm font-medium text-text mb-1">Acesso negado</div>
+        <div className="text-xs text-muted">
+          Você não tem permissão para acessar esta página. Se isso for um
+          engano, peça a um administrador para revisar seu perfil em
+          Perfis e permissões.
+        </div>
       </div>
     </div>
   );
