@@ -70,9 +70,13 @@ export class RolesService {
   }
 
   async updateRole(id: string, input: { name?: string; description?: string; permissions?: string[] }) {
-    const existing = await this.pool.query(`SELECT is_system FROM roles WHERE id=$1`, [id]);
+    const existing = await this.pool.query(`SELECT is_system, name FROM roles WHERE id=$1`, [id]);
     if (!existing.rowCount) throw new NotFoundException();
-    if (existing.rows[0].is_system && input.name) {
+    // Bug: antes bloqueava com `input.name` truthy — qualquer PATCH em perfil
+    // SYSTEM dava 403 porque o frontend sempre reenvia o `name` atual no
+    // payload (mesmo sem ter sido alterado, ex.: editando só as permissões).
+    // O bloqueio precisa valer só quando o nome de fato mudaria.
+    if (existing.rows[0].is_system && input.name && input.name !== existing.rows[0].name) {
       throw new ForbiddenException('Cannot rename a system role');
     }
     if (input.name || input.description !== undefined) {
