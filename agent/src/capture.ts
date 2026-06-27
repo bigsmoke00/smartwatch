@@ -57,13 +57,37 @@ function tcpdumpPath() {
   return process.env.LOGWATCH_TCPDUMP_PATH || 'tcpdump';
 }
 
+// Porta onde o OpenSIPS manda a cópia HEP/EEP do SIP já decifrado (depois do
+// TLS terminar no proxy) — mesmo destino que o `sngrep_tls` (ver
+// /etc/opensips/sngrep_tls no servidor) configura como listener. O envio é
+// UDP fire-and-forget: o OpenSIPS manda pra 127.0.0.1:5065 independente de
+// ter alguém ouvindo, então capturar essa porta em 'lo' não depende de rodar
+// sngrep — é só mais uma porta no mesmo tcpdump que já roda pra 'sip'.
+// Desligável via LOGWATCH_SIP_HEP_PORT=0 se algum servidor não tiver esse
+// duplicado configurado (a porta sozinha no filtro não causa problema nesse
+// caso — só nunca vai casar com nenhum pacote).
+function sipHepPort(): number {
+  const v = parseInt(process.env.LOGWATCH_SIP_HEP_PORT ?? '5065', 10);
+  return Number.isFinite(v) && v > 0 ? v : 0;
+}
+
 /**
  * Filtro SIP/RTP padrão pra Freeswitch/OpenSIPS/RTG engine. A faixa de RTP
  * varia por instalação — quando não for essa, informe filter_expr no pedido
  * (vira filtro BPF customizado, mesma lógica de 'tcpdump').
+ *
+ * Inclui automaticamente o duplicado HEP/EEP em loopback (ver sipHepPort) —
+ * é o que dá visibilidade do conteúdo SIP em chamadas que usam TLS: o
+ * tcpdump sozinho só veria bytes cifrados na porta 5061, então sem isso uma
+ * captura 'sip' normal seria inútil pra essas chamadas. Com o duplicado, o
+ * mesmo .pcap sai com a sinalização já em texto (decode HEP necessário no
+ * Wireshark: botão direito num pacote UDP:5065 → Decode As → HEP).
  */
 function defaultSipFilter(): string[] {
-  return ['port', '5060', 'or', 'port', '5061', 'or', '(', 'udp', 'and', 'portrange', '10000-60000', ')'];
+  const base = ['port', '5060', 'or', 'port', '5061', 'or', '(', 'udp', 'and', 'portrange', '10000-60000', ')'];
+  const hepPort = sipHepPort();
+  if (!hepPort) return base;
+  return [...base, 'or', '(', 'host', '127.0.0.1', 'and', 'udp', 'and', 'port', String(hepPort), ')'];
 }
 
 /**
