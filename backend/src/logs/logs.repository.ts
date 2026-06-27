@@ -1,8 +1,10 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
+import { randomUUID } from 'crypto';
 import { Pool } from 'pg';
 import { PG_POOL } from '../db/db.module';
 
 export interface LogDoc {
+  id?: string;                    // uuid — gerado em LogsService.ingest(), ANTES do insert
   ts: string;                     // ISO
   serverId: string;
   serverName: string;
@@ -61,11 +63,25 @@ export class LogsRepository {
   private readonly logger = new Logger('LogsRepository');
   constructor(@Inject(PG_POOL) private readonly pool: Pool) {}
 
-  /** Insere um batch usando UNNEST (1 round-trip). */
+  /**
+   * Insere um batch usando UNNEST (1 round-trip).
+   *
+   * O `id` agora é gerado ANTES (em LogsService.ingest(), ver randomUUID())
+   * e passado explicitamente aqui — antes dependíamos do DEFAULT
+   * gen_random_uuid() da coluna, então o `id` só existia depois do INSERT, e
+   * nunca chegava no payload emitido via WebSocket (emitBatch recebe os
+   * MESMOS objetos `acceptedDocs` que viraram esse insert). Resultado: toda
+   * linha vista via tail ao vivo tinha `id` undefined, e o frontend caía no
+   * fallback de key `ts+message` — que colide pra linhas idênticas repetidas
+   * (comum em stack traces nível "unknown"), fazendo o React reaproveitar o
+   * mesmo nó de DOM pra linhas logicamente diferentes ("linha presa" enquanto
+   * o resto da lista rola normalmente). Gerando o id antes, o mesmo valor
+   * vai pro banco E pro WS — sempre único, sempre presente.
+   */
   async insertBatch(docs: LogDoc[]): Promise<void> {
     if (!docs.length) return;
     const ts = docs.map((d) => d.ts);
-    const ids: string[] = [];
+    const ids = docs.map((d) => d.id ?? randomUUID());
     const sid = docs.map((d) => d.serverId);
     const sname = docs.map((d) => d.serverName);
     const cid = docs.map((d) => d.containerId ?? null);
@@ -78,15 +94,15 @@ export class LogsRepository {
     const repeatCount = docs.map((d) => d.repeatCount ?? 1);
 
     await this.pool.query(
-      `INSERT INTO logs(ts, server_id, server_name, container_id, container_name,
+      `INSERT INTO logs(ts, id, server_id, server_name, container_id, container_name,
                         image, stream, level, message, meta, repeat_count)
        SELECT *
        FROM UNNEST(
-         $1::timestamptz[], $2::uuid[], $3::text[],
-         $4::text[], $5::text[], $6::text[],
-         $7::text[], $8::text[], $9::text[], $10::jsonb[], $11::integer[]
+         $1::timestamptz[], $2::uuid[], $3::uuid[], $4::text[],
+         $5::text[], $6::text[], $7::text[],
+         $8::text[], $9::text[], $10::text[], $11::jsonb[], $12::integer[]
        )`,
-      [ts, sid, sname, cid, cname, image, stream, level, msg, meta, repeatCount],
+      [ts, ids, sid, sname, cid, cname, image, stream, level, msg, meta, repeatCount],
     );
   }
 

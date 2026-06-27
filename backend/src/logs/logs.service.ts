@@ -1,5 +1,6 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
+import { randomUUID } from 'crypto';
 import { Pool } from 'pg';
 import { LogsRepository, LogDoc, LogQuery } from './logs.repository';
 import { LogsGateway } from './logs.gateway';
@@ -106,6 +107,13 @@ export class LogsService {
         continue;
       }
       grouped.set(key, {
+        // Gerado aqui (e não deixado pro DEFAULT gen_random_uuid() da coluna)
+        // porque esse MESMO objeto vai tanto pro insertBatch() quanto pro
+        // emitBatch() do WebSocket (linhas abaixo) — sem isso, a linha
+        // transmitida ao vivo nunca tinha id, e o frontend caía num key de
+        // fallback (ts+message) que colide em stack traces repetidos,
+        // travando a linha na tela durante o tail ao vivo.
+        id: randomUUID(),
         ts,
         serverId: server.id,
         serverName: server.name,

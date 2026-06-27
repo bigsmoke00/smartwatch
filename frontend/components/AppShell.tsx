@@ -249,7 +249,22 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       </aside>
 
       <div className="flex-1 flex flex-col min-w-0">
-        <header className="h-14 border-b border-border bg-panel/60 backdrop-blur-sm flex items-center justify-between px-5 shrink-0">
+        {/*
+          `relative z-30` aqui é o que faz o menu de usuário (dropdown
+          absolute z-50 dentro do header) ficar SEMPRE acima do conteúdo de
+          <main>, em qualquer tela. Sem isso, o `backdrop-blur-sm` abaixo cria
+          um stacking context próprio pro header — e como esse header não
+          tinha z-index explícito, ele e o <main> (irmãos, ambos z-auto)
+          competiam só pela ordem no DOM: o <main>, por vir depois, sempre
+          pintava por CIMA do header (e do dropdown dentro dele) onde os dois
+          se sobrepunham. Em telas com conteúdo logo abaixo do header (ex.:
+          barra de busca/resultado dos Logs), isso "comia" visualmente o
+          botão "Sair" — daí parecer que ele "se escondia dependendo da
+          tela". Dando z-index explícito ao header inteiro, ele passa a
+          vencer essa comparação sempre, e o dropdown some por completo de
+          baixo de qualquer outro conteúdo da página.
+        */}
+        <header className="relative z-30 h-14 border-b border-border bg-panel/60 backdrop-blur-sm flex items-center justify-between px-5 shrink-0">
           <div className="text-sm font-medium text-text">{currentPageLabel(pathname)}</div>
           <div className="relative" ref={menuRef}>
             <button
