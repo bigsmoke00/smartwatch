@@ -9,6 +9,7 @@ import { Badge } from '@/components/ui/Badge';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Select } from '@/components/ui/Select';
 import { apiFetch } from '@/lib/api';
+import { loadMyPermissions, hasPerm } from '@/lib/perms';
 import { safeArray } from '@/lib/utils';
 import {
   Play,
@@ -31,6 +32,16 @@ export default function DockerPage() {
   const [serverId, setServerId] = useState<string>('');
   const [online, setOnline] = useState<boolean>(false);
   const [tab, setTab] = useState<Tab>('containers');
+  // Carregado uma vez aqui no topo e repassado pras abas — controla se os
+  // botões de ação (start/stop/restart/remove/pull/deploy) aparecem. Ações
+  // de leitura (logs, inspect, listar) só exigem `containers:read`, que já é
+  // exigido pra essa página aparecer no menu — então quem chega até aqui já
+  // pode ver tudo; só os botões de escrita (`docker:control`/`docker:deploy`)
+  // ficam condicionados.
+  const [perms, setPerms] = useState<Set<string> | null>(null);
+  useEffect(() => { loadMyPermissions().then(setPerms); }, []);
+  const canControl = hasPerm(perms, 'docker:control');
+  const canDeploy = hasPerm(perms, 'docker:deploy');
 
   useEffect(() => {
     apiFetch<ServerRow[]>('/servers')
@@ -76,7 +87,9 @@ export default function DockerPage() {
         />
 
         <div className="flex gap-1 border-b border-border">
-          {(['containers', 'images', 'volumes', 'deploy'] as Tab[]).map((t) => (
+          {(['containers', 'images', 'volumes', 'deploy'] as Tab[])
+            .filter((t) => t !== 'deploy' || canDeploy)
+            .map((t) => (
             <button
               key={t}
               onClick={() => setTab(t)}
@@ -99,13 +112,17 @@ export default function DockerPage() {
             rodando e conseguindo conectar no backend.
           </Card>
         ) : tab === 'containers' ? (
-          <ContainersTab serverId={serverId} />
+          <ContainersTab serverId={serverId} canControl={canControl} />
         ) : tab === 'images' ? (
-          <ImagesTab serverId={serverId} />
+          <ImagesTab serverId={serverId} canDeploy={canDeploy} />
         ) : tab === 'volumes' ? (
-          <VolumesTab serverId={serverId} />
-        ) : (
+          <VolumesTab serverId={serverId} canDeploy={canDeploy} />
+        ) : canDeploy ? (
           <DeployTab serverId={serverId} />
+        ) : (
+          <Card className="p-6 text-sm text-muted">
+            Você não tem permissão para fazer deploy de containers.
+          </Card>
         )}
       </div>
     </AppShell>
@@ -115,7 +132,7 @@ export default function DockerPage() {
 // ====================================================================
 // Containers
 // ====================================================================
-function ContainersTab({ serverId }: { serverId: string }) {
+function ContainersTab({ serverId, canControl }: { serverId: string; canControl: boolean }) {
   const [items, setItems] = useState<any[]>([]);
   const [logs, setLogs] = useState<{ id: string; text: string; name: string } | null>(null);
   const [inspect, setInspect] = useState<{ name: string; data: any } | null>(null);
@@ -210,21 +227,25 @@ function ContainersTab({ serverId }: { serverId: string }) {
                     <button title="Inspect" onClick={() => showInspect(c.Id, name)} className="text-muted hover:text-accent">
                       <Info size={14} />
                     </button>
-                    {c.State !== 'running' ? (
-                      <button title="Start" onClick={() => action(c.Id, 'start')} className="text-success hover:text-accent">
-                        <Play size={14} />
-                      </button>
-                    ) : (
-                      <button title="Stop" onClick={() => action(c.Id, 'stop')} className="text-warn hover:text-accent">
-                        <Square size={14} />
-                      </button>
+                    {canControl && (
+                      <>
+                        {c.State !== 'running' ? (
+                          <button title="Start" onClick={() => action(c.Id, 'start')} className="text-success hover:text-accent">
+                            <Play size={14} />
+                          </button>
+                        ) : (
+                          <button title="Stop" onClick={() => action(c.Id, 'stop')} className="text-warn hover:text-accent">
+                            <Square size={14} />
+                          </button>
+                        )}
+                        <button title="Restart" onClick={() => action(c.Id, 'restart')} className="text-info hover:text-accent">
+                          <RotateCw size={14} />
+                        </button>
+                        <button title="Remove" onClick={() => remove(c.Id)} className="text-danger hover:text-accent">
+                          <Trash2 size={14} />
+                        </button>
+                      </>
                     )}
-                    <button title="Restart" onClick={() => action(c.Id, 'restart')} className="text-info hover:text-accent">
-                      <RotateCw size={14} />
-                    </button>
-                    <button title="Remove" onClick={() => remove(c.Id)} className="text-danger hover:text-accent">
-                      <Trash2 size={14} />
-                    </button>
                   </td>
                 </tr>
               );
@@ -266,7 +287,7 @@ function ContainersTab({ serverId }: { serverId: string }) {
 // ====================================================================
 // Images
 // ====================================================================
-function ImagesTab({ serverId }: { serverId: string }) {
+function ImagesTab({ serverId, canDeploy }: { serverId: string; canDeploy: boolean }) {
   const [items, setItems] = useState<any[]>([]);
   const [pulling, setPulling] = useState(false);
   const [pullName, setPullName] = useState('nginx:latest');
@@ -294,15 +315,17 @@ function ImagesTab({ serverId }: { serverId: string }) {
 
   return (
     <>
-      <Card className="p-3 flex gap-2 items-end">
-        <div className="flex-1">
-          <label className="text-xs text-muted">Pull image</label>
-          <Input value={pullName} onChange={(e) => setPullName(e.target.value)} placeholder="nginx:latest" />
-        </div>
-        <Button onClick={pull} disabled={pulling}>
-          <Download size={14} /> {pulling ? 'Puxando…' : 'Pull'}
-        </Button>
-      </Card>
+      {canDeploy && (
+        <Card className="p-3 flex gap-2 items-end">
+          <div className="flex-1">
+            <label className="text-xs text-muted">Pull image</label>
+            <Input value={pullName} onChange={(e) => setPullName(e.target.value)} placeholder="nginx:latest" />
+          </div>
+          <Button onClick={pull} disabled={pulling}>
+            <Download size={14} /> {pulling ? 'Puxando…' : 'Pull'}
+          </Button>
+        </Card>
+      )}
       <Card className="p-0 overflow-hidden">
         <table className="w-full text-sm">
           <thead className="bg-panel2 text-xs uppercase text-muted">
@@ -326,9 +349,11 @@ function ImagesTab({ serverId }: { serverId: string }) {
                   {fmtBytes(img.Size)}
                 </td>
                 <td className="px-3 py-2 text-right">
-                  <button onClick={() => remove(img.Id)} className="text-danger hover:underline text-xs">
-                    <Trash2 size={12} className="inline" /> remover
-                  </button>
+                  {canDeploy && (
+                    <button onClick={() => remove(img.Id)} className="text-danger hover:underline text-xs">
+                      <Trash2 size={12} className="inline" /> remover
+                    </button>
+                  )}
                 </td>
               </tr>
             ))}
@@ -342,7 +367,7 @@ function ImagesTab({ serverId }: { serverId: string }) {
 // ====================================================================
 // Volumes
 // ====================================================================
-function VolumesTab({ serverId }: { serverId: string }) {
+function VolumesTab({ serverId, canDeploy }: { serverId: string; canDeploy: boolean }) {
   const [items, setItems] = useState<any[]>([]);
   const [name, setName] = useState('');
 
@@ -365,13 +390,15 @@ function VolumesTab({ serverId }: { serverId: string }) {
 
   return (
     <>
-      <Card className="p-3 flex gap-2 items-end">
-        <div className="flex-1">
-          <label className="text-xs text-muted">Criar volume</label>
-          <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="meu-volume" />
-        </div>
-        <Button onClick={create}><Plus size={14} /> Criar</Button>
-      </Card>
+      {canDeploy && (
+        <Card className="p-3 flex gap-2 items-end">
+          <div className="flex-1">
+            <label className="text-xs text-muted">Criar volume</label>
+            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="meu-volume" />
+          </div>
+          <Button onClick={create}><Plus size={14} /> Criar</Button>
+        </Card>
+      )}
       <Card className="p-0 overflow-hidden">
         <table className="w-full text-sm">
           <thead className="bg-panel2 text-xs uppercase text-muted">
@@ -389,9 +416,11 @@ function VolumesTab({ serverId }: { serverId: string }) {
                 <td className="px-3 py-2 text-xs text-muted">{v.Driver}</td>
                 <td className="px-3 py-2 text-xs text-muted">{v.Mountpoint}</td>
                 <td className="px-3 py-2 text-right">
-                  <button onClick={() => remove(v.Name)} className="text-danger hover:underline text-xs">
-                    <Trash2 size={12} className="inline" /> remover
-                  </button>
+                  {canDeploy && (
+                    <button onClick={() => remove(v.Name)} className="text-danger hover:underline text-xs">
+                      <Trash2 size={12} className="inline" /> remover
+                    </button>
+                  )}
                 </td>
               </tr>
             ))}
