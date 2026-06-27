@@ -132,6 +132,71 @@ function tryDecodeSip(payload: Uint8Array): {
   };
 }
 
+// HEPv3 (Homer Encapsulation Protocol) — é o formato que o OpenSIPS manda pro
+// duplicado em loopback (ver capture.ts/sipHepPort): em vez de SIP puro, o
+// payload UDP da porta 5065 vem com o cabeçalho binário "HEP3" + uma série de
+// chunks (vendor/type/length/data). O que importa pra nós é o chunk tipo
+// 0x000f, que carrega a mensagem SIP original (já decifrada, pós-TLS) crua —
+// sem decodificar isso, esses pacotes nunca batem com tryDecodeSip (que
+// espera o payload começar direto com "INVITE .../SIP/2.0") e ficam só como
+// "UDP" genérico na UI, mesmo a captura estando correta.
+// Chunks 0x0003/0x0004 (IPv4 src/dst) e 0x0007/0x0008 (porta src/dst) também
+// são lidos quando presentes: dão o endereço/porta REAIS da chamada (ex.:
+// operadora:5061), em vez de mostrar sempre 127.0.0.1:5065 (o destino do
+// duplicado, não a perna real). Não há suporte a payload comprimido
+// (chunk 0x0010) nem a IPv6 (0x0005/0x0006) — não observados nos servidores
+// atuais; se aparecerem, o pacote simplesmente não decodifica (mesmo
+// fallback gracioso dos outros casos não suportados deste parser).
+interface Hep3Info {
+  sipPayload?: Uint8Array;
+  srcIp?: string;
+  dstIp?: string;
+  srcPort?: number;
+  dstPort?: number;
+}
+
+function tryDecodeHep3(payload: Uint8Array): Hep3Info | null {
+  if (payload.length < 6) return null;
+  // "HEP3" em ASCII
+  if (payload[0] !== 0x48 || payload[1] !== 0x45 || payload[2] !== 0x50 || payload[3] !== 0x33) return null;
+  const totalLen = u16be(payload, 4);
+  if (totalLen < 6 || totalLen > payload.length) return null;
+
+  const info: Hep3Info = {};
+  let off = 6;
+  while (off + 6 <= totalLen) {
+    const vendorId = u16be(payload, off);
+    const chunkType = u16be(payload, off + 2);
+    const chunkLen = u16be(payload, off + 4);
+    if (chunkLen < 6 || off + chunkLen > totalLen) break; // chunk inconsistente — para, não tenta adivinhar
+    const dataStart = off + 6;
+    const dataLen = chunkLen - 6;
+    if (vendorId === 0) {
+      switch (chunkType) {
+        case 0x0003: // IPv4 src
+          if (dataLen >= 4) info.srcIp = `${payload[dataStart]}.${payload[dataStart + 1]}.${payload[dataStart + 2]}.${payload[dataStart + 3]}`;
+          break;
+        case 0x0004: // IPv4 dst
+          if (dataLen >= 4) info.dstIp = `${payload[dataStart]}.${payload[dataStart + 1]}.${payload[dataStart + 2]}.${payload[dataStart + 3]}`;
+          break;
+        case 0x0007: // porta origem
+          if (dataLen >= 2) info.srcPort = u16be(payload, dataStart);
+          break;
+        case 0x0008: // porta destino
+          if (dataLen >= 2) info.dstPort = u16be(payload, dataStart);
+          break;
+        case 0x000f: // payload (mensagem SIP original, sem compressão)
+          info.sipPayload = payload.subarray(dataStart, dataStart + dataLen);
+          break;
+        default:
+          break;
+      }
+    }
+    off += chunkLen;
+  }
+  return info;
+}
+
 function tryDecodeRtp(payload: Uint8Array): { info: string; pt: number } | null {
   if (payload.length < 12) return null;
   const b0 = payload[0];
@@ -262,7 +327,13 @@ export class PcapStreamParser {
       const udpLen = u16be(frame, l4Start + 4);
       const payload = frame.subarray(l4Start + 8);
 
-      const sip = tryDecodeSip(payload);
+      // Duplicado HEP/EEP do OpenSIPS (porta 5065 em loopback, ver
+      // capture.ts/sipHepPort) — o SIP de verdade está dentro do envelope
+      // HEPv3, não no início do payload UDP. Tenta decodificar o envelope
+      // primeiro; se não for HEP (SIP direto nas portas normais 5060/5061),
+      // tryDecodeHep3 simplesmente retorna null e cai no caminho de sempre.
+      const hep = tryDecodeHep3(payload);
+      const sip = tryDecodeSip(hep?.sipPayload ?? payload);
       if (sip) {
         base.proto = 'SIP';
         base.sipText = sip.text;
@@ -273,6 +344,13 @@ export class PcapStreamParser {
         base.sipTo = sip.to;
         base.sipCseqMethod = sip.cseqMethod;
         base.sipXCallId = sip.xCallId;
+        // Quando veio de HEP, troca o IP/porta (que seriam sempre
+        // 127.0.0.1:5065, o destino do duplicado) pelos endereços REAIS da
+        // perna original, se o OpenSIPS os incluiu nos chunks 0x0003/04/07/08.
+        if (hep?.srcIp) base.srcIp = hep.srcIp;
+        if (hep?.dstIp) base.dstIp = hep.dstIp;
+        if (hep?.srcPort != null) base.srcPort = hep.srcPort;
+        if (hep?.dstPort != null) base.dstPort = hep.dstPort;
         base.info = `${sip.isRequest ? 'Request' : 'Status'}: ${sip.methodOrStatus}`;
         return base;
       }
