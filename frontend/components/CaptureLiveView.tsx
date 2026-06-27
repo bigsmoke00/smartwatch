@@ -284,7 +284,7 @@ export default function CaptureLiveView({ packets, totalParsed }: Props) {
     <div
       className={
         fullscreen
-          ? 'fixed inset-0 z-50 bg-panel flex flex-col'
+          ? 'fixed inset-0 z-50 bg-panel flex flex-col overflow-hidden'
           : 'border border-border rounded-md overflow-hidden'
       }
     >
@@ -465,7 +465,7 @@ export default function CaptureLiveView({ packets, totalParsed }: Props) {
       )}
 
       {tab === 'dialogs' && selectedGroup && (
-        <div className={fullscreen ? 'flex-1 overflow-hidden flex flex-col' : 'h-[520px] flex flex-col'}>
+        <div className={fullscreen ? 'flex-1 min-w-0 overflow-hidden flex flex-col' : 'h-[520px] min-w-0 overflow-hidden flex flex-col'}>
           <CallFlow group={selectedGroup} allPackets={packets} onBack={() => setSelectedCallId(null)} />
         </div>
       )}
@@ -637,8 +637,8 @@ function CallFlow({ group, allPackets, onBack }: { group: CallGroup; allPackets:
   const xOf = (ip?: string) => MARGIN_LEFT + (ip ? ips.indexOf(ip) : 0) * colW + colW / 2;
 
   return (
-    <div className="flex flex-col h-full min-h-0">
-      <div className="flex items-center gap-2 px-2 py-1.5 bg-cyan-950/60 border-b border-cyan-800/60 shrink-0">
+    <div className="flex flex-col h-full min-h-0 min-w-0 w-full">
+      <div className="flex items-center gap-2 px-2 py-1.5 bg-cyan-950/60 border-b border-cyan-800/60 shrink-0 min-w-0">
         <button onClick={onBack} className="text-[12px] text-accent hover:underline shrink-0">← voltar</button>
         <div className="text-[12px] text-cyan-300 font-mono truncate">
           {isLinked ? (
@@ -665,8 +665,8 @@ function CallFlow({ group, allPackets, onBack }: { group: CallGroup; allPackets:
         )}
       </div>
 
-      <div className="flex flex-1 min-h-0">
-        <div ref={containerRef} className="flex-1 min-h-0 overflow-auto bg-panel2">
+      <div className="flex flex-1 min-h-0 min-w-0">
+        <div ref={containerRef} className="flex-1 min-h-0 min-w-0 overflow-auto bg-panel2">
           <svg width={width} height={height + HEADER_H} className="block font-mono">
             {/* cabeçalho das colunas (ip:porta) — rola junto com o conteúdo, igual sngrep */}
             <rect x={0} y={0} width={width} height={HEADER_H} className="fill-current text-panel" />
