@@ -10,7 +10,7 @@ export const PERMISSIONS_KEY = 'required_permissions';
  *
  * Uso:
  *   @RequirePermission('logs:read')
- *   @RequirePermission('terraform:apply', 'admin:override')
+ *   @RequirePermission('servers:write', 'roles:write')
  */
 export const RequirePermission = (...keys: string[]) =>
   SetMetadata(PERMISSIONS_KEY, keys);

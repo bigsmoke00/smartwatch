@@ -191,8 +191,7 @@ export class RolesService {
          bool_or(
            rp.permission_key LIKE '%:write'
            OR rp.permission_key IN (
-             'docker:control', 'docker:deploy', 'automation:run',
-             'terraform:plan', 'terraform:apply', 'inventory:cloud_sync'
+             'docker:control', 'docker:deploy', 'inventory:cloud_sync'
            )
          ) AS can_operate
        FROM roles r

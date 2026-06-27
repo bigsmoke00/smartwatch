@@ -2,7 +2,7 @@ import { Body, Controller, Delete, Get, Param, Post, Query } from '@nestjs/commo
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { IsIn, IsInt, IsNumber, IsOptional, IsString, Min } from 'class-validator';
 import { FinopsService } from './finops.service';
-import { Roles } from '../auth/roles.decorator';
+import { RequirePermission } from '../auth/permissions.decorator';
 import { Audit } from '../audit/audit.decorator';
 
 class CreateBudgetDto {
@@ -20,6 +20,7 @@ class CreateBudgetDto {
 export class FinopsController {
   constructor(private readonly svc: FinopsService) {}
 
+  @RequirePermission('finops:read')
   @Get('summary')
   summary(
     @Query('cloud') cloud?: string,
@@ -33,38 +34,40 @@ export class FinopsController {
     });
   }
 
-  @Roles('admin', 'operator')
+  @RequirePermission('finops:sync')
   @Audit('finops.sync_aws')
   @Post('sync/aws')
   syncAws(@Body() body: { daysBack?: number } = {}) {
     return this.svc.syncAws(body.daysBack ?? 7);
   }
 
-  @Roles('admin', 'operator')
+  @RequirePermission('finops:sync')
   @Audit('finops.sync_oci')
   @Post('sync/oci')
   syncOci(@Body() body: { daysBack?: number } = {}) {
     return this.svc.syncOci(body.daysBack ?? 7);
   }
 
+  @RequirePermission('finops:read')
   @Get('budgets')
   listBudgets() {
     return this.svc.listBudgets();
   }
 
+  @RequirePermission('finops:read')
   @Get('budgets/status')
   budgetStatus() {
     return this.svc.budgetStatus();
   }
 
-  @Roles('admin', 'operator')
+  @RequirePermission('finops:budget_write')
   @Audit('finops.create_budget')
   @Post('budgets')
   createBudget(@Body() dto: CreateBudgetDto) {
     return this.svc.createBudget(dto);
   }
 
-  @Roles('admin', 'operator')
+  @RequirePermission('finops:budget_write')
   @Audit('finops.delete_budget')
   @Delete('budgets/:id')
   deleteBudget(@Param('id') id: string) {

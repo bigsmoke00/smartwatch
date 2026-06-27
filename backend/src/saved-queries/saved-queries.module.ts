@@ -13,6 +13,7 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { IsBoolean, IsObject, IsOptional, IsString } from 'class-validator';
 import { Pool } from 'pg';
 import { Audit } from '../audit/audit.decorator';
+import { RequirePermission } from '../auth/permissions.decorator';
 import { CurrentUser, JwtUserPayload } from '../auth/current-user.decorator';
 import { PG_POOL } from '../db/db.module';
 
@@ -60,17 +61,20 @@ class SaveDto {
 class SavedQueriesController {
   constructor(private readonly svc: SavedQueriesService) {}
 
+  @RequirePermission('logs:savedquery')
   @Get()
   list(@CurrentUser() u: JwtUserPayload) {
     return this.svc.list(u.sub);
   }
 
+  @RequirePermission('logs:savedquery')
   @Audit('query.save')
   @Post()
   save(@CurrentUser() u: JwtUserPayload, @Body() dto: SaveDto) {
     return this.svc.create(u.sub, dto.name, dto.filter, dto.shared ?? false);
   }
 
+  @RequirePermission('logs:savedquery')
   @Audit('query.delete')
   @Delete(':id')
   remove(@CurrentUser() u: JwtUserPayload, @Param('id') id: string) {

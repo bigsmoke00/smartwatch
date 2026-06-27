@@ -11,7 +11,7 @@ import {
   Max,
   Min,
 } from 'class-validator';
-import { Roles } from '../auth/roles.decorator';
+import { RequirePermission } from '../auth/permissions.decorator';
 import { Audit } from '../audit/audit.decorator';
 import { AlertsService } from './alerts.service';
 
@@ -44,32 +44,34 @@ class UpdateRuleDto {
 export class AlertsController {
   constructor(private readonly svc: AlertsService) {}
 
+  @RequirePermission('alerts:read')
   @Get('rules')
   list() {
     return this.svc.list();
   }
 
-  @Roles('admin', 'operator')
+  @RequirePermission('alerts:write')
   @Audit('alert.create')
   @Post('rules')
   create(@Body() dto: CreateRuleDto) {
     return this.svc.create(dto);
   }
 
-  @Roles('admin', 'operator')
+  @RequirePermission('alerts:write')
   @Audit('alert.update')
   @Patch('rules/:id')
   update(@Param('id') id: string, @Body() dto: UpdateRuleDto) {
     return this.svc.update(id, dto);
   }
 
-  @Roles('admin', 'operator')
+  @RequirePermission('alerts:write')
   @Audit('alert.delete')
   @Delete('rules/:id')
   remove(@Param('id') id: string) {
     return this.svc.remove(id);
   }
 
+  @RequirePermission('alerts:read')
   @Get('events')
   events(@Query('ruleId') ruleId?: string) {
     return this.svc.events(ruleId);

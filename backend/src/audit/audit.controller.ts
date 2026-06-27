@@ -1,7 +1,7 @@
 import { Controller, Get, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { AuditService } from './audit.service';
-import { Roles } from '../auth/roles.decorator';
+import { RequirePermission } from '../auth/permissions.decorator';
 
 @ApiTags('audit')
 @ApiBearerAuth()
@@ -9,7 +9,7 @@ import { Roles } from '../auth/roles.decorator';
 export class AuditController {
   constructor(private readonly audit: AuditService) {}
 
-  @Roles('admin')
+  @RequirePermission('audit:read')
   @Get()
   list(
     @Query('actorId') actorId?: string,

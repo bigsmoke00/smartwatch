@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { AppShell } from '@/components/AppShell';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
@@ -8,7 +8,7 @@ import { Input } from '@/components/ui/Input';
 import { Badge } from '@/components/ui/Badge';
 import { apiFetch } from '@/lib/api';
 import { safeArray } from '@/lib/utils';
-import { Trash2, Plus, Save } from 'lucide-react';
+import { Trash2, Plus, Save, Search, Copy } from 'lucide-react';
 
 interface Permission {
   key: string;
@@ -23,11 +23,62 @@ interface Role {
   permissions: string[];
 }
 
+// Descrição de cada categoria de permissão — explica pro admin o que aquele
+// grupo controla, sem precisar abrir cada chave pra entender o escopo.
+const CATEGORY_INFO: Record<string, { label: string; description: string }> = {
+  logs: {
+    label: 'Logs',
+    description: 'Leitura, exportação e saved queries de logs.',
+  },
+  metrics: {
+    label: 'Métricas',
+    description: 'Dashboards de métricas de host (CPU, memória, disco...).',
+  },
+  infra: {
+    label: 'Infraestrutura',
+    description: 'Inventário de servidores, API keys, containers e Docker.',
+  },
+  ops: {
+    label: 'Operações',
+    description: 'Alertas, regras de notificação e canais de aviso.',
+  },
+  finops: {
+    label: 'FinOps',
+    description: 'Custos de cloud, budgets e sincronização de gastos (AWS/OCI).',
+  },
+  admin: {
+    label: 'Administração',
+    description:
+      'Usuários, perfis, audit log, vault de secrets, rotação de credenciais e Patroni.',
+  },
+  scripts: {
+    label: 'Scripts',
+    description: 'Editor de arquivos e execução de scripts em servidores.',
+  },
+  zero_trust: {
+    label: 'Zero Trust',
+    description: 'Captura de rede/SIP, terminal web e gestão de logins por servidor.',
+  },
+  database: {
+    label: 'Banco de dados (Patroni/PG)',
+    description: 'Dashboards de Postgres, EXPLAIN e encerramento de queries.',
+  },
+  db_access: {
+    label: 'Acesso a dados',
+    description: 'Consultas ad-hoc e fluxo de aprovação de escrita em bancos monitorados.',
+  },
+};
+
+function categoryInfo(cat: string) {
+  return CATEGORY_INFO[cat] ?? { label: cat, description: '' };
+}
+
 export default function RolesPage() {
   const [roles, setRoles] = useState<Role[]>([]);
   const [perms, setPerms] = useState<Permission[]>([]);
   const [editing, setEditing] = useState<Role | null>(null);
   const [creating, setCreating] = useState(false);
+  const [cloneFromId, setCloneFromId] = useState<string>('');
 
   async function load() {
     setRoles(safeArray<Role>(await apiFetch('/roles').catch(() => [])));
@@ -41,12 +92,20 @@ export default function RolesPage() {
     return acc;
   }, {});
 
+  const cloneSource = roles.find((r) => r.id === cloneFromId) ?? null;
+
+  function startCreate() {
+    setEditing(null);
+    setCloneFromId('');
+    setCreating(true);
+  }
+
   return (
     <AppShell>
       <div className="p-6 space-y-4">
         <div className="flex items-center justify-between">
           <h1 className="text-2xl font-semibold">Perfis e permissões</h1>
-          <Button onClick={() => { setEditing(null); setCreating(true); }}>
+          <Button onClick={startCreate}>
             <Plus size={14} /> Novo perfil
           </Button>
         </div>
@@ -71,6 +130,7 @@ export default function RolesPage() {
                   <div className="text-[10px] text-muted mt-0.5">
                     {r.permissions.length} permissões
                   </div>
+                  <CoverageBar role={r} grouped={grouped} />
                 </button>
               ))}
               {roles.length === 0 && (
@@ -80,12 +140,37 @@ export default function RolesPage() {
           </Card>
 
           <div className="lg:col-span-2">
+            {creating && (
+              <Card className="p-3 mb-3 flex items-center gap-2">
+                <span className="text-xs text-muted whitespace-nowrap">Começar a partir de:</span>
+                <select
+                  value={cloneFromId}
+                  onChange={(e) => setCloneFromId(e.target.value)}
+                  className="bg-panel2 border border-border rounded px-2 py-1 text-sm flex-1"
+                >
+                  <option value="">Perfil em branco</option>
+                  {roles.map((r) => (
+                    <option key={r.id} value={r.id}>
+                      {r.name} ({r.permissions.length} permissões)
+                    </option>
+                  ))}
+                </select>
+                {cloneFromId && (
+                  <span className="text-xs text-accent flex items-center gap-1 whitespace-nowrap">
+                    <Copy size={12} /> copiando permissões
+                  </span>
+                )}
+              </Card>
+            )}
+
             {(editing || creating) ? (
               <RoleEditor
+                key={editing?.id ?? `new-${cloneFromId}`}
                 role={editing}
+                cloneFrom={creating ? cloneSource : null}
                 grouped={grouped}
-                onSaved={() => { setEditing(null); setCreating(false); load(); }}
-                onCancel={() => { setEditing(null); setCreating(false); }}
+                onSaved={() => { setEditing(null); setCreating(false); setCloneFromId(''); load(); }}
+                onCancel={() => { setEditing(null); setCreating(false); setCloneFromId(''); }}
               />
             ) : (
               <Card className="p-6 text-sm text-muted">
@@ -99,32 +184,93 @@ export default function RolesPage() {
   );
 }
 
+// Barra compacta de cobertura por categoria — dá uma visão rápida de quais
+// áreas o perfil cobre sem precisar abrir o editor inteiro.
+function CoverageBar({
+  role,
+  grouped,
+}: {
+  role: Role;
+  grouped: Record<string, Permission[]>;
+}) {
+  const cats = Object.entries(grouped).filter(([, list]) => list.length > 0);
+  if (cats.length === 0) return null;
+  const owned = new Set(role.permissions);
+  return (
+    <div className="flex gap-0.5 mt-1.5" title="Cobertura por categoria">
+      {cats.map(([cat, list]) => {
+        const have = list.filter((p) => owned.has(p.key)).length;
+        const frac = have / list.length;
+        const info = categoryInfo(cat);
+        return (
+          <div
+            key={cat}
+            title={`${info.label}: ${have}/${list.length}`}
+            className="h-1.5 flex-1 rounded-full bg-border overflow-hidden"
+          >
+            <div
+              className={`h-full ${
+                frac === 0 ? '' : frac < 1 ? 'bg-amber-500' : 'bg-emerald-500'
+              }`}
+              style={{ width: `${frac * 100}%` }}
+            />
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function RoleEditor({
   role,
+  cloneFrom,
   grouped,
   onSaved,
   onCancel,
 }: {
   role: Role | null;
-  grouped: Record<string, any[]>;
+  cloneFrom: Role | null;
+  grouped: Record<string, Permission[]>;
   onSaved: () => void;
   onCancel: () => void;
 }) {
-  const [name, setName] = useState(role?.name ?? '');
-  const [description, setDescription] = useState(role?.description ?? '');
-  const [selected, setSelected] = useState<Set<string>>(new Set(role?.permissions ?? []));
+  const initialPerms = role?.permissions ?? cloneFrom?.permissions ?? [];
+  const initialName = role ? role.name : cloneFrom ? `${cloneFrom.name} (cópia)` : '';
+  const initialDesc = role?.description ?? cloneFrom?.description ?? '';
+
+  const [name, setName] = useState(initialName);
+  const [description, setDescription] = useState(initialDesc);
+  const [selected, setSelected] = useState<Set<string>>(new Set(initialPerms));
+  const [search, setSearch] = useState('');
 
   function toggle(key: string) {
     const s = new Set(selected);
     s.has(key) ? s.delete(key) : s.add(key);
     setSelected(s);
   }
-  function toggleCategory(cat: string, all: any[]) {
+  function toggleCategory(all: Permission[]) {
     const s = new Set(selected);
     const allSelected = all.every((p) => s.has(p.key));
     for (const p of all) (allSelected ? s.delete(p.key) : s.add(p.key));
     setSelected(s);
   }
+
+  const q = search.trim().toLowerCase();
+  const filteredGrouped = useMemo(() => {
+    if (!q) return grouped;
+    const out: Record<string, Permission[]> = {};
+    for (const [cat, list] of Object.entries(grouped)) {
+      const info = categoryInfo(cat);
+      const matches = list.filter(
+        (p) =>
+          p.key.toLowerCase().includes(q) ||
+          p.description.toLowerCase().includes(q) ||
+          info.label.toLowerCase().includes(q),
+      );
+      if (matches.length) out[cat] = matches;
+    }
+    return out;
+  }, [grouped, q]);
 
   async function save() {
     const body = {
@@ -163,22 +309,37 @@ function RoleEditor({
         </div>
       </div>
 
-      <div className="space-y-3 pt-2">
-        {Object.entries(grouped).map(([cat, list]) => {
-          const all = list as any[];
+      <div className="relative">
+        <Search size={14} className="absolute left-2.5 top-2.5 text-muted" />
+        <Input
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Buscar permissão por chave, descrição ou categoria..."
+          className="pl-8"
+        />
+      </div>
+
+      <div className="space-y-3 pt-2 max-h-[55vh] overflow-y-auto pr-1">
+        {Object.entries(filteredGrouped).map(([cat, list]) => {
+          const all = list;
           const allSelected = all.every((p) => selected.has(p.key));
-          const some = !allSelected && all.some((p) => selected.has(p.key));
+          const info = categoryInfo(cat);
           return (
             <div key={cat}>
-              <div className="flex items-center justify-between mb-1">
-                <div className="text-xs uppercase tracking-wider text-muted">{cat}</div>
+              <div className="flex items-center justify-between mb-0.5">
+                <span className="text-xs uppercase tracking-wider text-muted">
+                  {info.label}
+                </span>
                 <button
-                  onClick={() => toggleCategory(cat, all)}
+                  onClick={() => toggleCategory(all)}
                   className="text-xs text-accent hover:underline"
                 >
                   {allSelected ? 'desmarcar todos' : 'marcar todos'}
                 </button>
               </div>
+              {info.description && (
+                <div className="text-[11px] text-muted mb-1">{info.description}</div>
+              )}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-1">
                 {all.map((p) => (
                   <label
@@ -201,6 +362,11 @@ function RoleEditor({
             </div>
           );
         })}
+        {Object.keys(filteredGrouped).length === 0 && (
+          <div className="text-sm text-muted py-4 text-center">
+            Nenhuma permissão encontrada para &quot;{search}&quot;.
+          </div>
+        )}
       </div>
 
       <div className="flex items-center justify-between pt-3 border-t border-border">

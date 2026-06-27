@@ -19,7 +19,7 @@ import {
 } from 'class-validator';
 import { PatroniService } from './patroni.service';
 import { PatroniClustersService } from './patroni-clusters.service';
-import { Roles } from '../auth/roles.decorator';
+import { RequirePermission } from '../auth/permissions.decorator';
 import { Audit } from '../audit/audit.decorator';
 
 class CreatePatroniClusterDto {
@@ -48,43 +48,47 @@ export class PatroniController {
     private readonly clusters: PatroniClustersService,
   ) {}
 
+  @RequirePermission('patroni:read')
   @Get('clusters')
   listClusters() {
     return this.clusters.list();
   }
 
+  @RequirePermission('patroni:read')
   @Get('clusters/:id')
   getCluster(@Param('id') id: string) {
     return this.clusters.get(id);
   }
 
-  @Roles('admin', 'operator')
+  @RequirePermission('patroni:write')
   @Audit('patroni_cluster.create')
   @Post('clusters')
   createCluster(@Body() dto: CreatePatroniClusterDto) {
     return this.clusters.create(dto);
   }
 
-  @Roles('admin', 'operator')
+  @RequirePermission('patroni:write')
   @Audit('patroni_cluster.update')
   @Patch('clusters/:id')
   updateCluster(@Param('id') id: string, @Body() dto: UpdatePatroniClusterDto) {
     return this.clusters.update(id, dto);
   }
 
-  @Roles('admin')
+  @RequirePermission('patroni:write')
   @Audit('patroni_cluster.delete')
   @Delete('clusters/:id')
   removeCluster(@Param('id') id: string) {
     return this.clusters.remove(id);
   }
 
+  @RequirePermission('patroni:read')
   @Get('clusters/:id/status')
   async clusterStatus(@Param('id') id: string) {
     const cluster = await this.clusters.get(id);
     return this.svc.clusterStatus(cluster.nodes, cluster.basicAuth);
   }
 
+  @RequirePermission('patroni:read')
   @Get('clusters/:id/history')
   async history(@Param('id') id: string) {
     const cluster = await this.clusters.get(id);

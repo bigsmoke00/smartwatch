@@ -1,7 +1,7 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { IsBoolean, IsIn, IsObject, IsOptional, IsString } from 'class-validator';
-import { Roles } from '../auth/roles.decorator';
+import { RequirePermission } from '../auth/permissions.decorator';
 import { Audit } from '../audit/audit.decorator';
 import { NotificationsService, ChannelKind } from './notifications.service';
 
@@ -22,33 +22,34 @@ class UpdateChannelDto {
 export class NotificationsController {
   constructor(private readonly svc: NotificationsService) {}
 
+  @RequirePermission('notifications:read', 'notifications:write')
   @Get('channels')
   list() {
     return this.svc.list();
   }
 
-  @Roles('admin', 'operator')
+  @RequirePermission('notifications:write')
   @Audit('notification.create')
   @Post('channels')
   create(@Body() dto: ChannelDto) {
     return this.svc.create(dto);
   }
 
-  @Roles('admin', 'operator')
+  @RequirePermission('notifications:write')
   @Audit('notification.update')
   @Patch('channels/:id')
   update(@Param('id') id: string, @Body() dto: UpdateChannelDto) {
     return this.svc.update(id, dto);
   }
 
-  @Roles('admin')
+  @RequirePermission('notifications:write')
   @Audit('notification.delete')
   @Delete('channels/:id')
   remove(@Param('id') id: string) {
     return this.svc.remove(id);
   }
 
-  @Roles('admin', 'operator')
+  @RequirePermission('notifications:write')
   @Audit('notification.test')
   @Post('channels/:id/test')
   test(@Param('id') id: string) {

@@ -2,7 +2,7 @@ import { Body, Controller, Delete, Get, Module, Param, Post } from '@nestjs/comm
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { IsOptional, IsString } from 'class-validator';
 import { SecretsService } from './secrets.service';
-import { Roles } from '../auth/roles.decorator';
+import { RequirePermission } from '../auth/permissions.decorator';
 import { Audit } from '../audit/audit.decorator';
 
 class SetSecretDto {
@@ -17,20 +17,20 @@ class SetSecretDto {
 class SecretsController {
   constructor(private readonly svc: SecretsService) {}
 
-  @Roles('admin')
+  @RequirePermission('secrets:read', 'secrets:write')
   @Get()
   list() {
     return this.svc.list();
   }
 
-  @Roles('admin')
+  @RequirePermission('secrets:write')
   @Audit('secret.set')
   @Post()
   set(@Body() dto: SetSecretDto) {
     return this.svc.set(dto.name, dto.value, dto.description);
   }
 
-  @Roles('admin')
+  @RequirePermission('secrets:write')
   @Audit('secret.delete')
   @Delete(':name')
   remove(@Param('name') name: string) {

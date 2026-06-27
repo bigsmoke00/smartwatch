@@ -2,7 +2,7 @@ import { Body, Controller, Delete, Get, Module, Param, Patch, Post } from '@nest
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { IsBoolean, IsIn, IsInt, IsOptional, IsString, Min } from 'class-validator';
 import { CredentialRotationService } from './credential-rotation.service';
-import { Roles } from '../auth/roles.decorator';
+import { RequirePermission } from '../auth/permissions.decorator';
 import { Audit } from '../audit/audit.decorator';
 import { SecretsModule } from '../secrets/secrets.module';
 
@@ -24,30 +24,32 @@ class ToggleDto {
 class CredentialRotationController {
   constructor(private readonly svc: CredentialRotationService) {}
 
+  @RequirePermission('credrot:read', 'credrot:write')
   @Get()
   list() { return this.svc.list(); }
 
+  @RequirePermission('credrot:read', 'credrot:write')
   @Get('events')
   events() { return this.svc.events(); }
 
-  @Roles('admin')
+  @RequirePermission('credrot:write')
   @Audit('credrot.create')
   @Post()
   create(@Body() dto: CreateDto) { return this.svc.create(dto); }
 
-  @Roles('admin')
+  @RequirePermission('credrot:write')
   @Audit('credrot.toggle')
   @Patch(':id')
   toggle(@Param('id') id: string, @Body() dto: ToggleDto) {
     return this.svc.setEnabled(id, dto.enabled);
   }
 
-  @Roles('admin')
+  @RequirePermission('credrot:write')
   @Audit('credrot.rotate_now')
   @Post(':id/rotate')
   rotateNow(@Param('id') id: string) { return this.svc.rotateNow(id); }
 
-  @Roles('admin')
+  @RequirePermission('credrot:write')
   @Audit('credrot.delete')
   @Delete(':id')
   remove(@Param('id') id: string) { return this.svc.remove(id); }

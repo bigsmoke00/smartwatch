@@ -18,7 +18,7 @@ import {
   MaxLength,
 } from 'class-validator';
 import { ServersService } from './servers.service';
-import { Roles } from '../auth/roles.decorator';
+import { RequirePermission } from '../auth/permissions.decorator';
 import { Audit } from '../audit/audit.decorator';
 
 class CreateServerDto {
@@ -61,31 +61,33 @@ class CreateApiKeyDto {
 export class ServersController {
   constructor(private readonly service: ServersService) {}
 
+  @RequirePermission('servers:read')
   @Get()
   list(@Query('cloud') cloud?: string, @Query('tag') tag?: string) {
     return this.service.list({ cloud, tag });
   }
 
+  @RequirePermission('servers:read')
   @Get(':id')
   get(@Param('id') id: string) {
     return this.service.get(id);
   }
 
-  @Roles('admin', 'operator')
+  @RequirePermission('servers:write')
   @Audit('server.create')
   @Post()
   create(@Body() dto: CreateServerDto) {
     return this.service.create(dto as any);
   }
 
-  @Roles('admin', 'operator')
+  @RequirePermission('servers:write')
   @Audit('server.update')
   @Patch(':id')
   update(@Param('id') id: string, @Body() dto: UpdateServerDto) {
     return this.service.update(id, dto as any);
   }
 
-  @Roles('admin')
+  @RequirePermission('servers:delete')
   @Audit('server.delete')
   @Delete(':id')
   remove(
@@ -95,21 +97,21 @@ export class ServersController {
     return this.service.remove(id, soft === 'true');
   }
 
-  @Roles('admin')
+  @RequirePermission('servers:delete')
   @Audit('server.restore')
   @Post(':id/restore')
   restore(@Param('id') id: string) {
     return this.service.restore(id);
   }
 
-  @Roles('admin')
+  @RequirePermission('apikey:write')
   @Audit('apikey.create')
   @Post(':id/api-keys')
   createApiKey(@Param('id') id: string, @Body() dto: CreateApiKeyDto) {
     return this.service.createApiKey(id, dto);
   }
 
-  @Roles('admin')
+  @RequirePermission('apikey:write')
   @Audit('apikey.revoke')
   @Delete(':id/api-keys/:keyId')
   revokeApiKey(@Param('id') id: string, @Param('keyId') keyId: string) {
