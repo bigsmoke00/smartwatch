@@ -19,6 +19,7 @@ FROM node:20-alpine AS pgrepack-builder
 # que existam no sistema/base image — por isso NÃO usar /usr/bin/pg_config
 # aqui, que pode resolver pra uma versão diferente da 16).
 RUN apk add --no-cache build-base postgresql16 postgresql16-dev curl tar gawk \
+        zlib-dev readline-dev openssl-dev zstd-dev lz4-dev \
  && curl -fsSL https://github.com/reorg/pg_repack/archive/refs/tags/ver_1.5.0.tar.gz -o /tmp/pg_repack.tar.gz \
  && mkdir -p /tmp/pg_repack \
  && tar -xzf /tmp/pg_repack.tar.gz -C /tmp/pg_repack --strip-components=1 \
@@ -31,8 +32,10 @@ WORKDIR /app
 ENV NODE_ENV=production
 
 # git + terraform (para o Terraform Control Plane)
-# libpq (runtime do pg_repack — compilado contra ela na stage acima)
-RUN apk add --no-cache git curl ca-certificates libpq \
+# libpq/lz4-libs/zstd-libs/readline/zlib: runtime do pg_repack (compilado
+# contra elas na stage acima — sem essas .so o binário não sobe: "Error
+# loading shared library").
+RUN apk add --no-cache git curl ca-certificates libpq lz4-libs zstd-libs readline zlib \
  && curl -fsSL https://releases.hashicorp.com/terraform/1.9.5/terraform_1.9.5_linux_amd64.zip -o /tmp/tf.zip \
  && unzip /tmp/tf.zip -d /usr/local/bin/ \
  && rm /tmp/tf.zip \
