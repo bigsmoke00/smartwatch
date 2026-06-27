@@ -185,6 +185,10 @@ export class LogsService {
     return this.repo.distinctContainers(serverId);
   }
 
+  listFiles(serverId: string) {
+    return this.repo.distinctFiles(serverId);
+  }
+
   /**
    * Aplica a retenção de logs configurada por servidor (servers.retention_days).
    *

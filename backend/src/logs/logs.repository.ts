@@ -22,6 +22,13 @@ export interface LogQuery {
   serverId?: string;
   containerName?: string;
   /**
+   * Filtro por arquivo de /var/log (só faz sentido com source 'host' ou
+   * 'all'). Vem do frontend SEM o prefixo 'host:' — aqui recolocamos o
+   * prefixo antes de comparar, porque é assim que a coluna container_name
+   * guarda esses valores (ver distinctFiles()).
+   */
+  fileName?: string;
+  /**
    * 'host' = linhas de /var/log do agent (container_name = 'host:<arquivo>');
    * 'container' = linhas de containers docker; 'all'/undefined = sem filtro.
    * Filtrar isso aqui (antes do LIMIT) é o que faz o filtro de fonte
@@ -136,6 +143,10 @@ export class LogsRepository {
       where.push(`container_name = $${i++}`);
       params.push(filters.containerName);
     }
+    if (filters.fileName) {
+      where.push(`container_name = $${i++}`);
+      params.push(`host:${filters.fileName}`);
+    }
     if (filters.source === 'host') {
       where.push(`container_name LIKE 'host:%'`);
     } else if (filters.source === 'container') {
@@ -207,6 +218,28 @@ export class LogsRepository {
          AND container_name NOT LIKE 'host:%'
        GROUP BY container_name
        ORDER BY container_name ASC
+       LIMIT 500`,
+      [serverId],
+    );
+    return r.rows;
+  }
+
+  /**
+   * Arquivos de /var/log distintos já vistos nos logs "host" de um servidor
+   * — usado pelo filtro "arquivo" da tela de Logs (analogamente a
+   * distinctContainers, mas pro lado host: ao contrário do filtro de
+   * container, aqui pegamos só as linhas QUE COMEÇAM com 'host:' e
+   * devolvemos o nome já sem esse prefixo, que é só uma convenção do agent
+   * pra diferenciar host de container nessa mesma coluna).
+   */
+  async distinctFiles(serverId: string): Promise<{ fileName: string }[]> {
+    const r = await this.pool.query(
+      `SELECT substring(container_name from 6) AS "fileName"
+       FROM logs
+       WHERE server_id = $1
+         AND container_name LIKE 'host:%'
+       GROUP BY container_name
+       ORDER BY substring(container_name from 6) ASC
        LIMIT 500`,
       [serverId],
     );

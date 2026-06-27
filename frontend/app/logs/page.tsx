@@ -61,6 +61,9 @@ function LogsPageInner() {
   // Container específico dentro do source=container (vazio = todos os containers)
   const [containerName, setContainerName] = useState('');
   const [containerOptions, setContainerOptions] = useState<{ containerName: string; image: string | null }[]>([]);
+  // Arquivo específico de /var/log dentro do source=host (vazio = todos os arquivos)
+  const [fileName, setFileName] = useState('');
+  const [fileOptions, setFileOptions] = useState<{ fileName: string }[]>([]);
   const [hits, setHits] = useState<LogHit[]>([]);
   const [total, setTotal] = useState(0);
   const [occurrences, setOccurrences] = useState(0);
@@ -83,10 +86,12 @@ function LogsPageInner() {
   const sourceRef = useRef(source);
   const serverIdRef = useRef(serverId);
   const containerNameRef = useRef(containerName);
+  const fileNameRef = useRef(fileName);
   useEffect(() => { levelsRef.current = levels; }, [levels]);
   useEffect(() => { qRef.current = q; }, [q]);
   useEffect(() => { sourceRef.current = source; }, [source]);
   useEffect(() => { containerNameRef.current = containerName; }, [containerName]);
+  useEffect(() => { fileNameRef.current = fileName; }, [fileName]);
 
   useEffect(() => {
     apiFetch<ServerRow[]>('/servers')
@@ -106,6 +111,20 @@ function LogsPageInner() {
         setContainerName((prev) => (arr.some((c) => c.containerName === prev) ? prev : ''));
       })
       .catch(() => setContainerOptions([]));
+  }, [serverId]);
+
+  // Lista de arquivos de /var/log já vistos nos logs "host" desse servidor,
+  // pra popular o seletor "arquivo específico" — mesmo padrão de
+  // containerOptions acima, só que do lado host.
+  useEffect(() => {
+    if (!serverId) { setFileOptions([]); setFileName(''); return; }
+    apiFetch<{ fileName: string }[]>(`/logs/files?serverId=${serverId}`)
+      .then((rows) => {
+        const arr = safeArray<{ fileName: string }>(rows);
+        setFileOptions(arr);
+        setFileName((prev) => (arr.some((f) => f.fileName === prev) ? prev : ''));
+      })
+      .catch(() => setFileOptions([]));
   }, [serverId]);
 
   // Evita resposta fora de ordem sobrescrever o estado com dados velhos:
@@ -151,6 +170,9 @@ function LogsPageInner() {
     // Container específico já filtra no banco (exato) — mais preciso e
     // mais barato que pedir uma página grande e filtrar no client.
     if (source === 'container' && containerName) qp.set('containerName', containerName);
+    // Arquivo específico de /var/log — mesma lógica do containerName acima,
+    // só que pro lado host (filtra no banco, antes do LIMIT).
+    if (source === 'host' && fileName) qp.set('fileName', fileName);
     // Fonte (host/container) agora vai pro backend e filtra ANTES do LIMIT
     // (ver logs.repository.ts) — antes era filtrado aqui no client DEPOIS de
     // já ter vindo uma página de 500 linhas mais recentes sem esse filtro, e
@@ -188,7 +210,7 @@ function LogsPageInner() {
   useEffect(() => {
     search();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [serverId, range.from, range.to, source, containerName]);
+  }, [serverId, range.from, range.to, source, containerName, fileName]);
 
   // ---- WebSocket com reconnect + exponential backoff ----
   // IMPORTANTE: este efeito só depende de `live`. Antes ele também
@@ -302,6 +324,7 @@ function LogsPageInner() {
       const qq = qRef.current;
       const src = sourceRef.current;
       const cn = containerNameRef.current;
+      const fn = fileNameRef.current;
       const sid = serverIdRef.current;
       // Faltava filtrar por servidor aqui — o flush filtrava level/q/source/
       // container mas não serverId, então ao trocar de servidor as mensagens
@@ -322,6 +345,7 @@ function LogsPageInner() {
       }
       if (src === 'host') {
         filtered = filtered.filter((d) => (d.containerName ?? '').startsWith('host:'));
+        if (fn) filtered = filtered.filter((d) => d.containerName === `host:${fn}`);
       } else if (src === 'container') {
         filtered = filtered.filter((d) => !(d.containerName ?? '').startsWith('host:'));
         if (cn) filtered = filtered.filter((d) => d.containerName === cn);
@@ -460,6 +484,32 @@ function LogsPageInner() {
                     {containerOptions.map((c) => (
                       <option key={c.containerName} value={c.containerName}>
                         {c.containerName}{c.image ? ` (${c.image})` : ''}
+                      </option>
+                    ))}
+                  </Select>
+                )}
+              </>
+            )}
+
+            {/* Filtro por arquivo de /var/log — análogo ao de container
+                acima, só que do lado host. Ajuda quando o servidor tem
+                vários arquivos sendo coletados (access.log, error.log,
+                etc.) e o usuário quer isolar um só pra investigar. */}
+            {source === 'host' && (
+              <>
+                <div className="h-5 w-px bg-border" />
+                {!serverId ? (
+                  <span className="text-xs text-muted">selecione um servidor pra filtrar por arquivo</span>
+                ) : (
+                  <Select
+                    value={fileName}
+                    onChange={(e) => setFileName(e.target.value)}
+                    className="text-xs max-w-[260px] py-1"
+                  >
+                    <option value="">Todos os arquivos</option>
+                    {fileOptions.map((f) => (
+                      <option key={f.fileName} value={f.fileName}>
+                        {f.fileName}
                       </option>
                     ))}
                   </Select>

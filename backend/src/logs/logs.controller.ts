@@ -92,6 +92,7 @@ export class LogsController {
   query(
     @Query('serverId') serverId?: string,
     @Query('containerName') containerName?: string,
+    @Query('fileName') fileName?: string,
     @Query('source') source?: 'all' | 'host' | 'container',
     @Query('q') q?: string,
     @Query('level') level?: string,
@@ -103,6 +104,7 @@ export class LogsController {
     return this.logs.query({
       serverId,
       containerName,
+      fileName,
       source,
       q,
       level: level ? level.split(',') : undefined,
@@ -119,6 +121,14 @@ export class LogsController {
   listContainers(@Query('serverId') serverId: string) {
     if (!serverId) return [];
     return this.logs.listContainers(serverId);
+  }
+
+  /** Arquivos de /var/log já vistos nos logs "host" desse servidor — popula o seletor de arquivo. */
+  @ApiBearerAuth()
+  @Get('logs/files')
+  listFiles(@Query('serverId') serverId: string) {
+    if (!serverId) return [];
+    return this.logs.listFiles(serverId);
   }
 
   @ApiBearerAuth()
