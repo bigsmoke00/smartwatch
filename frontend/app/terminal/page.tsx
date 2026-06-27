@@ -212,16 +212,6 @@ export default function TerminalPage() {
                     <option value="readwrite">Leitura e escrita</option>
                     <option value="readonly">Somente leitura</option>
                   </Select>
-                  {mode === 'readwrite' && (
-                    <label className="flex items-center gap-1 text-xs text-muted mt-1">
-                      <input
-                        type="checkbox" checked={sudo}
-                        disabled={login ? !login.allowSudo : false}
-                        onChange={(e) => setSudo(e.target.checked)}
-                      />
-                      Solicitar sudo {login && !login.allowSudo && '(não liberado pra você nesse servidor)'}
-                    </label>
-                  )}
                 </div>
               )}
               <div className="md:col-span-2">
@@ -229,6 +219,29 @@ export default function TerminalPage() {
                 <Input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="ex: investigar memleak no api-1" />
               </div>
               <Button onClick={request}>Solicitar acesso</Button>
+              {/*
+                Checkbox de sudo movido pra fora da coluna "Modo": antes ficava
+                dentro do mesmo <div> do Select, e como o grid usa
+                `items-end`, a altura extra desse <div> (label + select +
+                checkbox) fazia o Select de "Modo" ficar mais alto que os
+                Selects das outras colunas (Servidor/Alvo), que são
+                empurrados pra baixo pra alinhar pelo fundo da linha — daí o
+                campo "Modo" parecer "fora de alinhamento". Com o checkbox
+                fora do grid principal, todas as colunas ficam com a mesma
+                altura (label + select) e alinham certinho.
+              */}
+              {target === 'host' && mode === 'readwrite' && (
+                <div className="md:col-span-4">
+                  <label className="flex items-center gap-1 text-xs text-muted">
+                    <input
+                      type="checkbox" checked={sudo}
+                      disabled={login ? !login.allowSudo : false}
+                      onChange={(e) => setSudo(e.target.checked)}
+                    />
+                    Solicitar sudo {login && !login.allowSudo && '(não liberado pra você nesse servidor)'}
+                  </label>
+                </div>
+              )}
               {target === 'host' && login && (
                 <div className="md:col-span-4 text-xs text-muted">
                   Você vai acessar como <span className="font-mono text-accent">{login.osUsername}</span>
