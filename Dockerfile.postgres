@@ -20,6 +20,6 @@ RUN apk add --no-cache --virtual .pgrepack-build-deps \
     && curl -fsSL https://github.com/reorg/pg_repack/archive/refs/tags/ver_1.5.0.tar.gz -o /tmp/pg_repack.tar.gz \
     && mkdir -p /tmp/pg_repack \
     && tar -xzf /tmp/pg_repack.tar.gz -C /tmp/pg_repack --strip-components=1 \
-    && make -C /tmp/pg_repack USE_PGXS=1 PG_CONFIG=/usr/local/bin/pg_config install \
+    && make -C /tmp/pg_repack USE_PGXS=1 PG_CONFIG=/usr/local/bin/pg_config with_llvm=no install \
     && apk del .pgrepack-build-deps \
     && rm -rf /tmp/pg_repack /tmp/pg_repack.tar.gz
