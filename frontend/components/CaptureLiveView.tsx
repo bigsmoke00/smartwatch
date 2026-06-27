@@ -244,10 +244,18 @@ export default function CaptureLiveView({ packets, totalParsed }: Props) {
         // também busca dentro do texto bruto das mensagens (cobre ramal,
         // nome, número que apareçam em headers tipo Contact/User-Agent e
         // não só em From/To) e nos IPs de origem/destino das mensagens.
+        // Inclui a combinação "ip:porta" além do ip isolado — buscar
+        // "187.87.225.21:12577" (formato que a própria UI mostra na coluna
+        // de origem/destino) nunca batia antes, porque srcIp/dstIp guardam
+        // só o IP sem porta: comparar a string inteira (com ":porta") contra
+        // só o IP nunca dá match, mesmo a ligação existindo na captura —
+        // parecia "TLS não aparece" mas era esse o bug, não a decodificação.
         return d.messages.some((m) =>
           (m.sipText && m.sipText.toLowerCase().includes(f)) ||
           (m.srcIp && m.srcIp.toLowerCase().includes(f)) ||
-          (m.dstIp && m.dstIp.toLowerCase().includes(f)),
+          (m.dstIp && m.dstIp.toLowerCase().includes(f)) ||
+          (m.srcIp && m.srcPort != null && `${m.srcIp}:${m.srcPort}`.toLowerCase().includes(f)) ||
+          (m.dstIp && m.dstPort != null && `${m.dstIp}:${m.dstPort}`.toLowerCase().includes(f)),
         );
       });
     }
@@ -269,10 +277,14 @@ export default function CaptureLiveView({ packets, totalParsed }: Props) {
     }
     if (!filter.trim()) return base;
     const f = filter.toLowerCase();
-    return base.filter((p) =>
-      [p.srcIp, p.dstIp, p.proto, p.info, p.sipCallId, String(p.srcPort), String(p.dstPort)]
-        .some((v) => v && v.toLowerCase().includes(f)),
-    );
+    return base.filter((p) => {
+      const fields = [p.srcIp, p.dstIp, p.proto, p.info, p.sipCallId, String(p.srcPort), String(p.dstPort)];
+      if (fields.some((v) => v && v.toLowerCase().includes(f))) return true;
+      // mesmo motivo do filtro de diálogos acima: também cobre "ip:porta" combinado.
+      if (p.srcIp && p.srcPort != null && `${p.srcIp}:${p.srcPort}`.toLowerCase().includes(f)) return true;
+      if (p.dstIp && p.dstPort != null && `${p.dstIp}:${p.dstPort}`.toLowerCase().includes(f)) return true;
+      return false;
+    });
   }, [packets, filter, methodFilter]);
 
   const selectedGroup: CallGroup | undefined = selectedCallId
