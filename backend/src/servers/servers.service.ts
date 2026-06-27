@@ -25,6 +25,7 @@ export interface ServerRow {
   agentVersion?: string | null;
   tags: string[];
   labels: Record<string, any>;
+  retentionDays: number;
   lastSeenAt?: Date | null;
   createdAt: Date;
 }
@@ -33,7 +34,8 @@ const COLS = `id, name, description, hostname, ip::text AS ip,
               cloud, cloud_region AS "cloudRegion", cloud_account AS "cloudAccount",
               cloud_instance_id AS "cloudInstanceId", cloud_az AS "cloudAz",
               os, arch, agent_version AS "agentVersion",
-              tags, labels, last_seen_at AS "lastSeenAt", created_at AS "createdAt"`;
+              tags, labels, retention_days AS "retentionDays",
+              last_seen_at AS "lastSeenAt", created_at AS "createdAt"`;
 
 @Injectable()
 export class ServersService {
@@ -77,8 +79,9 @@ export class ServersService {
   async create(input: Partial<ServerRow>) {
     const r = await this.pool.query(
       `INSERT INTO servers(name, description, hostname, cloud, cloud_region,
-                           cloud_account, cloud_instance_id, cloud_az, tags, labels)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`,
+                           cloud_account, cloud_instance_id, cloud_az, tags, labels,
+                           retention_days)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id`,
       [
         input.name,
         input.description ?? null,
@@ -90,6 +93,7 @@ export class ServersService {
         input.cloudAz ?? null,
         JSON.stringify(input.tags ?? []),
         JSON.stringify(input.labels ?? {}),
+        input.retentionDays ?? 14,
       ],
     );
     return this.get(r.rows[0].id);
@@ -108,6 +112,7 @@ export class ServersService {
       cloudAccount: 'cloud_account',
       cloudInstanceId: 'cloud_instance_id',
       cloudAz: 'cloud_az',
+      retentionDays: 'retention_days',
     };
     for (const [k, col] of Object.entries(map)) {
       if ((patch as any)[k] !== undefined) {
@@ -265,6 +270,7 @@ export class ServersService {
       agentVersion: row.agent_version,
       tags: row.tags,
       labels: row.labels,
+      retentionDays: row.retention_days,
       lastSeenAt: row.last_seen_at,
       createdAt: row.created_at,
     };

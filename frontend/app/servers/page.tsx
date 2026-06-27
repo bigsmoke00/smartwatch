@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Badge } from '@/components/ui/Badge';
 import { apiFetch, Auth } from '@/lib/api';
-import { Plus, ChevronRight, Trash2 } from 'lucide-react';
+import { Plus, ChevronRight, Trash2, Pencil, Check, X } from 'lucide-react';
 import { fmtTime, safeArray } from '@/lib/utils';
 
 interface ServerRow {
@@ -22,6 +22,7 @@ interface ServerRow {
   os?: string;
   agentVersion?: string;
   tags: string[];
+  retentionDays?: number;
   lastSeenAt?: string;
   createdAt: string;
 }
@@ -37,6 +38,11 @@ export default function ServersPage() {
   const [description, setDescription] = useState('');
   const [cloud, setCloud] = useState<string>('onprem');
   const [cloudRegion, setCloudRegion] = useState('');
+  const [retentionDays, setRetentionDays] = useState('14');
+
+  // edição inline de retenção de um servidor já existente
+  const [editingRetentionId, setEditingRetentionId] = useState<string | null>(null);
+  const [editRetentionValue, setEditRetentionValue] = useState('');
 
   async function load() {
     const qp = new URLSearchParams();
@@ -57,13 +63,33 @@ export default function ServersPage() {
         description,
         cloud: cloud || null,
         cloudRegion: cloudRegion || null,
+        retentionDays: retentionDays ? parseInt(retentionDays, 10) : undefined,
       }),
     });
     setName('');
     setDescription('');
     setCloudRegion('');
+    setRetentionDays('14');
     setShowNew(false);
     load();
+  }
+
+  async function saveRetention(serverId: string) {
+    const days = parseInt(editRetentionValue, 10);
+    if (!Number.isFinite(days) || days < 1 || days > 365) {
+      alert('Informe um número de dias entre 1 e 365.');
+      return;
+    }
+    try {
+      await apiFetch(`/servers/${serverId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ retentionDays: days }),
+      });
+      setEditingRetentionId(null);
+      load();
+    } catch (err: any) {
+      alert(`Falha ao atualizar retenção: ${err?.payload?.message || err.message}`);
+    }
   }
 
   return (
@@ -137,6 +163,20 @@ export default function ServersPage() {
                   placeholder="sa-east-1 / sa-saopaulo-1"
                 />
               </div>
+              <div>
+                <label className="text-xs text-muted">Retenção de logs (dias)</label>
+                <Input
+                  type="number"
+                  min={1}
+                  max={365}
+                  value={retentionDays}
+                  onChange={(e) => setRetentionDays(e.target.value)}
+                  placeholder="14"
+                />
+                <div className="text-[11px] text-muted mt-0.5">
+                  Logs deste servidor são apagados automaticamente após esse prazo (1 a 365 dias).
+                </div>
+              </div>
               <div className="md:col-span-2 flex gap-2">
                 <Button type="submit">Criar</Button>
                 <Button variant="secondary" type="button" onClick={() => setShowNew(false)}>
@@ -183,6 +223,56 @@ export default function ServersPage() {
                         <Badge className="border-info text-info">{s.cloud}</Badge>
                       )}
                       {s.cloudRegion && <Badge>{s.cloudRegion}</Badge>}
+                      {editingRetentionId === s.id ? (
+                        <span
+                          className="flex items-center gap-1"
+                          onClick={(e) => { e.preventDefault(); e.stopPropagation(); }}
+                        >
+                          <input
+                            type="number"
+                            min={1}
+                            max={365}
+                            autoFocus
+                            value={editRetentionValue}
+                            onChange={(e) => setEditRetentionValue(e.target.value)}
+                            className="w-16 rounded bg-panel2 border border-border px-1.5 py-0.5 text-xs"
+                          />
+                          <button
+                            title="Salvar"
+                            onClick={(e) => { e.preventDefault(); e.stopPropagation(); saveRetention(s.id); }}
+                            className="text-success hover:opacity-80"
+                          >
+                            <Check size={14} />
+                          </button>
+                          <button
+                            title="Cancelar"
+                            onClick={(e) => { e.preventDefault(); e.stopPropagation(); setEditingRetentionId(null); }}
+                            className="text-muted hover:text-danger"
+                          >
+                            <X size={14} />
+                          </button>
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1">
+                          <Badge title="Retenção de logs">
+                            {s.retentionDays ?? 14}d retenção
+                          </Badge>
+                          {(role === 'admin' || role === 'operator') && (
+                            <button
+                              title="Editar retenção"
+                              onClick={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                setEditingRetentionId(s.id);
+                                setEditRetentionValue(String(s.retentionDays ?? 14));
+                              }}
+                              className="text-muted hover:text-accent"
+                            >
+                              <Pencil size={12} />
+                            </button>
+                          )}
+                        </span>
+                      )}
                     </div>
                     <div className="text-xs text-muted">
                       {s.hostname || '—'} · {s.os || '—'} ·{' '}

@@ -12,10 +12,13 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import {
   IsArray,
   IsIn,
+  IsInt,
   IsObject,
   IsOptional,
   IsString,
+  Max,
   MaxLength,
+  Min,
 } from 'class-validator';
 import { ServersService } from './servers.service';
 import { RequirePermission } from '../auth/permissions.decorator';
@@ -32,6 +35,7 @@ class CreateServerDto {
   @IsOptional() @IsString() cloudAz?: string;
   @IsOptional() @IsArray() tags?: string[];
   @IsOptional() @IsObject() labels?: Record<string, any>;
+  @IsOptional() @IsInt() @Min(1) @Max(365) retentionDays?: number;
 }
 /**
  * UpdateServerDto NÃO herda de CreateServerDto — todos os campos são opcionais
@@ -49,6 +53,7 @@ class UpdateServerDto {
   @IsOptional() @IsString() cloudAz?: string;
   @IsOptional() @IsArray() tags?: string[];
   @IsOptional() @IsObject() labels?: Record<string, any>;
+  @IsOptional() @IsInt() @Min(1) @Max(365) retentionDays?: number;
 }
 class CreateApiKeyDto {
   @IsOptional() @IsArray() ipAllowlist?: string[];
