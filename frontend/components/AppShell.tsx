@@ -8,7 +8,6 @@ import {
   ScrollText,
   Users,
   LogOut,
-  Activity,
   Bell,
   History,
   Database,
@@ -112,7 +111,7 @@ function matchNavItem(pathname: string): NavItem | null {
 }
 
 function currentPageLabel(pathname: string): string {
-  return matchNavItem(pathname)?.label ?? 'LogWatch';
+  return matchNavItem(pathname)?.label ?? 'SmartWatch';
 }
 
 export function AppShell({ children }: { children: React.ReactNode }) {
@@ -206,12 +205,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         )}
       >
         <div className={cn('px-4 py-4 border-b border-border flex items-center gap-2.5', collapsed && 'justify-center px-2')}>
-          <div className="w-7 h-7 rounded-lg bg-accent-gradient flex items-center justify-center shrink-0 shadow-[0_1px_0_0_rgba(255,255,255,0.15)_inset]">
-            <Activity size={14} className="text-white" />
-          </div>
+          <img src="/logo.jpeg" alt="SmartWatch" className="w-7 h-7 rounded-lg shrink-0 shadow-[0_1px_0_0_rgba(255,255,255,0.15)_inset]" />
           {!collapsed && (
             <div className="min-w-0">
-              <div className="font-semibold text-[15px] tracking-tight leading-none">LogWatch</div>
+              <div className="font-semibold text-[15px] tracking-tight leading-none">SmartWatch</div>
               <div className="text-2xs text-mutedFaint mt-0.5">Plataforma de observabilidade</div>
             </div>
           )}

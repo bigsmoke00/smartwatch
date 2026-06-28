@@ -56,8 +56,8 @@ function LoginInner() {
       <Card className="w-full max-w-sm p-6">
         <div className="mb-6">
           <div className="font-semibold text-xl flex items-center gap-2">
-            <span className="inline-block w-2 h-2 rounded-full bg-accent" />
-            LogWatch
+            <img src="/logo.jpeg" alt="SmartWatch" className="w-7 h-7 rounded-lg" />
+            SmartWatch
           </div>
           <p className="text-sm text-muted mt-1">Acesse seu painel.</p>
         </div>
