@@ -15,7 +15,7 @@ const LEVEL_REGEX = /\b(TRACE|DEBUG|INFO|WARN(?:ING)?|ERROR|ERR|FATAL|CRITICAL)\
 const ANSI_REGEX = /\x1b\[[0-9;]*[a-zA-Z]/g;
 const MAX_MESSAGE_LENGTH = Math.min(
   16_384,
-  Math.max(512, parseInt(process.env.LOGWATCH_MAX_MESSAGE_LENGTH ?? '8192', 10)),
+  Math.max(512, parseInt(process.env.LOGWATCH_MAX_MESSAGE_LENGTH ?? '16384', 10)),
 );
 const MAX_META_BYTES = Math.min(
   16_384,

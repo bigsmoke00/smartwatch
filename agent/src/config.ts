@@ -45,6 +45,25 @@ export const config = {
     process.env.LOGWATCH_MAX_LINES_PER_SOURCE_PER_SECOND ?? '200',
     10,
   ),
+
+  // ----- Agrupamento multi-linha (stack traces) -----
+  // Apps Java/Logback (ex.: citrus) cospem uma exceção em N linhas físicas e
+  // só a PRIMEIRA tem nível; as linhas "    at ..." / "Caused by:" / a linha
+  // da exceção não têm prefixo de nível. Sem agrupar, cada uma virava uma
+  // linha solta UNKNOWN na plataforma — e o docker logs não batia com a tela.
+  // Ligado: a continuação é colada no evento anterior (UM evento com o nível
+  // da linha-cabeçalho). multilineIdleMs = janela de ociosidade pra emitir o
+  // evento quando para de chegar continuação (igual multiline.timeout do
+  // Filebeat/Fluentd). maxEventLength = teto em chars do evento agrupado.
+  multilineEnabled: (process.env.LOGWATCH_MULTILINE ?? 'true').toLowerCase() === 'true',
+  multilineIdleMs: Math.max(
+    50,
+    parseInt(process.env.LOGWATCH_MULTILINE_IDLE_MS ?? '500', 10),
+  ),
+  maxEventLength: Math.min(
+    65536,
+    Math.max(1024, parseInt(process.env.LOGWATCH_MAX_EVENT_LENGTH ?? '16384', 10)),
+  ),
   metricsIntervalMs: parseInt(process.env.LOGWATCH_METRICS_INTERVAL_MS ?? '15000', 10),
   excludeSelf: (process.env.LOGWATCH_EXCLUDE_SELF ?? 'true').toLowerCase() === 'true',
   hostRoot: process.env.LOGWATCH_HOST_ROOT || '/host',

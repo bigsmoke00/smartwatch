@@ -17,6 +17,8 @@ const sourceRates = new Map<string, { second: number; accepted: number; dropped:
 let bufferDrops = 0;
 let flushing = false;
 
+const NUL = /\x00/g;
+
 function canAccept(source: string): boolean {
   const second = Math.floor(Date.now() / 1000);
   const current = sourceRates.get(source);
@@ -45,6 +47,24 @@ function enqueue(entry: PendingEntry) {
     return;
   }
   buffer.push(entry);
+}
+
+// Códigos ANSI de cor podem embrulhar o nível (ex.: unity loga
+// "\x1b[37minfo\x1b[0m"); removo só pra DETECTAR o cabeçalho — a mensagem
+// crua segue intacta pro backend, que faz o próprio strip antes de gravar.
+const ANSI = /\x1b\[[0-9;]*[a-zA-Z]/g;
+// O que caracteriza o INÍCIO de uma nova linha de log (depois de já tirado o
+// timestamp do Docker). Reconhece os formatos reais da frota:
+//   - "16:12:02.282 [...] ERROR ..."  (Logback/citrus: hora no começo)
+//   - "2026-06-28T15:53:25 ..."       (ISO no começo)
+//   - "[info] 2026-... - application" (unity: nível entre colchetes)
+// Qualquer linha que NÃO casa isto é tratada como continuação do evento
+// anterior (stack frame "  at ...", "Caused by:", a linha da exceção etc.) —
+// é o padrão "negate timestamp" de multiline do Filebeat/Fluentd.
+const EVENT_HEADER = /^(?:\d{2}:\d{2}:\d{2}|\d{4}-\d{2}-\d{2}|\[\s*(?:TRACE|DEBUG|INFO|WARN(?:ING)?|ERROR|ERR|FATAL|CRITICAL)\s*\])/i;
+
+function isNewEventStart(line: string): boolean {
+  return EVENT_HEADER.test(line.replace(ANSI, ''));
 }
 
 export async function attachLogs(docker: Docker, container: Docker.Container) {
@@ -79,6 +99,66 @@ export async function attachLogs(docker: Docker, container: Docker.Container) {
   // frame e o próximo, igual um buffer de "linha incompleta" de qualquer
   // parser de stream linha-a-linha.
   let lineCarry = '';
+
+  // ----- Estado do agrupamento multi-linha (stack traces) -----
+  // currentEvent acumula a linha-cabeçalho + suas continuações; só é
+  // enfileirado (como UM PendingEntry) quando chega uma nova linha-cabeçalho,
+  // quando passa multilineIdleMs sem nada novo (idle flush), ou no fim do
+  // stream. Assim um stack trace inteiro vira um único evento com o nível da
+  // linha de cabeçalho, em vez de N linhas soltas UNKNOWN.
+  let currentEvent: { ts: string; stream: 'stdout' | 'stderr'; text: string } | null = null;
+  let eventTimer: NodeJS.Timeout | null = null;
+
+  function emitEvent() {
+    if (eventTimer) { clearTimeout(eventTimer); eventTimer = null; }
+    const ev = currentEvent;
+    if (!ev) return;
+    currentEvent = null;
+    const message = ev.text.replace(NUL, '').slice(0, config.maxEventLength);
+    if (!message) return;
+    enqueue({ ts: ev.ts, containerId: id, containerName: name, image, stream: ev.stream, message });
+    if (buffer.length >= config.batchSize) void flushLogs();
+  }
+
+  function scheduleEmit() {
+    if (eventTimer) clearTimeout(eventTimer);
+    eventTimer = setTimeout(emitEvent, config.multilineIdleMs);
+    // não segura o event loop só por causa do timer pendente
+    if (typeof eventTimer.unref === 'function') eventTimer.unref();
+  }
+
+  function handleLine(line: string, type: number) {
+    if (!line) return;
+    const idx = line.indexOf(' ');
+    // Docker (timestamps:true) prefixa cada linha com "<RFC3339> <conteúdo>".
+    // Preserva o espaço inicial do conteúdo (indentação do stack frame) —
+    // exatamente o sinal de continuação que o agrupador usa.
+    const ts = idx > 0 ? line.slice(0, idx) : new Date().toISOString();
+    const msg = idx > 0 ? line.slice(idx + 1) : line;
+    const stream: 'stdout' | 'stderr' = type === 2 ? 'stderr' : 'stdout';
+
+    if (!config.multilineEnabled) {
+      const clean = msg.replace(NUL, '').slice(0, config.maxEventLength);
+      if (!clean) return;
+      enqueue({ ts, containerId: id, containerName: name, image, stream, message: clean });
+      if (buffer.length >= config.batchSize) void flushLogs();
+      return;
+    }
+
+    // Continuação: linha sem cabeçalho de log E já existe um evento aberto →
+    // anexa (até o teto). Senão, fecha o evento atual e abre um novo.
+    if (currentEvent && !isNewEventStart(msg)) {
+      if (currentEvent.text.length < config.maxEventLength) {
+        currentEvent.text += '\n' + msg;
+      }
+      scheduleEmit();
+      return;
+    }
+    emitEvent();
+    currentEvent = { ts, stream, text: msg };
+    scheduleEmit();
+  }
+
   (stream as NodeJS.ReadableStream).on('data', (chunk: Buffer) => {
     pending = Buffer.concat([pending, chunk]);
     while (pending.length >= 8) {
@@ -92,37 +172,17 @@ export async function attachLogs(docker: Docker, container: Docker.Container) {
       // terminava em '\n'; senão é o início da próxima linha, que continua
       // no próximo frame — guarda em lineCarry em vez de processar agora.
       lineCarry = parts.pop() ?? '';
-      for (const line of parts) {
-        if (!line) continue;
-        const idx = line.indexOf(' ');
-        const ts = idx > 0 ? line.slice(0, idx) : new Date().toISOString();
-        const msg = idx > 0 ? line.slice(idx + 1) : line;
-        const cleanMessage = msg
-          .replace(/\u0000/g, '')
-          .slice(0, config.maxLineLength);
-        if (!cleanMessage) continue;
-        enqueue({
-          ts,
-          containerId: id,
-          containerName: name,
-          image,
-          stream: type === 2 ? 'stderr' : 'stdout',
-          message: cleanMessage,
-        });
-        if (buffer.length >= config.batchSize) void flushLogs();
-      }
+      for (const line of parts) handleLine(line, type);
     }
   });
   function flushCarry() {
-    if (!lineCarry) return;
-    const line = lineCarry;
-    lineCarry = '';
-    const idx = line.indexOf(' ');
-    const ts = idx > 0 ? line.slice(0, idx) : new Date().toISOString();
-    const msg = idx > 0 ? line.slice(idx + 1) : line;
-    const cleanMessage = msg.replace(/\u0000/g, '').slice(0, config.maxLineLength);
-    if (!cleanMessage) return;
-    enqueue({ ts, containerId: id, containerName: name, image, stream: 'stdout', message: cleanMessage });
+    if (lineCarry) {
+      const line = lineCarry;
+      lineCarry = '';
+      handleLine(line, 1);
+    }
+    // Não deixa o último evento (sem nova linha-cabeçalho depois) preso.
+    emitEvent();
   }
   (stream as NodeJS.ReadableStream).on('end', () => {
     flushCarry();
