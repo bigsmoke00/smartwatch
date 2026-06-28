@@ -129,23 +129,28 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   // ainda) — sem isto, scrollTop sempre volta a 0 ao clicar em qualquer
   // item do menu. sessionStorage (não state) porque precisa sobreviver ao
   // unmount/remount do componente inteiro.
-  const navRef = useRef<HTMLElement>(null);
+  //
+  // Callback ref (não useEffect com deps=[]): o componente retorna `null`
+  // enquanto `user` ainda não carregou (ver "if (!user) return null"
+  // abaixo), então no PRIMEIRO commit a <nav> nem existe no DOM ainda — um
+  // useEffect(.., []) já teria disparado (e saído no `if (!el) return`)
+  // antes da <nav> realmente montar, e nunca mais roda de novo. Callback
+  // ref dispara exatamente quando o elemento de fato aparece no DOM.
+  const navScrollCleanupRef = useRef<() => void>();
+  const setNavRef = (el: HTMLElement | null) => {
+    navScrollCleanupRef.current?.();
+    navScrollCleanupRef.current = undefined;
+    if (!el) return;
+    const saved = sessionStorage.getItem('lw_sidebar_scroll');
+    if (saved) el.scrollTop = parseInt(saved, 10) || 0;
+    const onScroll = () => sessionStorage.setItem('lw_sidebar_scroll', String(el.scrollTop));
+    el.addEventListener('scroll', onScroll, { passive: true });
+    navScrollCleanupRef.current = () => el.removeEventListener('scroll', onScroll);
+  };
 
   useEffect(() => {
     const stored = typeof window !== 'undefined' ? localStorage.getItem('lw_sidebar_collapsed') : null;
     if (stored === '1') setCollapsed(true);
-  }, []);
-
-  useEffect(() => {
-    const el = navRef.current;
-    if (!el) return;
-    const saved = sessionStorage.getItem('lw_sidebar_scroll');
-    if (saved) el.scrollTop = parseInt(saved, 10) || 0;
-    function onScroll() {
-      sessionStorage.setItem('lw_sidebar_scroll', String(el!.scrollTop));
-    }
-    el.addEventListener('scroll', onScroll, { passive: true });
-    return () => el.removeEventListener('scroll', onScroll);
   }, []);
 
   useEffect(() => {
@@ -212,7 +217,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           )}
         </div>
 
-        <nav ref={navRef} className="flex-1 px-2 py-3 space-y-4 overflow-auto">
+        <nav ref={setNavRef} className="flex-1 px-2 py-3 space-y-4 overflow-auto">
           {NAV_GROUPS.map((g) => {
             const visible = g.items.filter((i) => {
               if (!i.perms || i.perms.length === 0) return true;
