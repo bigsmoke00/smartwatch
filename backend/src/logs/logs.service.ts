@@ -7,6 +7,12 @@ import { LogsGateway } from './logs.gateway';
 import { PG_POOL } from '../db/db.module';
 
 const LEVEL_REGEX = /\b(TRACE|DEBUG|INFO|WARN(?:ING)?|ERROR|ERR|FATAL|CRITICAL)\b/i;
+// Alguns containers (ex.: unity) logam o nível colorido via código ANSI, tipo
+// "\x1b[37minfo\x1b[0m" — sem isto, "37m" cola direto no "info" (ambos \w),
+// o \b do regex acima não encontra fronteira de palavra ali e o nível nunca
+// bate, caindo tudo em "unknown". Remove esses códigos antes de detectar
+// nível e antes de gravar a mensagem (senão fica "[ [37minfo [0m]" salvo).
+const ANSI_REGEX = /\x1b\[[0-9;]*[a-zA-Z]/g;
 const MAX_MESSAGE_LENGTH = Math.min(
   16_384,
   Math.max(512, parseInt(process.env.LOGWATCH_MAX_MESSAGE_LENGTH ?? '8192', 10)),
@@ -73,7 +79,10 @@ export class LogsService {
     const grouped = new Map<string, LogDoc>();
 
     for (const entry of entries) {
-      const message = entry.message.replace(/\u0000/g, '').slice(0, MAX_MESSAGE_LENGTH);
+      const message = entry.message
+        .replace(/\u0000/g, '')
+        .replace(ANSI_REGEX, '')
+        .slice(0, MAX_MESSAGE_LENGTH);
       if (!message) {
         rejected++;
         continue;
