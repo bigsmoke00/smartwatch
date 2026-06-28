@@ -191,12 +191,14 @@ export default function CaptureLiveView({ packets, totalParsed }: Props) {
   // visão expandida (tela cheia) — a inline embutida na tabela é boa pra um
   // resumo rápido, mas pra navegar à vontade entre diálogos/pacotes/fluxo de
   // chamada (tipo sngrep/Wireshark) cabe mais conteúdo em tela cheia.
-  // tela cheia: ligada manualmente (botão "tela cheia") ou automaticamente
-  // ao abrir um fluxo de chamada (clique numa linha). "← voltar" SEMPRE
-  // desliga (volta pra visão padrão embutida) — não tenta "lembrar" o
-  // estado de antes, porque essa lógica de lembrança é o que causava a
-  // tela ficar travada em tela cheia ao voltar.
   const [fullscreen, setFullscreen] = useState(false);
+  // lembra se a tela já estava em modo cheio ANTES de abrir um fluxo de
+  // chamada (clique na linha força fullscreen=true pra caber o diagrama) —
+  // assim "← voltar" restaura o estado de ANTES do clique: se você já
+  // estava em tela cheia vendo a lista, volta pra tela cheia (só troca o
+  // conteúdo pro diálogo); se estava na visão embutida normal, volta pra
+  // embutida. Sem isso, voltar sempre cai pra um dos dois extremos.
+  const fullscreenBeforeSelectRef = useRef(false);
 
   const dialogs = useMemo(() => buildDialogs(packets), [packets]);
   // Uniões manuais entre diálogos — pro caso (comum) de B2BUA sem nenhum
@@ -438,7 +440,7 @@ export default function CaptureLiveView({ packets, totalParsed }: Props) {
                   <tr
                     key={d.callId}
                     className="border-t border-border hover:bg-panel2 cursor-pointer"
-                    onClick={() => { setSelectedCallId(d.callId); setFullscreen(true); }}
+                    onClick={() => { fullscreenBeforeSelectRef.current = fullscreen; setSelectedCallId(d.callId); setFullscreen(true); }}
                   >
                     <td className="px-2 py-1" onClick={(e) => e.stopPropagation()}>
                       <input
@@ -486,7 +488,7 @@ export default function CaptureLiveView({ packets, totalParsed }: Props) {
           <CallFlow
             group={selectedGroup}
             allPackets={packets}
-            onBack={() => { setSelectedCallId(null); setFullscreen(false); }}
+            onBack={() => { setSelectedCallId(null); setFullscreen(fullscreenBeforeSelectRef.current); }}
           />
         </div>
       )}
