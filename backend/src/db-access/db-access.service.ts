@@ -51,6 +51,10 @@ export class DbAccessService {
     return this.pgMonitor.listClustersBasic();
   }
 
+  listDatabases(clusterId: string) {
+    return this.pgMonitor.listDatabasesForCluster(clusterId);
+  }
+
   private assertReadOnly(sql: string) {
     if (!/^\s*(SELECT|WITH)\b/i.test(sql.trim())) {
       throw new ForbiddenException('Só SELECT/WITH são permitidos em leitura direta — para UPDATE/INSERT/DELETE, abra um pedido de escrita.');

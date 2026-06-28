@@ -33,6 +33,10 @@ class DbAccessController {
   @Get('clusters')
   clusters() { return this.svc.listClusters(); }
 
+  @RequirePermission('db:query', 'db:write_request', 'db:write_approve')
+  @Get('clusters/:id/databases')
+  databases(@Param('id') id: string) { return this.svc.listDatabases(id); }
+
   @RequirePermission('db:query')
   @Audit('db.query')
   @Post('query')

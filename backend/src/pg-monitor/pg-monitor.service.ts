@@ -921,6 +921,22 @@ export class PgMonitorService implements OnModuleInit {
     return r.rows;
   }
 
+  /**
+   * Databases reais do servidor pra preencher o seletor da tela "Acesso a
+   * banco" — reusa listServerDatabases() (mesma lista que a coleta de
+   * métricas usa pra varrer todas as databases do cluster). Conecta na
+   * database padrão do cluster só pra rodar o SELECT em pg_database.
+   */
+  async listDatabasesForCluster(clusterId: string): Promise<string[]> {
+    const c = await this.cluster(clusterId);
+    const client = await this.getClient(c);
+    try {
+      return await this.listServerDatabases(client);
+    } finally {
+      await client.end();
+    }
+  }
+
   private async cluster(id: string): Promise<ClusterRow> {
     const r = await this.pool.query<ClusterRow>(
       `SELECT * FROM pg_clusters WHERE id=$1 AND deleted_at IS NULL`,

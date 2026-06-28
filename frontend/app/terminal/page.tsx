@@ -271,7 +271,7 @@ export default function TerminalPage() {
                 </button>
                 {showMappings && (
                   <div className="mt-3 space-y-3">
-                    <div className="grid md:grid-cols-5 gap-2 items-end text-xs">
+                    <div className="grid md:grid-cols-6 gap-2 items-end text-xs">
                       <div>
                         <label className="text-muted">Usuário (plataforma)</label>
                         <Select value={mapUserId} onChange={(e) => setMapUserId(e.target.value)} className="text-xs py-1.5">
@@ -290,9 +290,22 @@ export default function TerminalPage() {
                         <label className="text-muted">Usuário no SO</label>
                         <Input value={mapOsUser} onChange={(e) => setMapOsUser(e.target.value)} placeholder="ex: geraldo.cruz" />
                       </div>
-                      <label className="flex items-center gap-1"><input type="checkbox" checked={mapAllowRw} onChange={(e) => setMapAllowRw(e.target.checked)} /> permite leitura/escrita</label>
-                      <label className="flex items-center gap-1"><input type="checkbox" checked={mapAllowSudo} onChange={(e) => setMapAllowSudo(e.target.checked)} /> permite sudo</label>
-                      <Button onClick={saveMapping}>Salvar mapeamento</Button>
+                      <div>
+                        <label className="block text-muted">&nbsp;</label>
+                        <label className="flex items-center gap-1.5 h-[30px]">
+                          <input type="checkbox" checked={mapAllowRw} onChange={(e) => setMapAllowRw(e.target.checked)} /> permite leitura/escrita
+                        </label>
+                      </div>
+                      <div>
+                        <label className="block text-muted">&nbsp;</label>
+                        <label className="flex items-center gap-1.5 h-[30px]">
+                          <input type="checkbox" checked={mapAllowSudo} onChange={(e) => setMapAllowSudo(e.target.checked)} /> permite sudo
+                        </label>
+                      </div>
+                      <div>
+                        <label className="block text-muted">&nbsp;</label>
+                        <Button onClick={saveMapping} className="w-full">Salvar mapeamento</Button>
+                      </div>
                     </div>
                     <table className="w-full text-xs">
                       <thead className="text-muted uppercase">

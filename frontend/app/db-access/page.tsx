@@ -36,6 +36,8 @@ export default function DbAccessPage() {
   const [clusters, setClusters] = useState<Cluster[]>([]);
   const [clusterId, setClusterId] = useState('');
   const [database, setDatabase] = useState('');
+  const [databases, setDatabases] = useState<string[]>([]);
+  const [loadingDatabases, setLoadingDatabases] = useState(false);
 
   // ---- leitura ad-hoc ----
   const [sql, setSql] = useState('SELECT now()');
@@ -57,11 +59,24 @@ export default function DbAccessPage() {
   async function loadClusters() {
     setClusters(safeArray<Cluster>(await apiFetch('/db-access/clusters').catch(() => [])));
   }
+  async function loadDatabases(id: string) {
+    if (!id) { setDatabases([]); setDatabase(''); return; }
+    setLoadingDatabases(true);
+    try {
+      const dbs = safeArray<string>(await apiFetch(`/db-access/clusters/${id}/databases`).catch(() => []));
+      setDatabases(dbs);
+      // se a database escolhida antes não existe nesse cluster, volta pro padrão
+      setDatabase((prev) => (dbs.includes(prev) ? prev : ''));
+    } finally {
+      setLoadingDatabases(false);
+    }
+  }
   async function loadRequests() {
     const qs = onlyPending ? '?pending=true' : '';
     setRequests(safeArray<ReqRow>(await apiFetch(`/db-access/requests${qs}`).catch(() => [])));
   }
   useEffect(() => { loadClusters(); loadRequests(); const t = setInterval(loadRequests, 8_000); return () => clearInterval(t); }, [onlyPending]);
+  useEffect(() => { loadDatabases(clusterId); }, [clusterId]);
 
   const canQuery = hasPerm(perms, 'db:query');
   const canWriteRequest = hasPerm(perms, 'db:write_request');
@@ -138,8 +153,23 @@ export default function DbAccessPage() {
             </Select>
           </div>
           <div>
-            <label className="text-xs text-muted">Database (opcional)</label>
-            <Input value={database} onChange={(e) => setDatabase(e.target.value)} placeholder="ex: producao" />
+            <label className="text-xs text-muted">Database</label>
+            <Select
+              value={database}
+              onChange={(e) => setDatabase(e.target.value)}
+              disabled={!clusterId || loadingDatabases}
+            >
+              <option value="">
+                {!clusterId
+                  ? 'selecione um cluster primeiro'
+                  : loadingDatabases
+                    ? 'carregando…'
+                    : `padrão do cluster (${clusters.find((c) => c.id === clusterId)?.database ?? '—'})`}
+              </option>
+              {databases.map((d) => (
+                <option key={d} value={d}>{d}</option>
+              ))}
+            </Select>
           </div>
         </Card>
 
