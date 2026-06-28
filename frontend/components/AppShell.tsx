@@ -218,7 +218,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </div>
 
         <nav ref={setNavRef} className="flex-1 px-2 py-3 space-y-4 overflow-auto">
-          {NAV_GROUPS.map((g) => {
+          {(() => { const activeHref = matchNavItem(pathname)?.href; return NAV_GROUPS.map((g) => {
             const visible = g.items.filter((i) => {
               if (!i.perms || i.perms.length === 0) return true;
               return hasPerm(perms, ...i.perms);
@@ -234,9 +234,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 <div className="space-y-0.5">
                   {visible.map((n) => {
                     const Icon = n.icon;
-                    const active =
-                      pathname === n.href ||
-                      (n.href !== '/' && pathname.startsWith(n.href));
+                    const active = n.href === activeHref;
                     return (
                       <Link
                         key={n.href}
@@ -261,7 +259,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 </div>
               </div>
             );
-          })}
+          }); })()}
         </nav>
 
         <div className="p-2 border-t border-border space-y-1">
