@@ -124,10 +124,21 @@ download manual via `/exports`.
   `@nestjs/throttler`: **30 requisições/s** + **600/min** por IP.
 - A coluna `ts` é indexada (BRIN no hypertable); buscas com janela
   pequena são instantâneas mesmo em bilhões de linhas.
-- Logs ficam **14 dias** (retention policy do TimescaleDB —
-  `006_log_storage_optimization.sql`), comprimidos automaticamente algumas
-  horas após a ingestão. Se precisar reter por mais tempo, ajuste a policy
-  direto no banco ou exporte periodicamente via `/exports`.
+- Retenção é **configurável por servidor** (1 a 365 dias, campo
+  `servers.retention_days` — migration 019), aplicada por um job de hora em
+  hora (`LogsService.purgeExpiredLogs`) que faz `DELETE` linha a linha por
+  servidor — TimescaleDB não tem retenção nativa por linha, só por chunk
+  inteiro. A retention_policy nativa do TimescaleDB fica só como rede de
+  segurança a 400 dias (cobre servidor sem `retention_days` configurado).
+  Comprime automaticamente algumas horas após a ingestão.
+- **Importante**: esse `DELETE` libera espaço para o Postgres reutilizar
+  internamente, mas **não devolve o disco ao SO** — o arquivo do chunk não
+  encolhe. Por isso existe um `VACUUM (FULL, ANALYZE)` noturno (3h, opt-in via
+  `LOGWATCH_VACUUM_FULL_ENABLED=true`, ver `DbMaintenanceService`) que
+  reescreve as tabelas/chunks mais antigos e devolve o espaço de fato.
+  Testamos `pg_repack` antes (evitaria o lock exclusivo do VACUUM FULL), mas
+  ele é incompatível com chunks do TimescaleDB — rejeita o
+  `ALTER TABLE ... ENABLE ALWAYS TRIGGER` que precisa pra rodar sem lock.
 
 ## Troubleshooting
 

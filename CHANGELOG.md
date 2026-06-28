@@ -6,6 +6,43 @@ por versão — não é changelog de commit, é changelog de feature. Os 3
 com o mesmo número; é esse número que aparece no rodapé do menu (frontend) e
 no `GET /health` (backend) e no heartbeat do agent (`agentVersion`).
 
+## [Não lançado]
+
+### Correção: exclusão de usuário retornava 500
+- `DELETE /api/users/:id` quebrava com 500 cru quando o usuário tinha pedidos
+  de acesso a banco, capturas ou sessões de terminal vinculados — a constraint
+  tinha `NOT NULL` + `ON DELETE SET NULL` ao mesmo tempo (contraditório:
+  Postgres tenta zerar a coluna e viola o `NOT NULL`). `terminal_sessions`
+  estava ainda peor, com `ON DELETE CASCADE` (excluiria a sessão/gravação
+  inteira ao excluir o usuário).
+- Migrations `020_fix_requested_by_fk_action.sql` e
+  `021_requested_by_keep_audit_on_delete.sql`: `requested_by` agora aceita
+  NULL com `ON DELETE SET NULL` nas 3 tabelas, e cada uma ganhou uma coluna
+  `requested_by_email` (snapshot do e-mail no momento do pedido). Resultado:
+  **dá pra excluir o usuário e o histórico de auditoria continua legível**
+  (mostra o e-mail de quem pediu mesmo depois da conta não existir mais).
+  `UsersService.remove()` também não deixa mais erro de FK/constraint virar
+  500 — responde 400 com mensagem clara nesse caso.
+- Retenção de auditoria, pra referência: `audit_events` expira em 365 dias
+  (purga automática); `db_query_requests`, `capture_sessions` e
+  `terminal_sessions` **não expiram** (ficam pra sempre, salvo limpeza manual).
+
+### Manutenção: disco não encolhia após a retenção de logs
+- A purga horária de `logs` (por servidor, `retention_days`) faz `DELETE`, que
+  libera espaço pro Postgres reutilizar mas **não devolve disco ao SO** — só
+  uma reescrita da tabela/chunk (`VACUUM FULL` ou `pg_repack`) faz isso.
+- Testamos `pg_repack` em produção (evita o lock exclusivo do VACUUM FULL) e
+  ele **não é compatível com chunks do TimescaleDB** — erro
+  `operation not supported on chunk tables` no `ALTER TABLE ... ENABLE ALWAYS
+  TRIGGER` que o pg_repack precisa internamente. Não é problema de
+  configuração, é incompatibilidade conhecida.
+- Solução: `DbMaintenanceService` novo (`backend/src/db/db-maintenance.service.ts`),
+  job noturno (3h, `@Cron`) que roda `VACUUM (FULL, ANALYZE)` em **toda a
+  base** — chunks de hypertable com mais de 2 dias de idade (nunca no chunk
+  atual, que recebe insert em tempo real) + todas as tabelas normais do
+  schema `public`. Desligado por padrão — `LOGWATCH_VACUUM_FULL_ENABLED=true`
+  pra ativar (ver `.env.example`).
+
 ## [0.6.0] — 2026-06-25
 
 Antes desta versão o projeto não tinha um número de versão único nem
