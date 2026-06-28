@@ -37,12 +37,13 @@ export const config = {
   batchSize: Math.min(500, parseInt(process.env.LOGWATCH_BATCH_SIZE ?? '200', 10)),
   // Teto de BYTES por POST de ingest. batchSize sozinho (contagem) não basta:
   // com agrupamento multi-linha um evento tem vários KB, então 200 deles
-  // estouravam o limite de corpo do backend (413). Default 4MB — bem abaixo
-  // do limite do backend (LOGWATCH_INGEST_BODY_LIMIT, 25MB) pra dar folga ao
-  // overhead de JSON.
+  // estouravam o limite de corpo do backend (413). Default 100MB — o backend
+  // aceita com folga (LOGWATCH_INGEST_BODY_LIMIT, 150MB). Na prática o teto de
+  // contagem (batchSize=200) costuma fechar o lote antes, então isto é só a
+  // rede de segurança em bytes.
   maxBatchBytes: Math.max(
     65536,
-    parseInt(process.env.LOGWATCH_MAX_BATCH_BYTES ?? '4194304', 10),
+    parseInt(process.env.LOGWATCH_MAX_BATCH_BYTES ?? '104857600', 10),
   ),
   flushIntervalMs: parseInt(process.env.LOGWATCH_FLUSH_INTERVAL_MS ?? '2000', 10),
   maxBufferEntries: parseInt(process.env.LOGWATCH_MAX_BUFFER_ENTRIES ?? '5000', 10),

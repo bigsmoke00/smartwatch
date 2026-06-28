@@ -13,8 +13,11 @@ const LEVEL_REGEX = /\b(TRACE|DEBUG|INFO|WARN(?:ING)?|ERROR|ERR|FATAL|CRITICAL)\
 // bate, caindo tudo em "unknown". Remove esses códigos antes de detectar
 // nível e antes de gravar a mensagem (senão fica "[ [37minfo [0m]" salvo).
 const ANSI_REGEX = /\x1b\[[0-9;]*[a-zA-Z]/g;
+// Default 16KB; teto de 64KB pra dar margem se um evento (ex.: stack trace
+// gigante ou JSON com SDP grande) passar de 16KB — basta subir a env, sem
+// mexer no código. Alinha com o teto do agent (config.maxEventLength, 64KB).
 const MAX_MESSAGE_LENGTH = Math.min(
-  16_384,
+  65_536,
   Math.max(512, parseInt(process.env.LOGWATCH_MAX_MESSAGE_LENGTH ?? '16384', 10)),
 );
 const MAX_META_BYTES = Math.min(

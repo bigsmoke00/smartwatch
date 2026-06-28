@@ -16,7 +16,7 @@ async function bootstrap() {
   const app = await NestFactory.create(AppModule, { bufferLogs: true, bodyParser: false });
   app.useLogger(app.get(PinoLogger));
 
-  const bodyLimit = process.env.LOGWATCH_INGEST_BODY_LIMIT ?? '25mb';
+  const bodyLimit = process.env.LOGWATCH_INGEST_BODY_LIMIT ?? '150mb';
   app.use(json({ limit: bodyLimit }));
   app.use(urlencoded({ extended: true, limit: bodyLimit }));
 
