@@ -95,6 +95,16 @@ export default function TerminalPage() {
       .then(setLogin).catch(() => setLogin(null));
   }, [serverId]);
 
+  // Se o mapeamento desse servidor não libera leitura/escrita, força o modo
+  // pra "somente leitura" — o backend já faz esse downgrade silenciosamente
+  // (requestSession() em zero-trust.service.ts), mas deixar o Select mostrar
+  // "Leitura e escrita" como se fosse uma opção válida só confunde quem tá
+  // pedindo acesso. Mesma ideia do checkbox de sudo, que já fica desabilitado
+  // (disabled={!login.allowSudo}) — agora o Select se comporta igual.
+  useEffect(() => {
+    if (login && !login.allowReadwrite) setMode('readonly');
+  }, [login]);
+
   function loadMappings() {
     apiFetch<LoginMapping[]>('/terminal/logins').then((r) => setMappings(safeArray(r))).catch(() => setMappings([]));
     apiFetch<PlatformUser[]>('/users').then((r) => setUsers(safeArray(r))).catch(() => setUsers([]));
@@ -211,7 +221,9 @@ export default function TerminalPage() {
                     value={mode}
                     onChange={(e) => setMode(e.target.value as any)}
                   >
-                    <option value="readwrite">Leitura e escrita</option>
+                    <option value="readwrite" disabled={login ? !login.allowReadwrite : false}>
+                      Leitura e escrita{login && !login.allowReadwrite ? ' (não liberado pra você nesse servidor)' : ''}
+                    </option>
                     <option value="readonly">Somente leitura</option>
                   </Select>
                 </div>

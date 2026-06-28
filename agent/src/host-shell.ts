@@ -67,7 +67,19 @@ export interface HostSessionOpts {
   env?: Record<string, string>;
 }
 
-const READONLY_BLOCK = /\b(rm|rmdir|mv|dd|mkfs|shutdown|reboot|halt|poweroff|kill|pkill|killall|systemctl\s+(stop|restart|disable|kill)|service\s+\S+\s+(stop|restart)|iptables|ufw|truncate|chmod\s+(000|777)|chown|>\s*\/(?!tmp\/|dev\/null))\b/i;
+// OBS sobre os limites desse bloqueio: isso é um BLACKLIST de padrões na
+// linha digitada — funciona pra comandos shell de uma linha (rm, mv, dd,
+// redirecionamentos), mas NÃO impede escrita feita de dentro de um programa
+// full-screen interativo (nano/vim/etc.) depois que ele abre — uma vez
+// dentro do editor, as teclas não formam mais "uma linha de comando" pro
+// shell, então o regex nunca mais vê nada pra bloquear. Por isso agora
+// bloqueamos a ABERTURA desses editores/ferramentas de escrita direta
+// também (nano, vim, emacs, tee, sed -i, ...), e cobrimos ">>" além de ">"
+// no redirecionamento (antes só ">" sozinho escapava de "echo x >> /etc/...").
+// Mesmo assim isto continua sendo "rede de segurança" client-side, não uma
+// sandbox real — a garantia de verdade tem que vir da permissão do usuário
+// do SO (targetUser) no host, que é o que realmente impede escrita.
+const READONLY_BLOCK = /\b(rm|rmdir|mv|dd|mkfs|shutdown|reboot|halt|poweroff|kill|pkill|killall|systemctl\s+(stop|restart|disable|kill)|service\s+\S+\s+(stop|restart)|iptables|ufw|truncate|chmod\s+(000|777)|chown|nano|vim|nvim|vi|emacs|pico|joe|ed|tee|sed\s+-i|>>?\s*\/(?!tmp\/|dev\/null))\b/i;
 
 function shellQuoteUser(u: string): boolean {
   // Validação redundante à do backend — nunca confiamos só na outra ponta.
