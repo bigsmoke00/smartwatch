@@ -30,7 +30,13 @@ export interface DbQueryRequestRow {
 }
 
 const ROW_CAP = 500; // nunca devolve mais que isso pra UI/sample (não limita o que o UPDATE afeta no servidor)
-const READ_STATEMENT_TIMEOUT_MS = 15_000;
+// Isto já é um `SET statement_timeout` de verdade na sessão do Postgres (ver
+// queryRawWithTimeout() em pg-client.ts) — não é só o backend desistir de
+// esperar a resposta. Passado esse tempo o PRÓPRIO Postgres cancela a query
+// (erro "canceling statement due to statement timeout"), libera os locks e a
+// conexão, então um SELECT pesado numa tabela gigante nunca fica preso
+// consumindo CPU/IO indefinidamente e derrubando o cluster.
+const READ_STATEMENT_TIMEOUT_MS = 20_000;
 const WRITE_STATEMENT_TIMEOUT_MS = 30_000;
 
 /**
