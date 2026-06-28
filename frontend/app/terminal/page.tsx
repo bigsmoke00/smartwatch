@@ -288,7 +288,7 @@ export default function TerminalPage() {
                       </div>
                       <div>
                         <label className="text-muted">Usuário no SO</label>
-                        <Input value={mapOsUser} onChange={(e) => setMapOsUser(e.target.value)} placeholder="ex: geraldo.cruz" />
+                        <Input value={mapOsUser} onChange={(e) => setMapOsUser(e.target.value)} placeholder="ex: geraldo.cruz" className="text-xs py-1.5" />
                       </div>
                       <div>
                         <label className="block text-muted">&nbsp;</label>
