@@ -66,6 +66,19 @@ export async function attachLogs(docker: Docker, container: Docker.Container) {
   });
 
   let pending = Buffer.alloc(0);
+  // Uma linha de log "lógica" pode chegar fatiada em mais de um frame do
+  // protocolo multiplexado do Docker — acontece sobretudo com linhas
+  // grandes (várias KB, ex.: um JSON com SDP embutido), onde o daemon quebra
+  // a escrita original em vários frames. Sem isto, cada frame era tratado
+  // como um conjunto de linhas JÁ completas (`payload.split('\n')` direto):
+  // um frame que terminasse no meio de uma linha gerava uma "linha" parcial
+  // sem o prefixo "[info]"/"[error]" (daí o nível cair pra UNKNOWN no
+  // backend) e a continuação no frame seguinte virava outra linha solta,
+  // dando a impressão de linhas inteiras desaparecendo na plataforma.
+  // `lineCarry` guarda o pedaço de linha ainda sem `\n` no final entre um
+  // frame e o próximo, igual um buffer de "linha incompleta" de qualquer
+  // parser de stream linha-a-linha.
+  let lineCarry = '';
   (stream as NodeJS.ReadableStream).on('data', (chunk: Buffer) => {
     pending = Buffer.concat([pending, chunk]);
     while (pending.length >= 8) {
@@ -74,7 +87,12 @@ export async function attachLogs(docker: Docker, container: Docker.Container) {
       if (pending.length < 8 + size) break;
       const payload = pending.subarray(8, 8 + size).toString('utf8');
       pending = pending.subarray(8 + size);
-      for (const line of payload.split('\n')) {
+      const parts = (lineCarry + payload).split('\n');
+      // Último elemento só é uma linha completa se o payload deste frame
+      // terminava em '\n'; senão é o início da próxima linha, que continua
+      // no próximo frame — guarda em lineCarry em vez de processar agora.
+      lineCarry = parts.pop() ?? '';
+      for (const line of parts) {
         if (!line) continue;
         const idx = line.indexOf(' ');
         const ts = idx > 0 ? line.slice(0, idx) : new Date().toISOString();
@@ -95,8 +113,25 @@ export async function attachLogs(docker: Docker, container: Docker.Container) {
       }
     }
   });
-  (stream as NodeJS.ReadableStream).on('end', () => tracking.delete(id));
-  (stream as NodeJS.ReadableStream).on('error', () => tracking.delete(id));
+  function flushCarry() {
+    if (!lineCarry) return;
+    const line = lineCarry;
+    lineCarry = '';
+    const idx = line.indexOf(' ');
+    const ts = idx > 0 ? line.slice(0, idx) : new Date().toISOString();
+    const msg = idx > 0 ? line.slice(idx + 1) : line;
+    const cleanMessage = msg.replace(/\u0000/g, '').slice(0, config.maxLineLength);
+    if (!cleanMessage) return;
+    enqueue({ ts, containerId: id, containerName: name, image, stream: 'stdout', message: cleanMessage });
+  }
+  (stream as NodeJS.ReadableStream).on('end', () => {
+    flushCarry();
+    tracking.delete(id);
+  });
+  (stream as NodeJS.ReadableStream).on('error', () => {
+    flushCarry();
+    tracking.delete(id);
+  });
 }
 
 export async function flushLogs() {
