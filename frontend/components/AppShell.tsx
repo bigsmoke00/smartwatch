@@ -124,10 +124,28 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const [collapsed, setCollapsed] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
+  // a <nav> da sidebar é recriada do zero a cada navegação (cada page.tsx
+  // monta seu próprio <AppShell>, não tem layout persistente no app router
+  // ainda) — sem isto, scrollTop sempre volta a 0 ao clicar em qualquer
+  // item do menu. sessionStorage (não state) porque precisa sobreviver ao
+  // unmount/remount do componente inteiro.
+  const navRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
     const stored = typeof window !== 'undefined' ? localStorage.getItem('lw_sidebar_collapsed') : null;
     if (stored === '1') setCollapsed(true);
+  }, []);
+
+  useEffect(() => {
+    const el = navRef.current;
+    if (!el) return;
+    const saved = sessionStorage.getItem('lw_sidebar_scroll');
+    if (saved) el.scrollTop = parseInt(saved, 10) || 0;
+    function onScroll() {
+      sessionStorage.setItem('lw_sidebar_scroll', String(el!.scrollTop));
+    }
+    el.addEventListener('scroll', onScroll, { passive: true });
+    return () => el.removeEventListener('scroll', onScroll);
   }, []);
 
   useEffect(() => {
@@ -194,7 +212,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           )}
         </div>
 
-        <nav className="flex-1 px-2 py-3 space-y-4 overflow-auto">
+        <nav ref={navRef} className="flex-1 px-2 py-3 space-y-4 overflow-auto">
           {NAV_GROUPS.map((g) => {
             const visible = g.items.filter((i) => {
               if (!i.perms || i.perms.length === 0) return true;
