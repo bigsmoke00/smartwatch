@@ -1,5 +1,6 @@
 import { Global, Module } from '@nestjs/common';
 import { Pool } from 'pg';
+import { DbMaintenanceService } from './db-maintenance.service';
 
 export const PG_POOL = 'PG_POOL';
 
@@ -20,6 +21,7 @@ export const PG_POOL = 'PG_POOL';
           // ssl: process.env.PG_SSL === 'true' ? { rejectUnauthorized: false } : false,
         }),
     },
+    DbMaintenanceService,
   ],
   exports: [PG_POOL],
 })
