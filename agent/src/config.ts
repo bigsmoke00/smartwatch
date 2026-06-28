@@ -35,6 +35,15 @@ export const config = {
   heartbeatUrl: process.env.LOGWATCH_HEARTBEAT_URL || `${baseUrl()}/inventory/heartbeat`,
   serverName: process.env.LOGWATCH_SERVER_NAME ?? 'unknown',
   batchSize: Math.min(500, parseInt(process.env.LOGWATCH_BATCH_SIZE ?? '200', 10)),
+  // Teto de BYTES por POST de ingest. batchSize sozinho (contagem) não basta:
+  // com agrupamento multi-linha um evento tem vários KB, então 200 deles
+  // estouravam o limite de corpo do backend (413). Default 4MB — bem abaixo
+  // do limite do backend (LOGWATCH_INGEST_BODY_LIMIT, 25MB) pra dar folga ao
+  // overhead de JSON.
+  maxBatchBytes: Math.max(
+    65536,
+    parseInt(process.env.LOGWATCH_MAX_BATCH_BYTES ?? '4194304', 10),
+  ),
   flushIntervalMs: parseInt(process.env.LOGWATCH_FLUSH_INTERVAL_MS ?? '2000', 10),
   maxBufferEntries: parseInt(process.env.LOGWATCH_MAX_BUFFER_ENTRIES ?? '5000', 10),
   maxLineLength: Math.min(

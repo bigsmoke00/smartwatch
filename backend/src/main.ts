@@ -4,11 +4,21 @@ import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { Logger as PinoLogger } from 'nestjs-pino';
 import helmet from 'helmet';
 import compression from 'compression';
+import { json, urlencoded } from 'express';
 import { AppModule } from './app.module';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule, { bufferLogs: true });
+  // bodyParser:false pra registrar o parser JSON com limite próprio. O default
+  // do Express é 100kb — e o /ingest do agent manda lotes que passam disso
+  // (sobretudo com agrupamento multi-linha, onde 1 evento tem vários KB, e
+  // com taxa de captura alta). Sem isto o backend respondia 413 "request
+  // entity too large" e o agent dropava TODOS os logs ("dropped N lines").
+  const app = await NestFactory.create(AppModule, { bufferLogs: true, bodyParser: false });
   app.useLogger(app.get(PinoLogger));
+
+  const bodyLimit = process.env.LOGWATCH_INGEST_BODY_LIMIT ?? '25mb';
+  app.use(json({ limit: bodyLimit }));
+  app.use(urlencoded({ extended: true, limit: bodyLimit }));
 
   app.setGlobalPrefix('api');
   app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));

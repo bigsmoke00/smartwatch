@@ -198,7 +198,21 @@ export async function flushLogs() {
   if (flushing || buffer.length === 0) return;
   flushing = true;
   try {
-    const batch = buffer.splice(0, config.batchSize);
+    // Monta o lote respeitando TETO DE BYTES (não só contagem). Com
+    // agrupamento multi-linha um único evento pode ter vários KB; mandar 200
+    // de uma vez estourava o limite de corpo do backend e voltava 413,
+    // dropando tudo. Sempre inclui ao menos 1 entrada pra não travar caso ela
+    // sozinha já passe do teto.
+    let count = 0;
+    let bytes = 0;
+    while (count < buffer.length && count < config.batchSize) {
+      // +256: folga p/ nomes de campo, aspas e escapes do JSON por entrada.
+      const entryBytes = Buffer.byteLength(buffer[count].message, 'utf8') + 256;
+      if (count > 0 && bytes + entryBytes > config.maxBatchBytes) break;
+      bytes += entryBytes;
+      count++;
+    }
+    const batch = buffer.splice(0, count);
     const ok = await postJson(config.ingestUrl, { entries: batch });
     if (!ok) console.warn(`[agent] dropped ${batch.length} log lines after retries`);
   } finally {
