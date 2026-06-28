@@ -1,6 +1,7 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import dynamic from 'next/dynamic';
 import { AppShell } from '@/components/AppShell';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
@@ -12,6 +13,29 @@ import { apiFetch, ApiError } from '@/lib/api';
 import { loadMyPermissions, hasPerm } from '@/lib/perms';
 import { fmtTime, safeArray } from '@/lib/utils';
 import { TerminalSquare } from 'lucide-react';
+
+// Monaco é client-only — carrega via dynamic import (mesmo padrão do Script Manager)
+const Editor = dynamic(() => import('@monaco-editor/react').then((m) => m.default), { ssr: false });
+
+/**
+ * Quebra o texto do editor em instruções separadas por ";", guardando o
+ * range [start,end) de cada uma no texto original — usado pra descobrir em
+ * qual instrução o cursor está (sem precisar apagar/reescrever pra rodar só
+ * uma, tipo Metabase/DBeaver). Split simples por ";" é suficiente pro nosso
+ * caso (SQL ad-hoc de análise); não tenta lidar com ";" dentro de strings.
+ */
+function splitStatements(sqlText: string): { text: string; start: number; end: number }[] {
+  const out: { text: string; start: number; end: number }[] = [];
+  let start = 0;
+  for (let i = 0; i < sqlText.length; i++) {
+    if (sqlText[i] === ';') {
+      out.push({ text: sqlText.slice(start, i), start, end: i });
+      start = i + 1;
+    }
+  }
+  if (start <= sqlText.length) out.push({ text: sqlText.slice(start), start, end: sqlText.length });
+  return out;
+}
 
 interface Cluster { id: string; name: string; database: string }
 interface QueryResult { rows: any[]; rowCount: number; truncated: boolean; tookMs: number }
@@ -44,6 +68,13 @@ export default function DbAccessPage() {
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<QueryResult | null>(null);
   const [queryError, setQueryError] = useState<string | null>(null);
+  // instrução "ativa" (sob o cursor, ou selecionada) — é só ela que roda ao
+  // clicar Executar/Ctrl+Enter, mesmo com várias instruções no editor.
+  const [activeStatement, setActiveStatement] = useState('');
+  const editorRef = useRef<any>(null);
+  const monacoRef = useRef<any>(null);
+  const decorationsRef = useRef<string[]>([]);
+  const runQueryRef = useRef<() => void>(() => {});
 
   // ---- pedido de escrita ----
   const [writeSql, setWriteSql] = useState('');
@@ -82,13 +113,57 @@ export default function DbAccessPage() {
   const canWriteRequest = hasPerm(perms, 'db:write_request');
   const canApprove = hasPerm(perms, 'db:write_approve');
 
+  /** Descobre qual instrução deve rodar: texto selecionado tem prioridade;
+   * senão, a instrução (separada por ";") onde o cursor está. */
+  function computeActiveStatement(): { text: string; range: any | null } {
+    const editor = editorRef.current;
+    if (!editor) return { text: sql, range: null };
+    const model = editor.getModel();
+    if (!model) return { text: sql, range: null };
+    const sel = editor.getSelection();
+    const selectedText = sel ? model.getValueInRange(sel) : '';
+    if (selectedText.trim()) return { text: selectedText, range: sel };
+    const pos = editor.getPosition();
+    const offset = pos ? model.getOffsetAt(pos) : model.getValue().length;
+    const stmts = splitStatements(model.getValue()).filter((s) => s.text.trim());
+    if (!stmts.length) return { text: '', range: null };
+    const cur = stmts.find((s) => offset >= s.start && offset <= s.end) ?? stmts[stmts.length - 1];
+    const monacoNS = monacoRef.current;
+    const startPos = model.getPositionAt(cur.start);
+    const endPos = model.getPositionAt(cur.end);
+    const range = monacoNS ? new monacoNS.Range(startPos.lineNumber, startPos.column, endPos.lineNumber, endPos.column) : null;
+    return { text: cur.text, range };
+  }
+
+  function highlightActiveStatement() {
+    const editor = editorRef.current;
+    if (!editor) return;
+    const { text, range } = computeActiveStatement();
+    setActiveStatement(text.trim());
+    decorationsRef.current = editor.deltaDecorations(
+      decorationsRef.current,
+      range ? [{ range, options: { inlineClassName: 'sql-active-stmt' } }] : [],
+    );
+  }
+
+  function handleEditorMount(editor: any, monacoNS: any) {
+    editorRef.current = editor;
+    monacoRef.current = monacoNS;
+    editor.onDidChangeCursorPosition(() => highlightActiveStatement());
+    editor.onDidChangeModelContent(() => highlightActiveStatement());
+    // Ctrl/Cmd+Enter roda a instrução ativa, sem precisar tirar a mão do teclado.
+    editor.addCommand(monacoNS.KeyMod.CtrlCmd | monacoNS.KeyCode.Enter, () => runQueryRef.current());
+    highlightActiveStatement();
+  }
+
   async function runQuery() {
-    if (!clusterId || !sql.trim()) return alert('selecione um cluster e informe o SQL');
+    const toRun = (computeActiveStatement().text || sql).trim();
+    if (!clusterId || !toRun) return alert('selecione um cluster e informe o SQL');
     setRunning(true); setQueryError(null); setResult(null);
     try {
       const r = await apiFetch<QueryResult>('/db-access/query', {
         method: 'POST',
-        body: JSON.stringify({ clusterId, database: database.trim() || undefined, sql }),
+        body: JSON.stringify({ clusterId, database: database.trim() || undefined, sql: toRun }),
       });
       setResult(r);
     } catch (e) {
@@ -97,6 +172,7 @@ export default function DbAccessPage() {
       setRunning(false);
     }
   }
+  runQueryRef.current = runQuery;
 
   async function submitWriteRequest() {
     if (!clusterId || !writeSql.trim() || !writeReason.trim()) {
@@ -107,7 +183,7 @@ export default function DbAccessPage() {
         method: 'POST',
         body: JSON.stringify({
           clusterId, database: database.trim() || undefined, sql: writeSql, reason: writeReason,
-          contextQuery: sql.trim() || undefined,
+          contextQuery: (activeStatement || sql).trim() || undefined,
         }),
       });
       setWriteSql(''); setWriteReason(''); setShowWriteForm(false);
@@ -175,13 +251,30 @@ export default function DbAccessPage() {
 
         {canQuery && (
           <Card className="p-4 space-y-2">
-            <label className="text-xs text-muted">SELECT / WITH (leitura — sem aprovação)</label>
-            <textarea
-              value={sql} onChange={(e) => setSql(e.target.value)}
-              rows={4}
-              className="w-full rounded-md bg-panel2 border border-border px-3 py-2 text-sm font-mono"
-              placeholder="SELECT * FROM ..."
-            />
+            <div className="flex items-center justify-between">
+              <label className="text-xs text-muted">SELECT / WITH (leitura — sem aprovação)</label>
+              <span className="text-2xs text-mutedFaint">
+                várias instruções separadas por <code>;</code> — o cursor escolhe qual roda (ou selecione um trecho) · Ctrl+Enter executa
+              </span>
+            </div>
+            <div className="rounded-md border border-border overflow-hidden" style={{ height: 220 }}>
+              <Editor
+                language="sql"
+                theme="vs-dark"
+                value={sql}
+                onChange={(v) => setSql(v ?? '')}
+                onMount={handleEditorMount}
+                options={{
+                  fontSize: 13, minimap: { enabled: false }, automaticLayout: true,
+                  scrollBeyondLastLine: false, renderWhitespace: 'selection', lineNumbers: 'on',
+                }}
+              />
+            </div>
+            {activeStatement && (
+              <div className="text-2xs text-muted truncate">
+                vai executar: <span className="font-mono text-text">{activeStatement}</span>
+              </div>
+            )}
             <div className="flex gap-2">
               <Button onClick={runQuery} disabled={running}>{running ? 'Executando…' : 'Executar'}</Button>
               {canWriteRequest && (

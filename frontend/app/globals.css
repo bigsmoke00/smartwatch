@@ -15,6 +15,13 @@ body {
   box-sizing: border-box;
 }
 
+/* Destaque (Monaco) da instrução SQL "ativa" (sob o cursor ou selecionada)
+   na tela "Acesso a banco" — mesma ideia do Metabase/DBeaver: escreve várias
+   instruções separadas por ; e só a instrução em destaque é executada. */
+.sql-active-stmt {
+  background-color: rgba(124, 108, 255, 0.18);
+}
+
 ::selection {
   background: rgba(124, 108, 255, 0.35);
   color: #fff;
