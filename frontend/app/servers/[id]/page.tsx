@@ -9,7 +9,7 @@ import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { apiFetch, Auth } from '@/lib/api';
-import { Copy, Key, Trash2, Server as ServerIcon } from 'lucide-react';
+import { ArrowLeft, Copy, Key, Trash2, Server as ServerIcon } from 'lucide-react';
 import { fmtTime, safeArray } from '@/lib/utils';
 
 interface Detail {
@@ -63,6 +63,13 @@ export default function ServerDetail() {
   return (
     <AppShell>
       <div className="p-6 space-y-4 max-w-4xl">
+        <Link
+          href="/servers"
+          className="inline-flex items-center gap-1.5 text-sm text-muted hover:text-text"
+        >
+          <ArrowLeft size={14} /> Voltar para servidores
+        </Link>
+
         <PageHeader
           title={detail.name}
           description={detail.description || 'Detalhes do servidor, chaves de API e instalação do agent.'}
