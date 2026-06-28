@@ -1,9 +1,15 @@
 import { Global, Module } from '@nestjs/common';
 import { Pool } from 'pg';
-import { DbMaintenanceService } from './db-maintenance.service';
 
 export const PG_POOL = 'PG_POOL';
 
+// Importante: este módulo NÃO deve importar nada de `../db-maintenance` (ou
+// de qualquer outro módulo que importe PG_POOL daqui) — isso cria um import
+// circular que, em CommonJS, faz PG_POOL chegar `undefined` no @Inject do
+// outro lado (já aconteceu: DbMaintenanceService ficava sem dependência
+// resolvida no boot, derrubando o backend). DbModule é @Global(), então
+// qualquer módulo pode importar PG_POOL de aqui livremente, só não o
+// inverso.
 @Global()
 @Module({
   providers: [
@@ -21,7 +27,6 @@ export const PG_POOL = 'PG_POOL';
           // ssl: process.env.PG_SSL === 'true' ? { rejectUnauthorized: false } : false,
         }),
     },
-    DbMaintenanceService,
   ],
   exports: [PG_POOL],
 })

@@ -1,90 +1,85 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
-import { Cron, CronExpression } from '@nestjs/schedule';
-import { execFile } from 'child_process';
-import { promisify } from 'util';
+import { Cron } from '@nestjs/schedule';
 import { Pool } from 'pg';
 import { PG_POOL } from '../db/db.module';
 
-const execFileAsync = promisify(execFile);
-
 /**
- * Reclama o espaço em disco perdido por bloat do MVCC (DELETE/UPDATE não
- * devolvem espaço pro SO sozinhos — só VACUUM FULL ou pg_repack fazem isso).
+ * VACUUM FULL noturno (3h) de TODA a base — não só `logs`.
  *
- * Por que pg_repack e não VACUUM FULL: o pg_repack reconstrói a tabela em
- * background e faz uma troca atômica no final (segundos), sem o lock
- * ACCESS EXCLUSIVE de longa duração do VACUUM FULL — a ingestão de logs não
- * para durante a rotina.
+ * Contexto: vários módulos guardam histórico em hypertables (logs,
+ * audit_events, script_executions, terminal_session_events, pg_metrics,
+ * etc.) e algumas tabelas normais também acumulam bloat com o tempo. Boa
+ * parte usa retention_policy nativa do TimescaleDB (drop_chunks — devolve
+ * o espaço ao SO na hora), mas `logs` em particular usa DELETE manual por
+ * servidor (retenção configurável por servidor, ver migration 019), e
+ * DELETE não devolve espaço ao SO até alguém reescrever a tabela/chunk.
  *
- * Por que isso roda DENTRO do backend (e não num sidecar/scheduler externo
- * como ofelia): a app já carrega as credenciais do próprio banco (mesmas
- * env vars do DbModule) e essa rotina precisa sobreviver à futura migração
- * do Postgres de container Docker para uma instância compilada standalone —
- * conectar via host:port comum (como qualquer client psql) é o que torna
- * isso portável, sem depender de `docker exec` ou de hostname de container.
+ * Testamos pg_repack em produção pra resolver isso (era a abordagem
+ * anterior deste mesmo serviço) e o TimescaleDB rejeita — chunks não
+ * aceitam o `ALTER TABLE ... ENABLE ALWAYS TRIGGER` que o pg_repack precisa
+ * pra funcionar sem lock ("operation not supported on chunk tables"). Não é
+ * erro de instalação, é incompatibilidade conhecida entre pg_repack e
+ * hypertables. Por isso usamos VACUUM (FULL, ANALYZE) direto — funciona em
+ * qualquer tabela normal e em chunk de hypertable.
  *
- * Segurança: a senha NUNCA aparece em argv/log — só é passada via `env` do
- * subprocesso (mesmo padrão de um .pgpass), e nenhum stdout/stderr é
- * persistido em lugar nenhum além do log de aplicação (não vai pra tabela
- * de auditoria).
+ * VACUUM FULL toma lock exclusivo NA TABELA/CHUNK (não no banco todo)
+ * durante a execução — por isso:
+ *   - só processamos chunks cujo intervalo de tempo já terminou há pelo
+ *     menos 2 dias, pra nunca travar o chunk atual de nenhuma hypertable
+ *     (que ainda recebe inserts em tempo real);
+ *   - tabelas normais (schema public, não-hypertable) são tipicamente
+ *     pequenas (config/cadastro), processadas uma por vez, lock breve.
+ *
+ * DESLIGADO por padrão — LOGWATCH_VACUUM_FULL_ENABLED=true pra ativar.
+ *
+ * Importante: este serviço/módulo importa PG_POOL de `../db/db.module`
+ * numa via só (DbModule não importa este módulo de volta) — não inverter
+ * essa direção, senão volta o import circular que já quebrou o boot uma vez
+ * (PG_POOL chegava `undefined` no @Inject por causa da ordem de avaliação
+ * dos requires em CommonJS).
  */
 @Injectable()
 export class DbMaintenanceService {
   private readonly logger = new Logger(DbMaintenanceService.name);
-  private running = false;
 
   constructor(@Inject(PG_POOL) private readonly pool: Pool) {}
 
-  @Cron(CronExpression.EVERY_DAY_AT_3AM)
-  async runPgRepack() {
-    if (this.running) {
-      this.logger.warn('pg_repack: execução anterior ainda em andamento, pulando este ciclo');
-      return;
-    }
-    this.running = true;
-    const startedAt = Date.now();
-    try {
-      await this.ensureExtension();
-
-      const host = process.env.POSTGRES_HOST ?? 'postgres';
-      const port = process.env.POSTGRES_PORT ?? '5432';
-      const user = process.env.POSTGRES_USER ?? '';
-      const database = process.env.POSTGRES_DB ?? '';
-      const password = process.env.POSTGRES_PASSWORD ?? '';
-
-      this.logger.log(`pg_repack: iniciando manutenção noturna em ${database}@${host}:${port}`);
-
-      // --no-superuser-check: o usuário da app normalmente não é superuser.
-      // Tabelas sem chave primária/índice único caem no modo --no-order, que
-      // trava igual VACUUM FULL — aceitável aqui pois roda fora do horário
-      // de pico (3h) e é melhor que nunca reclamar o espaço.
-      const { stdout, stderr } = await execFileAsync(
-        'pg_repack',
-        ['-h', host, '-p', port, '-U', user, '-d', database, '--no-superuser-check', '-j', '2'],
-        {
-          env: { ...process.env, PGPASSWORD: password },
-          timeout: 2 * 60 * 60 * 1000, // 2h de teto de segurança
-        },
-      );
-
-      if (stdout?.trim()) this.logger.log(`pg_repack stdout: ${stdout.trim()}`);
-      if (stderr?.trim()) this.logger.warn(`pg_repack stderr: ${stderr.trim()}`);
-
-      const elapsedSec = Math.round((Date.now() - startedAt) / 1000);
-      this.logger.log(`pg_repack: concluído em ${elapsedSec}s`);
-    } catch (e: any) {
-      // e.cmd pode conter os argumentos (sem senha, ela só vai via env) —
-      // ainda assim logamos só a mensagem, nunca o objeto de erro inteiro.
-      this.logger.error(`pg_repack: falhou — ${e?.message ?? e}`);
-    } finally {
-      this.running = false;
-    }
+  @Cron('0 3 * * *')
+  async runFullVacuum() {
+    if (process.env.LOGWATCH_VACUUM_FULL_ENABLED !== 'true') return;
+    return this.vacuumAll();
   }
 
-  private async ensureExtension() {
-    // Idempotente — só cria na primeira vez (volumes já existentes não vêm
-    // com a extensão criada, mesmo já tendo os arquivos da extensão na
-    // imagem do Postgres).
-    await this.pool.query('CREATE EXTENSION IF NOT EXISTS pg_repack;');
+  async vacuumAll() {
+    const targets = await this.pool.query<{ target: string }>(
+      `SELECT chunk_schema || '.' || chunk_name AS target
+         FROM timescaledb_information.chunks
+        WHERE range_end < now() - interval '2 days'
+       UNION ALL
+       SELECT schemaname || '.' || tablename AS target
+         FROM pg_tables
+        WHERE schemaname = 'public'
+       ORDER BY 1`,
+    );
+    if (!targets.rowCount) {
+      this.logger.log('VACUUM FULL: nenhuma tabela/chunk elegível encontrada');
+      return { ok: 0, failed: 0 };
+    }
+
+    let ok = 0;
+    let failed = 0;
+    for (const t of targets.rows) {
+      const [schema, name] = t.target.split('.');
+      const table = `"${schema}"."${name}"`;
+      try {
+        await this.pool.query(`VACUUM (FULL, ANALYZE) ${table}`);
+        ok++;
+      } catch (e: any) {
+        failed++;
+        this.logger.error(`VACUUM FULL falhou em ${table}: ${e?.message ?? e}`);
+      }
+    }
+    this.logger.log(`VACUUM FULL: ${ok} tabela(s)/chunk(s) ok, ${failed} falha(s)`);
+    return { ok, failed };
   }
 }
