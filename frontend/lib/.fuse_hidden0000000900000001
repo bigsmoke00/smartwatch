@@ -442,12 +442,10 @@ function dedupeSipMessages(msgs: ParsedPacket[]): ParsedPacket[] {
   const out: ParsedPacket[] = [];
   const firstSeen = new Map<string, number>();
   for (const m of sorted) {
-    // Chave SEM porta nem direcao: copias do mesmo pacote (fio + duplicado HEP,
-    // ou multi-interface) podem vir com porta diferente e ate src/dst trocados
-    // pelo HEP, virando seta paralela/oposta pra mesma mensagem. Identifica pela
-    // mensagem (metodo/status + CSeq + texto) + par de IPs ordenado.
-    const ipPair = [m.srcIp ?? "", m.dstIp ?? ""].sort().join("><");
-    const key = [ipPair, m.sipMethodOrStatus, m.sipCseqMethod, m.sipText].join("|");
+    const key = [
+      m.srcIp, m.srcPort, m.dstIp, m.dstPort,
+      m.sipMethodOrStatus, m.sipCseqMethod, m.sipText,
+    ].join('');
     const prev = firstSeen.get(key);
     if (prev != null && m.relTime - prev <= DUP_WINDOW_S) continue;
     firstSeen.set(key, m.relTime);

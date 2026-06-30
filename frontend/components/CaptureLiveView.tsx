@@ -613,10 +613,13 @@ function CallFlow({ group, allPackets, onBack }: { group: CallGroup; allPackets:
 
   const rtpFlows = useMemo(() => buildRtpFlows(group, allPackets), [group, allPackets]);
   const events = useMemo(() => buildFlowEvents(group, rtpFlows), [group, rtpFlows]);
-  // Estado da ligação inteira, ciente de mídia: se há RTP correlacionado, a
-  // chamada conectou mesmo que o 200 OK não tenha sido capturado (early media
-  // ou captura parcial). Vale tanto pro grupo ligado quanto pro diálogo solo.
-  const callStateInfo = stateInfo(groupState(group, rtpFlows.length > 0));
+  // Estado da ligação inteira (só sinalização — igual à lista, sem divergir).
+  const callState = groupState(group);
+  const callStateInfo = stateInfo(callState);
+  // "Houve mídia mas não foi atendida" = early media (183 + RTP de
+  // ringback/IVR). Mostrado SEPARADO do estado, pra não confundir tocando-com-
+  // áudio com chamada atendida (200 OK).
+  const hasEarlyMedia = rtpFlows.length > 0 && (callState === 'ringing' || callState === 'calling');
 
   const ips = useMemo(() => {
     const seen: string[] = [];
@@ -674,13 +677,15 @@ function CallFlow({ group, allPackets, onBack }: { group: CallGroup; allPackets:
           {isLinked ? (
             <>
               fluxo de chamada — 🔗 {group.callIds.length} pernas {group.manual ? '(união manual)' : 'via X-Call-ID/X-CID'} · estado:{' '}
-              <span className={callStateInfo.className}>{callStateInfo.label}</span> ·{' '}
+              <span className={callStateInfo.className}>{callStateInfo.label}</span>
+              {hasEarlyMedia && <span className="text-cyan-400"> + early media</span>} ·{' '}
               <span className="text-cyan-200">{group.callIds.join('  +  ')}</span>
             </>
           ) : (
             <>
               fluxo de chamada — <span className="text-cyan-200">{group.id}</span> · estado:{' '}
               <span className={callStateInfo.className}>{callStateInfo.label}</span>
+              {hasEarlyMedia && <span className="text-cyan-400"> + early media</span>}
             </>
           )}
         </div>
@@ -758,7 +763,10 @@ function CallFlow({ group, allPackets, onBack }: { group: CallGroup; allPackets:
                 <g key={i} onClick={() => setSelectedItem({ kind: 'rtp', flow: f })} className="cursor-pointer">
                   <text x={6} y={y - 5} fontSize={10.5} className="fill-current text-muted">{fmtT(f.firstRelTime)}s</text>
                   <text x={6} y={y + 9} fontSize={9.5} fill="#39c5cf">+{fmtT(delta)}</text>
-                  <line x1={x1} y1={y} x2={x2} y2={y} stroke="#39c5cf" strokeWidth={1.5} strokeDasharray="6,3" markerEnd="url(#arrowRtp)" />
+                  {/* RTP é mídia BIDIRECIONAL — seta dupla, não um sentido só
+                      (o fluxo é áudio nos dois sentidos, não uma transação
+                      request→response como o SIP). */}
+                  <line x1={x1} y1={y} x2={x2} y2={y} stroke="#39c5cf" strokeWidth={1.5} strokeDasharray="6,3" markerStart="url(#arrowRtp)" markerEnd="url(#arrowRtp)" />
                   <text x={(x1 + x2) / 2} y={y - 6} textAnchor="middle" fontSize={11.5} fill="#39c5cf" fontWeight={600}>
                     RTP {f.codec ? `(${f.codec}) ` : ''}{f.packetCount} pacotes
                   </text>
@@ -775,7 +783,7 @@ function CallFlow({ group, allPackets, onBack }: { group: CallGroup; allPackets:
               <marker id="arrow" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
                 <path d="M0,0 L6,3 L0,6 Z" fill="currentColor" className="text-muted" />
               </marker>
-              <marker id="arrowRtp" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+              <marker id="arrowRtp" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto-start-reverse">
                 <path d="M0,0 L6,3 L0,6 Z" fill="#39c5cf" />
               </marker>
             </defs>

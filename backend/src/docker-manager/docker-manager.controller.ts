@@ -72,7 +72,7 @@ export class DockerManagerController {
     return this.ctrl.invoke(serverId, 'restartContainer', { id });
   }
 
-  @RequirePermission('docker:control')
+  @RequirePermission('docker:destroy')
   @Audit('docker.remove')
   @Delete('containers/:id')
   remove(
@@ -109,7 +109,7 @@ export class DockerManagerController {
     return this.ctrl.invoke(serverId, 'pullImage', { image: body.image }, { timeoutMs: 600_000 });
   }
 
-  @RequirePermission('docker:deploy')
+  @RequirePermission('docker:destroy')
   @Audit('docker.image_remove')
   @Delete('images/:id')
   removeImage(
@@ -134,7 +134,7 @@ export class DockerManagerController {
     return this.ctrl.invoke(serverId, 'createVolume', body);
   }
 
-  @RequirePermission('docker:deploy')
+  @RequirePermission('docker:destroy')
   @Audit('docker.volume_remove')
   @Delete('volumes/:name')
   removeVolume(

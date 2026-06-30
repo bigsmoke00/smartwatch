@@ -42,6 +42,9 @@ export default function DockerPage() {
   useEffect(() => { loadMyPermissions().then(setPerms); }, []);
   const canControl = hasPerm(perms, 'docker:control');
   const canDeploy = hasPerm(perms, 'docker:deploy');
+  // Remoção destrutiva (apagar container/imagem/volume) é só do admin master.
+  // Quem não tem nem vê o ícone de remover.
+  const canDestroy = hasPerm(perms, 'docker:destroy');
 
   useEffect(() => {
     apiFetch<ServerRow[]>('/servers')
@@ -112,11 +115,11 @@ export default function DockerPage() {
             rodando e conseguindo conectar no backend.
           </Card>
         ) : tab === 'containers' ? (
-          <ContainersTab serverId={serverId} canControl={canControl} />
+          <ContainersTab serverId={serverId} canControl={canControl} canDestroy={canDestroy} />
         ) : tab === 'images' ? (
-          <ImagesTab serverId={serverId} canDeploy={canDeploy} />
+          <ImagesTab serverId={serverId} canDeploy={canDeploy} canDestroy={canDestroy} />
         ) : tab === 'volumes' ? (
-          <VolumesTab serverId={serverId} canDeploy={canDeploy} />
+          <VolumesTab serverId={serverId} canDeploy={canDeploy} canDestroy={canDestroy} />
         ) : canDeploy ? (
           <DeployTab serverId={serverId} />
         ) : (
@@ -132,7 +135,7 @@ export default function DockerPage() {
 // ====================================================================
 // Containers
 // ====================================================================
-function ContainersTab({ serverId, canControl }: { serverId: string; canControl: boolean }) {
+function ContainersTab({ serverId, canControl, canDestroy }: { serverId: string; canControl: boolean; canDestroy: boolean }) {
   const [items, setItems] = useState<any[]>([]);
   const [logs, setLogs] = useState<{ id: string; text: string; name: string } | null>(null);
   const [inspect, setInspect] = useState<{ name: string; data: any } | null>(null);
@@ -241,10 +244,13 @@ function ContainersTab({ serverId, canControl }: { serverId: string; canControl:
                         <button title="Restart" onClick={() => action(c.Id, 'restart')} className="text-info hover:text-accent">
                           <RotateCw size={14} />
                         </button>
-                        <button title="Remove" onClick={() => remove(c.Id)} className="text-danger hover:text-accent">
-                          <Trash2 size={14} />
-                        </button>
                       </>
+                    )}
+                    {/* Remover é destrutivo — só admin master (docker:destroy). */}
+                    {canDestroy && (
+                      <button title="Remove" onClick={() => remove(c.Id)} className="text-danger hover:text-accent">
+                        <Trash2 size={14} />
+                      </button>
                     )}
                   </td>
                 </tr>
@@ -287,7 +293,7 @@ function ContainersTab({ serverId, canControl }: { serverId: string; canControl:
 // ====================================================================
 // Images
 // ====================================================================
-function ImagesTab({ serverId, canDeploy }: { serverId: string; canDeploy: boolean }) {
+function ImagesTab({ serverId, canDeploy, canDestroy }: { serverId: string; canDeploy: boolean; canDestroy: boolean }) {
   const [items, setItems] = useState<any[]>([]);
   const [pulling, setPulling] = useState(false);
   const [pullName, setPullName] = useState('nginx:latest');
@@ -349,7 +355,7 @@ function ImagesTab({ serverId, canDeploy }: { serverId: string; canDeploy: boole
                   {fmtBytes(img.Size)}
                 </td>
                 <td className="px-3 py-2 text-right">
-                  {canDeploy && (
+                  {canDestroy && (
                     <button onClick={() => remove(img.Id)} className="text-danger hover:underline text-xs">
                       <Trash2 size={12} className="inline" /> remover
                     </button>
@@ -367,7 +373,7 @@ function ImagesTab({ serverId, canDeploy }: { serverId: string; canDeploy: boole
 // ====================================================================
 // Volumes
 // ====================================================================
-function VolumesTab({ serverId, canDeploy }: { serverId: string; canDeploy: boolean }) {
+function VolumesTab({ serverId, canDeploy, canDestroy }: { serverId: string; canDeploy: boolean; canDestroy: boolean }) {
   const [items, setItems] = useState<any[]>([]);
   const [name, setName] = useState('');
 
@@ -416,7 +422,7 @@ function VolumesTab({ serverId, canDeploy }: { serverId: string; canDeploy: bool
                 <td className="px-3 py-2 text-xs text-muted">{v.Driver}</td>
                 <td className="px-3 py-2 text-xs text-muted">{v.Mountpoint}</td>
                 <td className="px-3 py-2 text-right">
-                  {canDeploy && (
+                  {canDestroy && (
                     <button onClick={() => remove(v.Name)} className="text-danger hover:underline text-xs">
                       <Trash2 size={12} className="inline" /> remover
                     </button>
