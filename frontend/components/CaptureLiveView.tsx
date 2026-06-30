@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { ParsedPacket, SipDialog, SipDialogState, SIP_METHODS_LIST, buildDialogs, buildCallGroups, buildRtpFlows, CallGroup, RtpFlowSummary } from '@/lib/pcap';
+import { ParsedPacket, SipDialog, SipDialogState, SIP_METHODS_LIST, buildDialogs, buildCallGroups, buildRtpFlows, CallGroup, RtpFlowSummary, groupState } from '@/lib/pcap';
 
 interface Props {
   packets: ParsedPacket[];
@@ -25,6 +25,7 @@ const PROTO_COLOR: Record<string, string> = {
 // em dialogStateInfo() a partir do método real do diálogo (NOTIFY, REGISTER...).
 const DIALOG_STATE: Record<Exclude<SipDialogState, 'other'>, { label: string; className: string }> = {
   calling: { label: 'CALL SETUP', className: 'text-warn' },
+  ringing: { label: 'RINGING', className: 'text-amber-300' },
   em_andamento: { label: 'IN CALL', className: 'text-accent' },
   completed: { label: 'COMPLETED', className: 'text-success' },
   cancelled: { label: 'CANCELLED', className: 'text-muted' },
@@ -38,11 +39,12 @@ const DIALOG_STATE: Record<Exclude<SipDialogState, 'other'>, { label: string; cl
  * não tem "estado da chamada" (já tem o método na coluna Método), então a
  * coluna Estado fica vazia em vez de repetir o método.
  */
+function stateInfo(state: SipDialogState): { label: string; className: string } {
+  if (state === 'other') return { label: '—', className: 'text-muted' };
+  return DIALOG_STATE[state];
+}
 function dialogStateInfo(d: SipDialog): { label: string; className: string } {
-  if (d.state === 'other') {
-    return { label: '—', className: 'text-muted' };
-  }
-  return DIALOG_STATE[d.state];
+  return stateInfo(d.state);
 }
 
 // Cor por método/resposta SIP, pra distinguir de cara INVITE de OPTIONS,
@@ -456,9 +458,13 @@ export default function CaptureLiveView({ packets, totalParsed }: Props) {
                     <td className="px-2 py-1">{d.messages.length}</td>
                     <td className={`px-2 py-1 font-medium ${METHOD_COLOR[d.primaryMethod] ?? ''}`}>{d.primaryMethod}</td>
                     <td className="px-2 py-1">
-                      <span className={`font-medium ${dialogStateInfo(d).className}`}>
-                        {dialogStateInfo(d).label}
-                      </span>
+                      {(() => {
+                        // Estado da LIGAÇÃO (agregado entre as pernas do grupo),
+                        // não da perna isolada — senão a perna de entrada de uma
+                        // chamada atendida na perna de saída aparece "CALL SETUP".
+                        const info = stateInfo(group ? groupState(group) : d.state);
+                        return <span className={`font-medium ${info.className}`}>{info.label}</span>;
+                      })()}
                     </td>
                     <td className="px-2 py-1">
                       {legCount > 1 ? (
@@ -604,12 +610,13 @@ function CallFlow({ group, allPackets, onBack }: { group: CallGroup; allPackets:
 
   const isLinked = group.callIds.length > 1;
   const messages = group.messages;
-  // diálogo único representando o "estado de chamada" — só faz sentido
-  // mostrar quando não há pernas ligadas (estado de chamada é por dialog).
-  const soloDialog = !isLinked ? group.dialogs[0] : undefined;
 
   const rtpFlows = useMemo(() => buildRtpFlows(group, allPackets), [group, allPackets]);
   const events = useMemo(() => buildFlowEvents(group, rtpFlows), [group, rtpFlows]);
+  // Estado da ligação inteira, ciente de mídia: se há RTP correlacionado, a
+  // chamada conectou mesmo que o 200 OK não tenha sido capturado (early media
+  // ou captura parcial). Vale tanto pro grupo ligado quanto pro diálogo solo.
+  const callStateInfo = stateInfo(groupState(group, rtpFlows.length > 0));
 
   const ips = useMemo(() => {
     const seen: string[] = [];
@@ -666,13 +673,14 @@ function CallFlow({ group, allPackets, onBack }: { group: CallGroup; allPackets:
         <div className="text-[12px] text-cyan-300 font-mono truncate">
           {isLinked ? (
             <>
-              fluxo de chamada — 🔗 {group.callIds.length} pernas {group.manual ? '(união manual)' : 'via X-Call-ID/X-CID'} ·{' '}
+              fluxo de chamada — 🔗 {group.callIds.length} pernas {group.manual ? '(união manual)' : 'via X-Call-ID/X-CID'} · estado:{' '}
+              <span className={callStateInfo.className}>{callStateInfo.label}</span> ·{' '}
               <span className="text-cyan-200">{group.callIds.join('  +  ')}</span>
             </>
           ) : (
             <>
               fluxo de chamada — <span className="text-cyan-200">{group.id}</span> · estado:{' '}
-              <span className={dialogStateInfo(soloDialog!).className}>{dialogStateInfo(soloDialog!).label}</span>
+              <span className={callStateInfo.className}>{callStateInfo.label}</span>
             </>
           )}
         </div>

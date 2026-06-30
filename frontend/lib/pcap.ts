@@ -408,7 +408,7 @@ export class PcapStreamParser {
 //                  isolados etc.) — não é uma "chamada", não tem estado de
 //                  chamada. UI mostra o método em si em vez de um rótulo.
 export type SipDialogState =
-  | 'calling' | 'em_andamento' | 'completed' | 'cancelled' | 'busy' | 'rejected' | 'other';
+  | 'calling' | 'ringing' | 'em_andamento' | 'completed' | 'cancelled' | 'busy' | 'rejected' | 'other';
 
 export interface SipDialog {
   callId: string;
@@ -498,6 +498,9 @@ export function buildDialogs(packets: ParsedPacket[]): SipDialog[] {
     const hasFailure = d.messages.some(
       (m) => respondsToInvite(m) && /^[4-6]\d\d/.test(m.sipMethodOrStatus ?? '') && !isAuthChallenge(m),
     );
+    // 180 Ringing / 183 Session Progress: a chamada passou do "trying" e está
+    // chamando (ou com early media), mas ainda não foi atendida.
+    const hasRinging = d.messages.some((m) => respondsToInvite(m) && /^18\d/.test(m.sipMethodOrStatus ?? ''));
     // Ordem importa: um 200 OK pro INVITE significa que a chamada FOI ATENDIDA,
     // e isso ganha de qualquer 4xx transitório (ex.: o 407 de auth). Antes a
     // checagem de falha vinha primeiro e mascarava chamadas atendidas.
@@ -505,6 +508,7 @@ export function buildDialogs(packets: ParsedPacket[]): SipDialog[] {
     else if (isBusy) d.state = 'busy';
     else if (hasCancel) d.state = 'cancelled';
     else if (hasFailure) d.state = 'rejected';
+    else if (hasRinging) d.state = 'ringing';
     else d.state = 'calling';
   }
   return [...map.values()].sort((a, b) => a.messages[0].relTime - b.messages[0].relTime);
@@ -547,6 +551,34 @@ export interface CallGroup {
  * item da lista é um grupo de Call-IDs que devem ser unidos à força,
  * independente de header.
  */
+/**
+ * Estado da LIGAÇÃO inteira (não de uma perna só). O desfecho de uma chamada
+ * mora numa perna específica — ex.: a perna de entrada (proxy↔FreeSWITCH) só
+ * vê INVITE→100→mídia, enquanto o 200 OK que de fato ATENDEU está na perna de
+ * saída (FreeSWITCH↔operadora). Mostrar o estado de cada perna isolada fazia
+ * uma chamada atendida aparecer como "CALL SETUP" na perna de entrada. Aqui o
+ * grupo herda o MELHOR desfecho entre as pernas: se qualquer perna atendeu, a
+ * ligação atendeu. `hasRtp` (mídia correlacionada no grupo) conta como
+ * "em call" mesmo sem 200 visível (early media / captura parcial).
+ */
+const STATE_RANK: Record<SipDialogState, number> = {
+  completed: 7, em_andamento: 6, ringing: 4, busy: 3,
+  rejected: 2, cancelled: 1, calling: 0, other: -1,
+};
+export function groupState(group: CallGroup, hasRtp = false): SipDialogState {
+  let best: SipDialogState = 'other';
+  for (const d of group.dialogs) {
+    if (STATE_RANK[d.state] > STATE_RANK[best]) best = d.state;
+  }
+  // Mídia RTP fluindo => a chamada conectou de fato; sobe pelo menos a
+  // "em call" se o melhor desfecho de sinalização ficou abaixo disso (ex.:
+  // só 183 early media, ou o 200 não foi capturado).
+  if (hasRtp && STATE_RANK[best] < STATE_RANK['em_andamento'] && best !== 'other') {
+    return 'em_andamento';
+  }
+  return best;
+}
+
 export function buildCallGroups(dialogs: SipDialog[], manualLinks?: string[][]): CallGroup[] {
   const parent = new Map<string, string>();
   function find(x: string): string {
