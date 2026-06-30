@@ -423,6 +423,37 @@ export interface SipDialog {
   primaryMethod: string;
 }
 
+// Janela (s) abaixo da qual dois frames SIP byte-idênticos (mesma 5-tupla +
+// mesmo texto) são tratados como a MESMA mensagem capturada mais de uma vez —
+// acontece quando o tcpdump pega o pacote em mais de uma interface (ex.: -i
+// any vendo bridge + veth), deixando a sinalização triplicada no ladder. Bem
+// abaixo do T1 do SIP (500ms), então retransmissão de verdade (perda de
+// pacote) NÃO é colapsada — ela aparece normalmente.
+const DUP_WINDOW_S = 0.25;
+
+/**
+ * Remove duplicatas de CAPTURA: o mesmo frame SIP visto várias vezes em
+ * poucos µs/ms. Chave = origem/destino (ip:porta) + método/status + CSeq +
+ * texto cru; se reaparecer dentro de DUP_WINDOW_S da primeira vez, descarta.
+ * Mantém a ordem temporal e preserva retransmissões reais (≥ 500ms).
+ */
+function dedupeSipMessages(msgs: ParsedPacket[]): ParsedPacket[] {
+  const sorted = [...msgs].sort((a, b) => a.relTime - b.relTime);
+  const out: ParsedPacket[] = [];
+  const firstSeen = new Map<string, number>();
+  for (const m of sorted) {
+    const key = [
+      m.srcIp, m.srcPort, m.dstIp, m.dstPort,
+      m.sipMethodOrStatus, m.sipCseqMethod, m.sipText,
+    ].join('');
+    const prev = firstSeen.get(key);
+    if (prev != null && m.relTime - prev <= DUP_WINDOW_S) continue;
+    firstSeen.set(key, m.relTime);
+    out.push(m);
+  }
+  return out;
+}
+
 /** Agrupa pacotes SIP já decodificados em diálogos por Call-ID, com estado estimado. */
 export function buildDialogs(packets: ParsedPacket[]): SipDialog[] {
   const map = new Map<string, SipDialog>();
@@ -438,6 +469,9 @@ export function buildDialogs(packets: ParsedPacket[]): SipDialog[] {
     if (!d.to && p.sipTo) d.to = p.sipTo;
   }
   for (const d of map.values()) {
+    // Colapsa duplicatas de captura antes de tudo — assim a contagem de
+    // mensagens, o fluxo (ladder) e o estado batem com a sinalização real.
+    d.messages = dedupeSipMessages(d.messages);
     const hasInvite = d.messages.some((m) => m.sipIsRequest && m.sipMethodOrStatus === 'INVITE');
     if (!hasInvite) {
       // Sem INVITE não tem "chamada" pra ter estado de chamada — diálogo é
@@ -452,16 +486,25 @@ export function buildDialogs(packets: ParsedPacket[]): SipDialog[] {
     // antes isso checava só o código (ex.: "200..."), e um 200 OK de
     // NOTIFY/REGISTER/SUBSCRIBE no mesmo diálogo virava "IN CALL" errado.
     const respondsToInvite = (m: ParsedPacket) => !m.sipIsRequest && m.sipCseqMethod === 'INVITE';
+    // 401/407 são DESAFIO DE AUTENTICAÇÃO, não rejeição: o fluxo normal é
+    // INVITE → 407 → ACK → re-INVITE com credenciais → 100/180/200. Tratar o
+    // 407 como falha marcava como REJECTED chamadas que na verdade
+    // autenticaram e conectaram (com RTP fluindo). Por isso são excluídos.
+    const isAuthChallenge = (m: ParsedPacket) => /^(401|407)\b/.test(m.sipMethodOrStatus ?? '');
     const hasBye = d.messages.some((m) => m.sipIsRequest && m.sipMethodOrStatus === 'BYE');
     const hasCancel = d.messages.some((m) => m.sipIsRequest && m.sipMethodOrStatus === 'CANCEL');
     const has200ToInvite = d.messages.some((m) => respondsToInvite(m) && m.sipMethodOrStatus?.startsWith('200'));
     const isBusy = d.messages.some((m) => respondsToInvite(m) && /^(486|600)/.test(m.sipMethodOrStatus ?? ''));
-    const hasFailure = d.messages.some((m) => respondsToInvite(m) && /^[4-6]\d\d/.test(m.sipMethodOrStatus ?? ''));
-    if (hasBye && has200ToInvite) d.state = 'completed';
+    const hasFailure = d.messages.some(
+      (m) => respondsToInvite(m) && /^[4-6]\d\d/.test(m.sipMethodOrStatus ?? '') && !isAuthChallenge(m),
+    );
+    // Ordem importa: um 200 OK pro INVITE significa que a chamada FOI ATENDIDA,
+    // e isso ganha de qualquer 4xx transitório (ex.: o 407 de auth). Antes a
+    // checagem de falha vinha primeiro e mascarava chamadas atendidas.
+    if (has200ToInvite) d.state = hasBye ? 'completed' : 'em_andamento';
     else if (isBusy) d.state = 'busy';
+    else if (hasCancel) d.state = 'cancelled';
     else if (hasFailure) d.state = 'rejected';
-    else if (hasCancel && !has200ToInvite) d.state = 'cancelled';
-    else if (has200ToInvite) d.state = 'em_andamento';
     else d.state = 'calling';
   }
   return [...map.values()].sort((a, b) => a.messages[0].relTime - b.messages[0].relTime);

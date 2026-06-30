@@ -690,26 +690,37 @@ function CallFlow({ group, allPackets, onBack }: { group: CallGroup; allPackets:
 
       <div className="flex flex-1 min-h-0 min-w-0">
         <div ref={containerRef} className="flex-1 min-h-0 min-w-0 overflow-auto bg-panel2">
-          <svg width={width} height={height + HEADER_H} className="block font-mono">
-            {/* cabeçalho das colunas (ip:porta) — rola junto com o conteúdo, igual sngrep */}
-            <rect x={0} y={0} width={width} height={HEADER_H} className="fill-current text-panel" />
-            {ips.map((ip, i) => (
-              <g key={ip}>
-                <text
-                  x={MARGIN_LEFT + i * colW + colW / 2} y={HEADER_H / 2 + 4}
-                  textAnchor="middle" className="fill-current text-muted" fontSize={12} fontWeight={700}
-                >
-                  {ip}{portOf.get(ip) ? `:${portOf.get(ip)}` : ''}
-                </text>
+          <div style={{ width }}>
+            {/* cabeçalho das colunas (ip:porta) FIXO: não rola na vertical (fica
+                sempre visível pra saber qual coluna é qual IP), mas acompanha a
+                rolagem horizontal por estar no mesmo container e ter a mesma
+                largura do corpo. */}
+            <div className="sticky top-0 z-10 bg-panel">
+              <svg width={width} height={HEADER_H} className="block font-mono">
+                <rect x={0} y={0} width={width} height={HEADER_H} className="fill-current text-panel" />
+                {ips.map((ip, i) => (
+                  <text
+                    key={ip}
+                    x={MARGIN_LEFT + i * colW + colW / 2} y={HEADER_H / 2 + 4}
+                    textAnchor="middle" className="fill-current text-muted" fontSize={12} fontWeight={700}
+                  >
+                    {ip}{portOf.get(ip) ? `:${portOf.get(ip)}` : ''}
+                  </text>
+                ))}
+              </svg>
+            </div>
+            <svg width={width} height={height} className="block font-mono -mt-px">
+              {/* lifelines (uma por IP) descem por todo o corpo rolável */}
+              {ips.map((ip, i) => (
                 <line
-                  x1={MARGIN_LEFT + i * colW + colW / 2} y1={HEADER_H}
-                  x2={MARGIN_LEFT + i * colW + colW / 2} y2={height + HEADER_H - 4}
+                  key={ip}
+                  x1={MARGIN_LEFT + i * colW + colW / 2} y1={0}
+                  x2={MARGIN_LEFT + i * colW + colW / 2} y2={height - 4}
                   stroke="currentColor" className="text-border" strokeDasharray="2,4"
                 />
-              </g>
-            ))}
+              ))}
             {events.map((ev, i) => {
-              const y = HEADER_H + MARGIN_TOP + i * ROW_H + ROW_H / 2;
+              const y = MARGIN_TOP + i * ROW_H + ROW_H / 2;
               const prevT = i > 0 ? events[i - 1].t : ev.t;
               const delta = ev.t - prevT;
 
@@ -750,7 +761,7 @@ function CallFlow({ group, allPackets, onBack }: { group: CallGroup; allPackets:
               );
             })}
             {!events.length && (
-              <text x={MARGIN_LEFT} y={HEADER_H + 30} fontSize={12} className="fill-current text-muted">nenhuma mensagem nesse diálogo</text>
+              <text x={MARGIN_LEFT} y={30} fontSize={12} className="fill-current text-muted">nenhuma mensagem nesse diálogo</text>
             )}
             <defs>
               <marker id="arrow" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
@@ -760,7 +771,8 @@ function CallFlow({ group, allPackets, onBack }: { group: CallGroup; allPackets:
                 <path d="M0,0 L6,3 L0,6 Z" fill="#39c5cf" />
               </marker>
             </defs>
-          </svg>
+            </svg>
+          </div>
         </div>
 
         {selectedItem && (
