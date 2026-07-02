@@ -264,13 +264,18 @@ export class CaptureService {
     return false;
   }
 
-  /** Caminho + nome do .pcap persistido de uma sessão, se ainda existir. */
-  async pcapFile(id: string): Promise<{ path: string; filename: string } | null> {
+  /** Caminho + nome + tamanho do .pcap persistido de uma sessão, se ainda existir. */
+  async pcapFile(id: string): Promise<{ path: string; filename: string; size: number } | null> {
     const r = await this.pool.query(`SELECT pcap_stored FROM capture_sessions WHERE id=$1`, [id]);
     if (!r.rowCount || !r.rows[0].pcap_stored) return null;
     const path = this.pcapPath(id);
-    try { await fsp.access(path); } catch { return null; }
-    return { path, filename: `capture-${id.slice(0, 8)}.pcap` };
+    try {
+      const st = await fsp.stat(path);
+      if (!st.isFile() || st.size === 0) return null;
+      return { path, filename: `capture-${id.slice(0, 8)}.pcap`, size: st.size };
+    } catch {
+      return null;
+    }
   }
 
   /**

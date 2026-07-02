@@ -1,7 +1,8 @@
 import {
-  Body, Controller, Get, Module, NotFoundException, Param, Post, Query, Res,
+  Body, Controller, Get, Module, Param, Post, Query, Res, StreamableFile,
 } from '@nestjs/common';
 import type { Response } from 'express';
+import { createReadStream } from 'fs';
 import { JwtModule } from '@nestjs/jwt';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { IsIn, IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
@@ -80,18 +81,24 @@ class CaptureController {
     return this.svc.stop(id);
   }
 
-  // Baixa o .pcap persistido (7 dias). @Res direto pra fazer streaming do
-  // arquivo do disco sem carregar tudo em memória. Sem @Audit pra o
-  // interceptor não interferir no streaming do arquivo binário.
+  // Baixa o .pcap persistido (7 dias). StreamableFile faz o streaming do
+  // arquivo do disco sem carregar tudo em memória e sem conflitar com o Nest
+  // (passthrough:true só define os headers). Content-Length pra o navegador
+  // mostrar progresso.
   @RequirePermission('capture:request', 'capture:approve')
   @Get(':id/pcap')
-  async pcap(@Param('id') id: string, @Res() res: Response) {
+  async pcap(@Param('id') id: string, @Res({ passthrough: true }) res: Response): Promise<StreamableFile | undefined> {
     const info = await this.svc.pcapFile(id);
     if (!info) {
       res.status(404).json({ message: 'pcap não disponível (não salvo ou expirado)' });
-      return;
+      return undefined;
     }
-    res.download(info.path, info.filename);
+    res.set({
+      'Content-Type': 'application/vnd.tcpdump.pcap',
+      'Content-Disposition': `attachment; filename="${info.filename}"`,
+      'Content-Length': String(info.size),
+    });
+    return new StreamableFile(createReadStream(info.path));
   }
 }
 

@@ -351,8 +351,11 @@ export default function CapturesPage() {
     URL.revokeObjectURL(url);
   }
 
-  // Re-visualiza uma captura já concluída: baixa o .pcap salvo, re-parseia no
-  // navegador (mesmo parser do ao vivo) e abre a pré-visualização.
+  // Re-visualiza uma captura já concluída: baixa o .pcap salvo e re-parseia no
+  // navegador. O parse é feito em FATIAS cedendo o event loop entre elas —
+  // parsear um .pcap de dezenas de MB de uma vez travava a thread principal
+  // (a aba congelava e até os outros fetches ficavam "pending"). Assim a UI
+  // segue responsiva e os pacotes vão aparecendo aos poucos.
   async function viewStoredCapture(id: string, kind: Kind) {
     setExpandedPreview((p) => new Set(p).add(id));
     setWatch((w) => ({ ...w, [id]: { kind, connected: false, done: true, ok: true, bytesReceived: 0, packets: [] } }));
@@ -360,11 +363,18 @@ export default function CapturesPage() {
     if (!blob) { alert('pcap indisponível (não salvo ou expirado)'); return; }
     const bytes = new Uint8Array(await blob.arrayBuffer());
     const parser = new PcapStreamParser();
-    const packets = parser.feed(bytes);
-    setWatch((w) => ({
-      ...w,
-      [id]: { ...w[id], kind, done: true, ok: true, bytesReceived: bytes.length, packets, totalPacketsParsed: parser.totalParsed },
-    }));
+    const SLICE = 1024 * 1024; // 1MB por iteração
+    let collected: ParsedPacket[] = [];
+    for (let off = 0; off < bytes.length; off += SLICE) {
+      const pkts = parser.feed(bytes.subarray(off, off + SLICE));
+      if (pkts.length) collected = capPackets(collected, pkts);
+      const done = Math.min(off + SLICE, bytes.length);
+      setWatch((w) => (w[id]
+        ? { ...w, [id]: { ...w[id], done: true, ok: true, bytesReceived: done, packets: collected, totalPacketsParsed: parser.totalParsed } }
+        : w));
+      // cede a thread entre fatias pra não travar a aba
+      await new Promise((r) => setTimeout(r));
+    }
   }
 
   return (
@@ -559,14 +569,15 @@ export default function CapturesPage() {
                       {s.status === 'running' && s.kind !== 'ping' && (!w || !w.done) && (
                         <button onClick={() => stopCapture(s.id)} className="text-warn hover:underline text-xs">parar</button>
                       )}
-                      {/* Terminou e está em memória: preview colapsa; "ver captura" reabre. */}
-                      {w?.done && w.kind !== 'ping' && (w.packets?.length ?? 0) > 0 && (
+                      {/* A captura NUNCA aparece inline sozinha — só ao clicar aqui.
+                          Vale pra ao vivo, recém-terminada (em memória) e persistida. */}
+                      {s.kind !== 'ping' && (w?.packets?.length ?? 0) > 0 && (
                         <button onClick={() => togglePreview(s.id)} className="text-accent hover:underline text-xs">
                           {expandedPreview.has(s.id) ? 'ocultar' : 'ver captura'}
                         </button>
                       )}
-                      {/* Concluída e persistida, mas não está em memória: carrega do disco. */}
-                      {s.status === 'completed' && s.kind !== 'ping' && s.pcap_stored && (!w || (w.packets?.length ?? 0) === 0) && (
+                      {/* Persistida mas não está em memória: carrega do disco ao clicar. */}
+                      {s.status === 'completed' && s.kind !== 'ping' && s.pcap_stored && (w?.packets?.length ?? 0) === 0 && (
                         <button onClick={() => viewStoredCapture(s.id, s.kind)} className="text-accent hover:underline text-xs">ver captura</button>
                       )}
                       {/* Download: prioriza o arquivo salvo no servidor (vale após reload); senão o blob em memória. */}
@@ -577,8 +588,10 @@ export default function CapturesPage() {
                       ) : null}
                     </td>
                   </tr>
-                  {/* Preview inline: ao vivo aparece sozinho; terminado só se expandido. */}
-                  {w?.kind !== 'ping' && w?.packets && w.packets.length > 0 && (!w.done || expandedPreview.has(s.id)) && (
+                  {/* Preview inline: SÓ quando o usuário abriu explicitamente
+                      (expandedPreview). Nunca aparece sozinho — nem ao abrir a
+                      tela, nem ao voltar de uma visualização. */}
+                  {w?.kind !== 'ping' && w?.packets && w.packets.length > 0 && expandedPreview.has(s.id) && (
                     <tr className="border-t border-border">
                       <td colSpan={7} className="px-3 py-2 bg-panel2/40">
                         <CaptureLiveView packets={w.packets} live={!w.done} totalParsed={w.totalPacketsParsed} />
