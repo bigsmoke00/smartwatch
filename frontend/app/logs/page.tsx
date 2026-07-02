@@ -1,6 +1,6 @@
 'use client';
 
-import { Suspense, useEffect, useMemo, useRef, useState } from 'react';
+import { Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { io, Socket } from 'socket.io-client';
 import { AppShell } from '@/components/AppShell';
@@ -410,25 +410,17 @@ function LogsPageInner() {
   // Tail: cola no fim quando chega log novo, DESDE QUE o usuário já esteja
   // perto do fim. Se ele rolou pra cima pra ler algo antigo, não o arranca.
   const stickBottomRef = useRef(true);
-  // Marca quando NÓS mesmos rolamos (programático), pra o onScroll não
-  // interpretar isso como o usuário tendo rolado e desligar o "grudar no fim".
-  const autoScrollingRef = useRef(false);
-  useEffect(() => {
+  // useLayoutEffect (síncrono, antes do paint) — e NÃO requestAnimationFrame.
+  // Num servidor movimentado (ex.: citrus), o tail re-renderiza várias vezes
+  // por segundo; com rAF, o `cancelAnimationFrame` do cleanup cancelava o
+  // scroll-pro-fim a cada re-render, então ele só disparava quando o fluxo
+  // desacelerava — daí "precisa acumular pra começar a rolar de baixo pra
+  // cima". No layout effect, ler scrollHeight força o reflow (altura já final,
+  // inclusive de stack trace quebrado) e a rolagem acontece na hora, todo
+  // update — igual `tail -f`.
+  useLayoutEffect(() => {
     const el = containerRef.current;
-    if (!el || !stickBottomRef.current) return;
-    autoScrollingRef.current = true;
-    // Duplo requestAnimationFrame: espera o layout do texto quebrado (stack
-    // traces longos com quebra de linha) assentar ANTES de medir scrollHeight.
-    // Sem isso, no primeiro carregamento a altura ainda estava crescendo e o
-    // scroll parava no meio/topo — daí "só começa a se mover depois".
-    const raf = requestAnimationFrame(() =>
-      requestAnimationFrame(() => {
-        const node = containerRef.current;
-        if (node) node.scrollTop = node.scrollHeight;
-        autoScrollingRef.current = false;
-      }),
-    );
-    return () => cancelAnimationFrame(raf);
+    if (el && stickBottomRef.current) el.scrollTop = el.scrollHeight;
   }, [displayHits]);
 
   function toggleLevel(l: string) {
@@ -612,9 +604,10 @@ function LogsPageInner() {
           <div
             ref={containerRef}
             onScroll={(e) => {
-              if (autoScrollingRef.current) return; // ignora o scroll que nós mesmos fizemos
               const el = e.currentTarget;
               // "grudado no fim" = a menos de 40px do fundo; controla o autoscroll.
+              // A rolagem programática (layout effect) cai a ~0 do fundo, então
+              // mantém stick=true; só o usuário rolando pra cima (>40px) desliga.
               stickBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
             }}
             className="font-mono text-xs leading-relaxed max-h-[calc(100vh-280px)] overflow-auto"
