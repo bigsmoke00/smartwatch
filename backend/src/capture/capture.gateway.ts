@@ -100,7 +100,7 @@ export class CaptureGateway implements OnGatewayConnection, OnGatewayDisconnect 
 
       if (['completed', 'failed', 'rejected', 'expired'].includes(sess.status)) {
         client.emit('info', {
-          message: 'esta sessão já terminou — a captura é só em tempo real, não fica salva no servidor',
+          message: 'esta sessão já terminou — use "ver captura"/"baixar .pcap" pra abrir o arquivo salvo (retenção de 7 dias)',
           status: sess.status,
         });
       } else {

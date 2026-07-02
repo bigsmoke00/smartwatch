@@ -6,10 +6,18 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
+import { Cron, CronExpression } from '@nestjs/schedule';
+import { createWriteStream, promises as fsp } from 'fs';
+import { join } from 'path';
 import { Pool } from 'pg';
 import { PG_POOL } from '../db/db.module';
 import { ControlGateway } from '../docker-manager/control.gateway';
 import { CaptureGateway } from './capture.gateway';
+
+// Onde os .pcap ficam persistidos (volume Docker). Retenção de 7 dias — ver
+// purgeOldPcaps(). Cada captura vira <dir>/<sessionId>.pcap.
+const CAPTURE_STORAGE_DIR = process.env.CAPTURE_STORAGE_DIR ?? '/data/captures';
+const PCAP_RETENTION_DAYS = 7;
 
 export interface CaptureSessionRow {
   id: string;
@@ -197,15 +205,31 @@ export class CaptureService {
       return { ok: true, status: 'running' };
     }
 
-    // sip/tcpdump: streaming ao vivo, sem disco em nenhum dos dois lados.
+    // sip/tcpdump: streaming ao vivo pra quem assiste (gateway) E gravação
+    // incremental em disco (persistência de 7 dias). Cada chunk é escrito
+    // direto num WriteStream — sem acumular o .pcap inteiro em memória.
+    const filePath = this.pcapPath(id);
+    let fileStream: ReturnType<typeof createWriteStream> | null = null;
+    let wroteBytes = 0;
+    fsp.mkdir(CAPTURE_STORAGE_DIR, { recursive: true })
+      .then(() => { fileStream = createWriteStream(filePath); })
+      .catch((e) => this.logger.warn(`não foi possível abrir arquivo de captura ${id.slice(0, 8)}: ${e?.message}`));
+
     this.control.invokeStream(s.server_id, 'capture.run', args, (chunkB64: string) => {
       this.gateway.forwardChunk(id, chunkB64);
+      if (fileStream) {
+        const buf = Buffer.from(chunkB64, 'base64');
+        wroteBytes += buf.length;
+        fileStream.write(buf);
+      }
     }, timeoutMs)
       .then(async (result: any) => {
         const status = result?.ok ? 'completed' : 'failed';
+        // Fecha o arquivo e decide se mantém: só persiste captura ok e não-vazia.
+        const stored = await this.finalizePcap(fileStream, filePath, !!result?.ok && wroteBytes > 0);
         await this.pool.query(
-          `UPDATE capture_sessions SET status=$2, packet_count=$3, file_size_bytes=$4, error_text=$5, finished_at=now() WHERE id=$1 AND status='running'`,
-          [id, status, result?.packetCount ?? null, result?.fileSizeBytes ?? null, result?.error ?? null],
+          `UPDATE capture_sessions SET status=$2, packet_count=$3, file_size_bytes=$4, error_text=$5, pcap_stored=$6, finished_at=now() WHERE id=$1 AND status='running'`,
+          [id, status, result?.packetCount ?? null, result?.fileSizeBytes ?? wroteBytes ?? null, result?.error ?? null, stored],
         );
         this.gateway.forwardDone(id, {
           ok: !!result?.ok, packetCount: result?.packetCount, fileSizeBytes: result?.fileSizeBytes, error: result?.error,
@@ -213,13 +237,59 @@ export class CaptureService {
       })
       .catch(async (e: any) => {
         this.logger.warn(`capture.run falhou (session ${id.slice(0, 8)}): ${e.message}`);
+        await this.finalizePcap(fileStream, filePath, false);
         await this.pool.query(
-          `UPDATE capture_sessions SET status='failed', error_text=$2, finished_at=now() WHERE id=$1 AND status='running'`,
+          `UPDATE capture_sessions SET status='failed', error_text=$2, pcap_stored=false, finished_at=now() WHERE id=$1 AND status='running'`,
           [id, e.message],
         );
         this.gateway.forwardDone(id, { ok: false, error: e.message });
       });
 
     return { ok: true, status: 'running' };
+  }
+
+  private pcapPath(id: string): string {
+    return join(CAPTURE_STORAGE_DIR, `${id}.pcap`);
+  }
+
+  /** Fecha o WriteStream e mantém o arquivo só se `keep`; senão apaga. Retorna se ficou salvo. */
+  private async finalizePcap(
+    stream: ReturnType<typeof createWriteStream> | null,
+    filePath: string,
+    keep: boolean,
+  ): Promise<boolean> {
+    if (stream) await new Promise<void>((res) => stream.end(() => res()));
+    if (keep) return true;
+    try { await fsp.unlink(filePath); } catch { /* não existia */ }
+    return false;
+  }
+
+  /** Caminho + nome do .pcap persistido de uma sessão, se ainda existir. */
+  async pcapFile(id: string): Promise<{ path: string; filename: string } | null> {
+    const r = await this.pool.query(`SELECT pcap_stored FROM capture_sessions WHERE id=$1`, [id]);
+    if (!r.rowCount || !r.rows[0].pcap_stored) return null;
+    const path = this.pcapPath(id);
+    try { await fsp.access(path); } catch { return null; }
+    return { path, filename: `capture-${id.slice(0, 8)}.pcap` };
+  }
+
+  /**
+   * Retenção: apaga .pcap com mais de 7 dias (roda de hora em hora). Limpa o
+   * arquivo em disco e zera pcap_stored — a sessão continua no histórico, só
+   * sem o arquivo pra baixar.
+   */
+  @Cron(CronExpression.EVERY_HOUR)
+  async purgeOldPcaps() {
+    const r = await this.pool.query(
+      `SELECT id FROM capture_sessions
+       WHERE pcap_stored = true AND finished_at < now() - ($1 || ' days')::interval`,
+      [PCAP_RETENTION_DAYS],
+    );
+    for (const row of r.rows) {
+      try { await fsp.unlink(this.pcapPath(row.id)); } catch { /* já sumiu */ }
+      await this.pool.query(`UPDATE capture_sessions SET pcap_stored=false WHERE id=$1`, [row.id]);
+    }
+    if (r.rowCount) this.logger.log(`Retenção de capturas: ${r.rowCount} .pcap com >${PCAP_RETENTION_DAYS}d removidos`);
+    return { removed: r.rowCount };
   }
 }

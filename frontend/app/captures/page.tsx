@@ -26,7 +26,12 @@ interface Session {
   requested_by_email?: string; approved_by_email?: string;
   file_size_bytes: number | null; packet_count: number | null;
   result_text: string | null; error_text: string | null; created_at: string;
+  pcap_stored?: boolean;
 }
+
+// Base da API pra baixar/re-carregar o .pcap persistido (fetch cru com o token,
+// porque é download binário, não JSON).
+const CAPTURES_API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api';
 
 const STATUS_TONE: Record<string, 'default' | 'accent' | 'success' | 'warn' | 'danger' | 'info'> = {
   pending: 'warn',
@@ -99,6 +104,17 @@ export default function CapturesPage() {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [onlyPending, setOnlyPending] = useState(false);
   const [watch, setWatch] = useState<Record<string, WatchState>>({});
+  // Sessões cuja pré-visualização o usuário abriu manualmente depois de
+  // terminada. Enquanto a captura roda ao vivo o preview aparece sozinho;
+  // quando termina ele COLAPSA (a linha fica igual às outras concluídas), e
+  // só reabre via "ver captura".
+  const [expandedPreview, setExpandedPreview] = useState<Set<string>>(new Set());
+  const togglePreview = (id: string) =>
+    setExpandedPreview((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
 
   const socketsRef = useRef<Map<string, Socket>>(new Map());
   const chunksRef = useRef<Map<string, Uint8Array[]>>(new Map());
@@ -316,12 +332,47 @@ export default function CapturesPage() {
     a.href = blobUrl; a.download = `capture-${id.slice(0, 8)}.pcap`; a.click();
   }
 
+  // Busca o .pcap persistido no servidor (fetch cru com o token, é binário).
+  async function fetchStoredPcap(id: string): Promise<Blob | null> {
+    const res = await fetch(`${CAPTURES_API}/captures/${id}/pcap`, {
+      headers: { Authorization: `Bearer ${Auth.token() ?? ''}` },
+    });
+    if (!res.ok) return null;
+    return res.blob();
+  }
+
+  // Baixa o .pcap salvo (sessões concluídas, retenção de 7 dias).
+  async function downloadStoredPcap(id: string) {
+    const blob = await fetchStoredPcap(id);
+    if (!blob) { alert('pcap indisponível (não salvo ou expirado)'); return; }
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = `capture-${id.slice(0, 8)}.pcap`; a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  // Re-visualiza uma captura já concluída: baixa o .pcap salvo, re-parseia no
+  // navegador (mesmo parser do ao vivo) e abre a pré-visualização.
+  async function viewStoredCapture(id: string, kind: Kind) {
+    setExpandedPreview((p) => new Set(p).add(id));
+    setWatch((w) => ({ ...w, [id]: { kind, connected: false, done: true, ok: true, bytesReceived: 0, packets: [] } }));
+    const blob = await fetchStoredPcap(id);
+    if (!blob) { alert('pcap indisponível (não salvo ou expirado)'); return; }
+    const bytes = new Uint8Array(await blob.arrayBuffer());
+    const parser = new PcapStreamParser();
+    const packets = parser.feed(bytes);
+    setWatch((w) => ({
+      ...w,
+      [id]: { ...w[id], kind, done: true, ok: true, bytesReceived: bytes.length, packets, totalPacketsParsed: parser.totalParsed },
+    }));
+  }
+
   return (
     <AppShell>
       <div className="p-6 space-y-3">
         <PageHeader
           title="Captura de rede / SIP (Zero Trust)"
-          description="sngrep-like para SIP/RTP, tcpdump genérico e diagnóstico (ping/mtr). Em tempo real — nada fica salvo na plataforma; mantenha a página aberta assistindo."
+          description="sngrep-like para SIP/RTP, tcpdump genérico e diagnóstico (ping/mtr). Tempo real + .pcap salvo por 7 dias pra rever e baixar."
           icon={<Radar size={16} />}
         />
 
@@ -486,7 +537,7 @@ export default function CapturesPage() {
 
                       {s.status === 'completed' && s.kind !== 'ping' && !w && (
                         <div className="text-[10px] text-muted mt-0.5">
-                          {fmtBytes(s.file_size_bytes)} · {s.packet_count ?? '?'} pacotes — não foi assistida ao vivo, conteúdo não ficou salvo
+                          {fmtBytes(s.file_size_bytes)} · {s.packet_count ?? '?'} pacotes — {s.pcap_stored ? '.pcap salvo (7 dias) — dá pra ver e baixar' : 'conteúdo não disponível (expirado ou falhou ao salvar)'}
                         </div>
                       )}
                       {s.status === 'completed' && s.kind === 'ping' && s.result_text && !w && (
@@ -508,12 +559,26 @@ export default function CapturesPage() {
                       {s.status === 'running' && s.kind !== 'ping' && (!w || !w.done) && (
                         <button onClick={() => stopCapture(s.id)} className="text-warn hover:underline text-xs">parar</button>
                       )}
-                      {w?.done && w.ok && w.blobUrl && (
-                        <button onClick={() => saveCapture(s.id, w.blobUrl!)} className="text-accent hover:underline text-xs">salvar .pcap</button>
+                      {/* Terminou e está em memória: preview colapsa; "ver captura" reabre. */}
+                      {w?.done && w.kind !== 'ping' && (w.packets?.length ?? 0) > 0 && (
+                        <button onClick={() => togglePreview(s.id)} className="text-accent hover:underline text-xs">
+                          {expandedPreview.has(s.id) ? 'ocultar' : 'ver captura'}
+                        </button>
                       )}
+                      {/* Concluída e persistida, mas não está em memória: carrega do disco. */}
+                      {s.status === 'completed' && s.kind !== 'ping' && s.pcap_stored && (!w || (w.packets?.length ?? 0) === 0) && (
+                        <button onClick={() => viewStoredCapture(s.id, s.kind)} className="text-accent hover:underline text-xs">ver captura</button>
+                      )}
+                      {/* Download: prioriza o arquivo salvo no servidor (vale após reload); senão o blob em memória. */}
+                      {s.status === 'completed' && s.kind !== 'ping' && s.pcap_stored ? (
+                        <button onClick={() => downloadStoredPcap(s.id)} className="text-accent hover:underline text-xs">baixar .pcap</button>
+                      ) : w?.done && w.ok && w.blobUrl ? (
+                        <button onClick={() => saveCapture(s.id, w.blobUrl!)} className="text-accent hover:underline text-xs">salvar .pcap</button>
+                      ) : null}
                     </td>
                   </tr>
-                  {w?.kind !== 'ping' && w?.packets && w.packets.length > 0 && (
+                  {/* Preview inline: ao vivo aparece sozinho; terminado só se expandido. */}
+                  {w?.kind !== 'ping' && w?.packets && w.packets.length > 0 && (!w.done || expandedPreview.has(s.id)) && (
                     <tr className="border-t border-border">
                       <td colSpan={7} className="px-3 py-2 bg-panel2/40">
                         <CaptureLiveView packets={w.packets} live={!w.done} totalParsed={w.totalPacketsParsed} />

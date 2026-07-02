@@ -1,6 +1,7 @@
 import {
-  Body, Controller, Get, Module, Param, Post, Query,
+  Body, Controller, Get, Module, NotFoundException, Param, Post, Query, Res,
 } from '@nestjs/common';
+import type { Response } from 'express';
 import { JwtModule } from '@nestjs/jwt';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { IsIn, IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
@@ -77,6 +78,20 @@ class CaptureController {
   @Post(':id/stop')
   stop(@Param('id') id: string) {
     return this.svc.stop(id);
+  }
+
+  // Baixa o .pcap persistido (7 dias). @Res direto pra fazer streaming do
+  // arquivo do disco sem carregar tudo em memória. Sem @Audit pra o
+  // interceptor não interferir no streaming do arquivo binário.
+  @RequirePermission('capture:request', 'capture:approve')
+  @Get(':id/pcap')
+  async pcap(@Param('id') id: string, @Res() res: Response) {
+    const info = await this.svc.pcapFile(id);
+    if (!info) {
+      res.status(404).json({ message: 'pcap não disponível (não salvo ou expirado)' });
+      return;
+    }
+    res.download(info.path, info.filename);
   }
 }
 

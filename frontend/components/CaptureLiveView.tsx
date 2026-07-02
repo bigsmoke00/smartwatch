@@ -214,6 +214,9 @@ export default function CaptureLiveView({ packets, totalParsed }: Props) {
   // usuário marca os diálogos na tabela e clica "unir selecionados". Cada
   // item é um grupo de Call-IDs unidos à força.
   const [manualLinks, setManualLinks] = useState<string[][]>([]);
+  // Junção automática de pernas por X-Call-ID/X-CID: DESLIGADA por padrão (dava
+  // grupos gigantes em fan-out). O usuário liga se quiser o comportamento antigo.
+  const [autoLink, setAutoLink] = useState(false);
   const [mergeSelection, setMergeSelection] = useState<Set<string>>(new Set());
   function toggleMergeSelection(callId: string) {
     setMergeSelection((prev) => {
@@ -235,7 +238,7 @@ export default function CaptureLiveView({ packets, totalParsed }: Props) {
   // flow" do sngrep), MAIS as uniões manuais acima — pra dar pra ver as 2+
   // pernas de uma ligação (ex.: proxy↔FreeSWITCH e FreeSWITCH↔operadora)
   // como uma coisa só mesmo quando não existe header nenhum ligando elas.
-  const callGroups = useMemo(() => buildCallGroups(dialogs, manualLinks), [dialogs, manualLinks]);
+  const callGroups = useMemo(() => buildCallGroups(dialogs, manualLinks, autoLink), [dialogs, manualLinks, autoLink]);
   const groupByCallId = useMemo(() => {
     const m = new Map<string, CallGroup>();
     for (const g of callGroups) for (const cid of g.callIds) m.set(cid, g);
@@ -360,6 +363,15 @@ export default function CaptureLiveView({ packets, totalParsed }: Props) {
             placeholder='filtro (ex: número, nome, ramal...)'
             className={`text-[11px] bg-panel border border-border rounded px-2 py-0.5 w-56 ${fullscreen ? '' : 'ml-auto'}`}
           />
+        )}
+        {tab === 'dialogs' && !selectedCallId && (
+          <label
+            className="flex items-center gap-1.5 text-[11px] text-muted cursor-pointer shrink-0"
+            title="Ligado: junta automaticamente as pernas que compartilham header X-Call-ID/X-CID (pode gerar grupos grandes em fan-out). Desligado (padrão): só as uniões manuais que você marcar."
+          >
+            <input type="checkbox" checked={autoLink} onChange={(e) => setAutoLink(e.target.checked)} />
+            juntar pernas auto (X-CID)
+          </label>
         )}
         {tab === 'packets' && totalParsed && totalParsed > packets.length && (
           <span className="text-[10px] text-muted">

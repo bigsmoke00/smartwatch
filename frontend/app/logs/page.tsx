@@ -410,9 +410,25 @@ function LogsPageInner() {
   // Tail: cola no fim quando chega log novo, DESDE QUE o usuário já esteja
   // perto do fim. Se ele rolou pra cima pra ler algo antigo, não o arranca.
   const stickBottomRef = useRef(true);
+  // Marca quando NÓS mesmos rolamos (programático), pra o onScroll não
+  // interpretar isso como o usuário tendo rolado e desligar o "grudar no fim".
+  const autoScrollingRef = useRef(false);
   useEffect(() => {
     const el = containerRef.current;
-    if (el && stickBottomRef.current) el.scrollTop = el.scrollHeight;
+    if (!el || !stickBottomRef.current) return;
+    autoScrollingRef.current = true;
+    // Duplo requestAnimationFrame: espera o layout do texto quebrado (stack
+    // traces longos com quebra de linha) assentar ANTES de medir scrollHeight.
+    // Sem isso, no primeiro carregamento a altura ainda estava crescendo e o
+    // scroll parava no meio/topo — daí "só começa a se mover depois".
+    const raf = requestAnimationFrame(() =>
+      requestAnimationFrame(() => {
+        const node = containerRef.current;
+        if (node) node.scrollTop = node.scrollHeight;
+        autoScrollingRef.current = false;
+      }),
+    );
+    return () => cancelAnimationFrame(raf);
   }, [displayHits]);
 
   function toggleLevel(l: string) {
@@ -596,6 +612,7 @@ function LogsPageInner() {
           <div
             ref={containerRef}
             onScroll={(e) => {
+              if (autoScrollingRef.current) return; // ignora o scroll que nós mesmos fizemos
               const el = e.currentTarget;
               // "grudado no fim" = a menos de 40px do fundo; controla o autoscroll.
               stickBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;

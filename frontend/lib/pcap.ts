@@ -581,7 +581,15 @@ export function groupState(group: CallGroup): SipDialogState {
   return best;
 }
 
-export function buildCallGroups(dialogs: SipDialog[], manualLinks?: string[][]): CallGroup[] {
+export function buildCallGroups(
+  dialogs: SipDialog[],
+  manualLinks?: string[][],
+  // Junção AUTOMÁTICA por header X-Call-ID/X-CID. Desligada por padrão a
+  // pedido: fan-out (paging/hunt) fazia grupos gigantes de N pernas. Com
+  // false, só as uniões manuais (manualLinks) valem — o usuário escolhe quais
+  // pernas ver juntas.
+  autoLinkXCid = false,
+): CallGroup[] {
   const parent = new Map<string, string>();
   function find(x: string): string {
     let r = x;
@@ -604,6 +612,7 @@ export function buildCallGroups(dialogs: SipDialog[], manualLinks?: string[][]):
   for (const d of dialogs) parent.set(d.callId, d.callId);
   const byCallId = new Map(dialogs.map((d) => [d.callId, d] as const));
   for (const d of dialogs) {
+    if (!autoLinkXCid) break; // junção automática desligada — só manual
     for (const m of d.messages) {
       if (m.sipXCallId && byCallId.has(m.sipXCallId)) {
         union(d.callId, m.sipXCallId);

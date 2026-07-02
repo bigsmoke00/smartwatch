@@ -53,6 +53,12 @@ services:
     env_file: .env
     ports:
       - "4000:4000"
+    volumes:
+      # Persistência dos .pcap de captura (retenção de 7 dias, ver
+      # CaptureService). Bind mount numa pasta do host — o alvo /data/captures
+      # precisa casar com CAPTURE_STORAGE_DIR no .env. Troque o caminho do host
+      # (antes dos ':') se quiser guardar em outro lugar.
+      - ./capturas_sip:/data/captures
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }
