@@ -99,10 +99,15 @@ const DETAIL_MAX_W = 1000;
 const DETAIL_MIN_FONT = 12;
 const DETAIL_MAX_FONT = 26;
 
-/** Tamanho de fonte (px) do conteúdo do painel de detalhe, escalado com a largura puxada pelo usuário. */
-function detailFontSize(width: number): number {
-  const t = (width - DETAIL_MIN_W) / (DETAIL_MAX_W - DETAIL_MIN_W);
-  return Math.round(DETAIL_MIN_FONT + t * (DETAIL_MAX_FONT - DETAIL_MIN_FONT));
+/**
+ * Fonte FIXA e confortável no painel de detalhe. Antes ela escalava com a
+ * largura — arrastar o painel só aumentava a LETRA, sem melhorar a leitura.
+ * Agora alargar o painel dá mais ESPAÇO horizontal (o texto SIP cru / SDP
+ * quebra menos), que é o que de fato ajuda a ler. O parâmetro fica só por
+ * compatibilidade com as chamadas existentes.
+ */
+function detailFontSize(_width: number): number {
+  return DETAIL_MIN_FONT;
 }
 
 // limite máximo (px) que o painel de detalhe pode esticar na ALTURA — preso à

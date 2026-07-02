@@ -22,7 +22,7 @@ import Docker from 'dockerode';
 import { config } from './config.js';
 import { listDir, readFile, writeFile, executeScript } from './fs-ops.js';
 import { spawnHostShell } from './host-shell.js';
-import { runCapture } from './capture.js';
+import { runCapture, stopCapture } from './capture.js';
 
 let socket: Socket | null = null;
 const activeTermStreams = new Map<string, NodeJS.ReadWriteStream>();
@@ -284,6 +284,11 @@ async function dispatch(docker: Docker, op: string, args: any, reqId: string): P
       return runCapture(args, (chunkB64) => {
         socket?.emit('docker:stream', { reqId, data: chunkB64 });
       });
+
+    // Parada manual (botão na UI): encerra o tcpdump da sessão; o capture.run
+    // em andamento resolve sozinho quando o processo fecha (e vira 'done').
+    case 'capture.stop':
+      return stopCapture(args.sessionId);
 
     default:
       throw new Error(`Unknown op: ${op}`);

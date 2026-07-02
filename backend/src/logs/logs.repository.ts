@@ -210,10 +210,16 @@ export class LogsRepository {
    * "host:..." (são arquivos de /var/log do host, não containers).
    */
   async distinctContainers(serverId: string): Promise<{ containerName: string; image: string | null }[]> {
+    // Bound temporal (7 dias) é o que deixa isto RÁPIDO: sem ele o GROUP BY
+    // varria a hypertable inteira (retenção até 14d) e a listagem demorava.
+    // Com o corte por ts o TimescaleDB exclui os chunks antigos e só agrega os
+    // recentes — cobre praticamente todo container ativo. Quem não loga há
+    // mais de 7 dias sai do atalho (ainda dá pra usar o filtro de texto livre).
     const r = await this.pool.query(
       `SELECT container_name AS "containerName", max(image) AS image
        FROM logs
        WHERE server_id = $1
+         AND ts >= now() - interval '7 days'
          AND container_name IS NOT NULL
          AND container_name NOT LIKE 'host:%'
        GROUP BY container_name
@@ -237,6 +243,7 @@ export class LogsRepository {
       `SELECT substring(container_name from 6) AS "fileName"
        FROM logs
        WHERE server_id = $1
+         AND ts >= now() - interval '7 days'
          AND container_name LIKE 'host:%'
        GROUP BY container_name
        ORDER BY substring(container_name from 6) ASC

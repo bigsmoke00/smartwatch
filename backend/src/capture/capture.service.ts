@@ -98,7 +98,21 @@ export class CaptureService {
         opts.durationSeconds ?? 60, opts.maxPackets ?? 200_000, opts.reason, opts.userId,
       ],
     );
-    return { id: r.rows[0].id };
+    const id = r.rows[0].id;
+    // Captura SIP NÃO exige aprovação: já inicia, auto-aprovada pelo próprio
+    // solicitante. tcpdump/ping continuam exigindo aprovação por serem mais
+    // sensíveis (filtro BPF livre / alvo arbitrário). O front conecta no
+    // /ws/captures logo após receber o id; o buffer de catch-up do gateway
+    // cobre a corrida do WS vs. o agent já começar a mandar bytes.
+    if (opts.kind === 'sip') {
+      const s = await this.getOrThrow(id);
+      if (!this.control.isOnline(s.server_id)) {
+        throw new ForbiddenException('agent deste servidor está offline');
+      }
+      await this.startSession(s, opts.userId);
+      return { id, autoStarted: true };
+    }
+    return { id, autoStarted: false };
   }
 
   private async getOrThrow(id: string): Promise<CaptureSessionRow> {
@@ -128,7 +142,29 @@ export class CaptureService {
     if (!this.control.isOnline(s.server_id)) {
       throw new ForbiddenException('agent deste servidor está offline');
     }
+    await this.startSession(s, approverId);
+    return { ok: true, status: 'running' };
+  }
 
+  /**
+   * Encerra manualmente uma captura em andamento (botão "parar" na UI): manda
+   * o agent matar o tcpdump; o capture.run resolve sozinho quando o processo
+   * fecha e o fluxo normal (invokeStream .then) grava status/forwardDone.
+   */
+  async stop(id: string) {
+    const s = await this.getOrThrow(id);
+    if (s.status !== 'running') throw new BadRequestException('captura não está em andamento');
+    try {
+      await this.control.invoke(s.server_id, 'capture.stop', { sessionId: id }, { timeoutMs: 10_000 });
+    } catch {
+      // Se o agent não respondeu, o corte por tempo ainda encerra sozinho.
+    }
+    return { ok: true };
+  }
+
+  /** Dispara a captura no agent (compartilhado por approve() e pelo auto-start do SIP). */
+  private async startSession(s: CaptureSessionRow, approverId: string) {
+    const id = s.id;
     await this.pool.query(
       `UPDATE capture_sessions SET status='running', approved_by=$2, approved_at=now(), started_at=now() WHERE id=$1`,
       [id, approverId],

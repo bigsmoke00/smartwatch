@@ -33,7 +33,19 @@ const MAX_CAPTURE_BYTES = parseInt(process.env.LOGWATCH_MAX_CAPTURE_BYTES ?? '52
 // fechar sozinha ao bater esse tempo, e esse teto vale tanto pro clamp local
 // abaixo quanto pra validação no backend (DTO) e no banco (CHECK constraint
 // em capture_sessions.duration_seconds) — os três precisam ficar em sincronia.
-const MAX_DURATION_SECONDS = 900;
+const MAX_DURATION_SECONDS = 300;
+
+// Capturas em andamento, por sessionId -> função que encerra o tcpdump
+// (SIGTERM, pra ele fechar o .pcap direito). Usado pelo capture.stop (parada
+// manual pela UI) — ver control.ts.
+const runningCaptures = new Map<string, () => void>();
+
+export function stopCapture(sessionId: string): { ok: boolean; stopped: boolean } {
+  const kill = runningCaptures.get(sessionId);
+  if (!kill) return { ok: true, stopped: false };
+  kill();
+  return { ok: true, stopped: true };
+}
 
 export interface CaptureArgs {
   sessionId: string;
@@ -145,6 +157,7 @@ function runCaptureProcess(
   timeoutMs: number,
   maxBytes: number,
   onChunk?: (b64: string) => void,
+  onStart?: (kill: () => void) => void,
 ): Promise<{ code: number; stderr: string; totalBytes: number; exceeded: boolean }> {
   return new Promise((resolveP) => {
     let child;
@@ -154,6 +167,9 @@ function runCaptureProcess(
       resolveP({ code: -1, stderr: e.message, totalBytes: 0, exceeded: false });
       return;
     }
+    // Expõe um "encerrar agora" (parada manual pela UI) — SIGTERM pra o
+    // tcpdump fechar o .pcap corretamente, igual ao corte por tempo.
+    onStart?.(() => { try { child.kill('SIGTERM'); } catch {} });
     let stderr = '';
     let totalBytes = 0;
     let exceeded = false;
@@ -251,7 +267,10 @@ async function runPacketCapture(args: CaptureArgs, onChunk?: (b64: string) => vo
     ...filterArgs,
   ];
 
-  const r = await runCaptureProcess(tcpdumpPath(), cmdArgs, durationSeconds * 1000, MAX_CAPTURE_BYTES, onChunk);
+  const r = await runCaptureProcess(
+    tcpdumpPath(), cmdArgs, durationSeconds * 1000, MAX_CAPTURE_BYTES, onChunk,
+    (kill) => { if (args.sessionId) runningCaptures.set(args.sessionId, kill); },
+  ).finally(() => { if (args.sessionId) runningCaptures.delete(args.sessionId); });
 
   if (r.totalBytes === 0) {
     return { ok: false, error: r.stderr.trim() || 'nenhum pacote capturado no período/filtro informado (sem permissão? interface inválida?)' };

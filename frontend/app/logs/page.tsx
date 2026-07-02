@@ -61,6 +61,7 @@ function LogsPageInner() {
   // Container específico dentro do source=container (vazio = todos os containers)
   const [containerName, setContainerName] = useState('');
   const [containerOptions, setContainerOptions] = useState<{ containerName: string; image: string | null }[]>([]);
+  const [containersLoading, setContainersLoading] = useState(false);
   // Arquivo específico de /var/log dentro do source=host (vazio = todos os arquivos)
   const [fileName, setFileName] = useState('');
   const [fileOptions, setFileOptions] = useState<{ fileName: string }[]>([]);
@@ -104,13 +105,15 @@ function LogsPageInner() {
   // container selecionado não existir mais nessa lista, limpa a seleção.
   useEffect(() => {
     if (!serverId) { setContainerOptions([]); setContainerName(''); return; }
+    setContainersLoading(true);
     apiFetch<{ containerName: string; image: string | null }[]>(`/logs/containers?serverId=${serverId}`)
       .then((rows) => {
         const arr = safeArray<{ containerName: string; image: string | null }>(rows);
         setContainerOptions(arr);
         setContainerName((prev) => (arr.some((c) => c.containerName === prev) ? prev : ''));
       })
-      .catch(() => setContainerOptions([]));
+      .catch(() => setContainerOptions([]))
+      .finally(() => setContainersLoading(false));
   }, [serverId]);
 
   // Lista de arquivos de /var/log já vistos nos logs "host" desse servidor,
@@ -159,6 +162,14 @@ function LogsPageInner() {
     // Descarta qualquer batch de WS bufferizado da busca/fonte anterior —
     // senão ele é aplicado por cima do resultado novo no próximo flush.
     pendingRef.current = [];
+    // Ao abrir a tela (nenhum servidor escolhido) NÃO busca nada — a lista
+    // fica vazia até o usuário selecionar um servidor. Evita trazer a frota
+    // inteira de cara.
+    if (!serverId) {
+      setHits([]); setTotal(0); setOccurrences(0);
+      setLoading(false); setSearchError(false);
+      return;
+    }
     setLoading(true);
     setSearchError(false);
     const qp = new URLSearchParams();
@@ -334,7 +345,9 @@ function LogsPageInner() {
       // causava linhas de outro servidor presas na lista e, com volume alto,
       // a lista parecia "não atualizar mais" (dominada por ruído de outro
       // servidor que nunca deveria aparecer).
-      if (sid) filtered = filtered.filter((d) => d.serverId === sid);
+      // Sem servidor escolhido não mostra tail nenhum (a tela abre vazia).
+      if (!sid) return;
+      filtered = filtered.filter((d) => d.serverId === sid);
       if (lv.length)
         filtered = filtered.filter((d) => lv.includes(d.level || 'unknown'));
       if (qq.trim()) {
@@ -389,6 +402,18 @@ function LogsPageInner() {
     setRenderLimit(500);
   }, [serverId, range.from, range.to, source, containerName, q, levels]);
   const visibleHits = sortedHits.slice(0, renderLimit);
+  // Exibe do mais ANTIGO (topo) pro mais RECENTE (base), igual `tail -f` no
+  // servidor. sortedHits está em DESC (recente primeiro) só pro slice pegar os
+  // N MAIS recentes; aqui invertemos apenas a exibição.
+  const displayHits = useMemo(() => visibleHits.slice().reverse(), [visibleHits]);
+
+  // Tail: cola no fim quando chega log novo, DESDE QUE o usuário já esteja
+  // perto do fim. Se ele rolou pra cima pra ler algo antigo, não o arranca.
+  const stickBottomRef = useRef(true);
+  useEffect(() => {
+    const el = containerRef.current;
+    if (el && stickBottomRef.current) el.scrollTop = el.scrollHeight;
+  }, [displayHits]);
 
   function toggleLevel(l: string) {
     setLevels((prev) =>
@@ -474,6 +499,11 @@ function LogsPageInner() {
                 <div className="h-5 w-px bg-border" />
                 {!serverId ? (
                   <span className="text-xs text-muted">selecione um servidor pra filtrar por container</span>
+                ) : containersLoading ? (
+                  <span className="text-xs text-muted flex items-center gap-1.5">
+                    <span className="inline-block h-3 w-3 rounded-full border-2 border-accent border-t-transparent animate-spin" />
+                    carregando containers…
+                  </span>
                 ) : (
                   <Select
                     value={containerName}
@@ -565,6 +595,11 @@ function LogsPageInner() {
           )}
           <div
             ref={containerRef}
+            onScroll={(e) => {
+              const el = e.currentTarget;
+              // "grudado no fim" = a menos de 40px do fundo; controla o autoscroll.
+              stickBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+            }}
             className="font-mono text-xs leading-relaxed max-h-[calc(100vh-280px)] overflow-auto"
           >
             {sortedHits.length === 0 && (
@@ -572,7 +607,19 @@ function LogsPageInner() {
                 Nenhum log encontrado para os filtros selecionados.
               </div>
             )}
-            {visibleHits.map((h) => {
+            {/* Ordem invertida (recente embaixo), então o "mostrar mais" (carrega
+                MAIS ANTIGOS) fica no TOPO. */}
+            {renderLimit < sortedHits.length && (
+              <div className="p-3 text-center border-b border-border/50">
+                <button
+                  onClick={() => setRenderLimit((n) => n + 500)}
+                  className="text-xs text-accent hover:underline"
+                >
+                  mostrar mais 500 (de {sortedHits.length - renderLimit} restantes)
+                </button>
+              </div>
+            )}
+            {displayHits.map((h) => {
               const isHost = (h.containerName ?? '').startsWith('host:');
               const hostFile = isHost ? h.containerName!.replace(/^host:/, '') : null;
               return (
@@ -604,16 +651,6 @@ function LogsPageInner() {
                 </div>
               );
             })}
-            {renderLimit < sortedHits.length && (
-              <div className="p-3 text-center border-t border-border/50">
-                <button
-                  onClick={() => setRenderLimit((n) => n + 500)}
-                  className="text-xs text-accent hover:underline"
-                >
-                  mostrar mais 500 (de {sortedHits.length - renderLimit} restantes)
-                </button>
-              </div>
-            )}
           </div>
         </Card>
       </div>

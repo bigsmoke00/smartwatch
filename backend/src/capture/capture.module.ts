@@ -18,10 +18,10 @@ class RequestCaptureDto {
   @IsOptional() @IsString() iface?: string;
   @IsOptional() @IsString() filterExpr?: string;
   @IsOptional() @IsString() targetHost?: string;
-  // Teto absoluto: 15min (900s) — a captura fecha sozinha ao bater isso.
+  // Teto absoluto: 5min (300s) — a captura fecha sozinha ao bater isso.
   // Precisa ficar em sincronia com MAX_DURATION_SECONDS em agent/src/capture.ts
   // e com o CHECK constraint de duration_seconds em capture_sessions.
-  @IsOptional() @IsInt() @Min(5) @Max(900) durationSeconds?: number;
+  @IsOptional() @IsInt() @Min(5) @Max(300) durationSeconds?: number;
   @IsOptional() @IsInt() maxPackets?: number;
   @IsString() reason!: string;
 }
@@ -68,6 +68,15 @@ class CaptureController {
   @Post(':id/approve')
   approve(@Param('id') id: string, @CurrentUser() u: JwtUserPayload) {
     return this.svc.approve(id, u.sub);
+  }
+
+  // Parar manualmente uma captura em andamento — quem solicita ou quem aprova
+  // pode encerrar (não exige aprovação, é só cortar o que já está rodando).
+  @RequirePermission('capture:request', 'capture:approve')
+  @Audit('capture.stop')
+  @Post(':id/stop')
+  stop(@Param('id') id: string) {
+    return this.svc.stop(id);
   }
 }
 

@@ -187,10 +187,10 @@ export default function CapturesPage() {
     const effectiveFilter = filterExpr.trim()
       ? filterExpr
       : (kind === 'sip' && !includeRtp ? 'port 5060 or port 5061' : undefined);
-    const durationSeconds = Math.min(900, Math.max(5, Number(durationInput) || 60));
+    const durationSeconds = Math.min(300, Math.max(5, Number(durationInput) || 60));
     const maxPackets = Number(maxPacketsInput) || 200000;
     try {
-      await apiFetch('/captures', {
+      const res = await apiFetch<{ id: string; autoStarted?: boolean }>('/captures', {
         method: 'POST',
         body: JSON.stringify({
           serverId, kind, iface: iface || 'any',
@@ -199,8 +199,15 @@ export default function CapturesPage() {
         }),
       });
       setReason(''); setFilterExpr(''); setTargetHost(''); setShowForm(false);
-      loadSessions();
-      alert('Pedido registrado — um aprovador vai revisar.');
+      // SIP não exige aprovação: já começou no backend — conecta e assiste
+      // direto. tcpdump/ping continuam entrando na fila de aprovação.
+      if (res?.autoStarted && res.id) {
+        watchSession(res.id, kind);
+        loadSessions();
+      } else {
+        loadSessions();
+        alert('Pedido registrado — um aprovador vai revisar.');
+      }
     } catch (e) {
       alert(e instanceof ApiError ? e.message : 'erro ao registrar pedido');
     }
@@ -295,6 +302,15 @@ export default function CapturesPage() {
     loadSessions();
   }
 
+  async function stopCapture(id: string) {
+    try {
+      await apiFetch(`/captures/${id}/stop`, { method: 'POST', body: '{}' });
+      loadSessions();
+    } catch (e) {
+      alert(e instanceof ApiError ? e.message : 'erro ao parar a captura');
+    }
+  }
+
   function saveCapture(id: string, blobUrl: string) {
     const a = document.createElement('a');
     a.href = blobUrl; a.download = `capture-${id.slice(0, 8)}.pcap`; a.click();
@@ -369,11 +385,11 @@ export default function CapturesPage() {
                 )}
 
                 <div>
-                  <label className="text-xs text-muted">Duração (segundos, 5–900 · teto de 15min)</label>
+                  <label className="text-xs text-muted">Duração (segundos, 5–300 · teto de 5min)</label>
                   <Input
                     type="number" value={durationInput}
                     onChange={(e) => setDurationInput(e.target.value)}
-                    onBlur={() => setDurationInput(String(Math.min(900, Math.max(5, Number(durationInput) || 60))))}
+                    onBlur={() => setDurationInput(String(Math.min(300, Math.max(5, Number(durationInput) || 60))))}
                   />
                 </div>
                 {kind !== 'ping' && (
@@ -487,6 +503,10 @@ export default function CapturesPage() {
                       )}
                       {(s.status === 'pending' || s.status === 'running') && !w && s.kind !== 'ping' && (
                         <button onClick={() => watchSession(s.id, s.kind)} className="text-accent hover:underline text-xs">assistir</button>
+                      )}
+                      {/* Parar manualmente uma captura em andamento (sip/tcpdump). */}
+                      {s.status === 'running' && s.kind !== 'ping' && (!w || !w.done) && (
+                        <button onClick={() => stopCapture(s.id)} className="text-warn hover:underline text-xs">parar</button>
                       )}
                       {w?.done && w.ok && w.blobUrl && (
                         <button onClick={() => saveCapture(s.id, w.blobUrl!)} className="text-accent hover:underline text-xs">salvar .pcap</button>
