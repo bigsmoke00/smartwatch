@@ -151,7 +151,15 @@ export default function CapturesPage() {
   }
   async function loadSessions() {
     const qs = onlyPending ? '?pending=true' : '';
-    setSessions(safeArray<Session>(await apiFetch(`/captures${qs}`).catch(() => [])));
+    // NÃO zera a lista em erro transitório (401 sendo refrescado, blip de rede):
+    // antes qualquer falha do poll (a cada 6s) esvaziava a tela ("os dados
+    // somem"). Em falha, mantém o que já estava.
+    try {
+      const data = await apiFetch<Session[]>(`/captures${qs}`);
+      setSessions(safeArray<Session>(data));
+    } catch {
+      // mantém as sessões anteriores
+    }
   }
   useEffect(() => {
     loadServers(); loadSessions();

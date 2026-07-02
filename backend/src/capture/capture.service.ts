@@ -211,9 +211,17 @@ export class CaptureService {
     const filePath = this.pcapPath(id);
     let fileStream: ReturnType<typeof createWriteStream> | null = null;
     let wroteBytes = 0;
-    fsp.mkdir(CAPTURE_STORAGE_DIR, { recursive: true })
-      .then(() => { fileStream = createWriteStream(filePath); })
-      .catch((e) => this.logger.warn(`não foi possível abrir arquivo de captura ${id.slice(0, 8)}: ${e?.message}`));
+    // IMPORTANTE: abre o arquivo ANTES de disparar a captura (await). Se isso
+    // fosse assíncrono/paralelo, os primeiros chunks — inclusive o CABEÇALHO
+    // global do .pcap — chegavam antes do stream existir e se perdiam, salvando
+    // um arquivo corrompido (ou nada, em captura curta → "pcap indisponível").
+    try {
+      await fsp.mkdir(CAPTURE_STORAGE_DIR, { recursive: true });
+      fileStream = createWriteStream(filePath);
+    } catch (e: any) {
+      this.logger.warn(`não foi possível abrir arquivo de captura ${id.slice(0, 8)}: ${e?.message}`);
+      fileStream = null;
+    }
 
     this.control.invokeStream(s.server_id, 'capture.run', args, (chunkB64: string) => {
       this.gateway.forwardChunk(id, chunkB64);
