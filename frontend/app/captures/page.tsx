@@ -9,7 +9,7 @@ import { Input } from '@/components/ui/Input';
 import { Badge } from '@/components/ui/Badge';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Select } from '@/components/ui/Select';
-import { apiFetch, ApiError, Auth } from '@/lib/api';
+import { apiFetch, ApiError, Auth, handleUnauthorized } from '@/lib/api';
 import { loadMyPermissions, hasPerm } from '@/lib/perms';
 import { fmtTime, safeArray } from '@/lib/utils';
 import { PcapStreamParser, ParsedPacket } from '@/lib/pcap';
@@ -333,10 +333,17 @@ export default function CapturesPage() {
   }
 
   // Busca o .pcap persistido no servidor (fetch cru com o token, é binário).
-  async function fetchStoredPcap(id: string): Promise<Blob | null> {
+  // Em 401 (token expirado) refresca e tenta de novo — como o apiFetch faz —
+  // porque este fetch manual não passa pelo interceptor de refresh.
+  async function fetchStoredPcap(id: string, retried = false): Promise<Blob | null> {
     const res = await fetch(`${CAPTURES_API}/captures/${id}/pcap`, {
       headers: { Authorization: `Bearer ${Auth.token() ?? ''}` },
     });
+    if (res.status === 401 && !retried) {
+      const ok = await handleUnauthorized(); // refresca o token (ou manda pro login)
+      if (ok) return fetchStoredPcap(id, true);
+      return null;
+    }
     if (!res.ok) return null;
     return res.blob();
   }
