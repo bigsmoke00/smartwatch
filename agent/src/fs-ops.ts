@@ -119,6 +119,17 @@ export async function writeFile(path: string, content: string) {
   };
 }
 
+export async function deleteFile(path: string) {
+  const { virtualPath, realPath } = ensureAllowed(path);
+  const stat = await fs.stat(realPath);
+  // Só apaga arquivo comum — nunca diretório (evita rm -rf acidental de árvore).
+  if (!stat.isFile()) {
+    throw new Error(`não é um arquivo comum: ${virtualPath}`);
+  }
+  await fs.unlink(realPath);
+  return { path: virtualPath, realPath, deleted: true };
+}
+
 export interface ExecuteResult {
   exitCode: number;
   stdout: string;

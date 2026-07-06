@@ -20,7 +20,7 @@
 import { io as ioClient, Socket } from 'socket.io-client';
 import Docker from 'dockerode';
 import { config } from './config.js';
-import { listDir, readFile, writeFile, executeScript } from './fs-ops.js';
+import { listDir, readFile, writeFile, deleteFile, executeScript } from './fs-ops.js';
 import { spawnHostShell } from './host-shell.js';
 import { runCapture, stopCapture } from './capture.js';
 
@@ -155,6 +155,9 @@ async function dispatch(docker: Docker, op: string, args: any, reqId: string): P
 
     case 'fs.writeFile':
       return writeFile(args.path, args.content ?? '');
+
+    case 'fs.deleteFile':
+      return deleteFile(args.path);
 
     case 'fs.execute':
       return executeScript({

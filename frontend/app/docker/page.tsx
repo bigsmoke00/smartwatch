@@ -230,23 +230,24 @@ function ContainersTab({ serverId, canControl, canDestroy }: { serverId: string;
                     <button title="Inspect" onClick={() => showInspect(c.Id, name)} className="text-muted hover:text-accent">
                       <Info size={14} />
                     </button>
-                    {canControl && (
-                      <>
-                        {c.State !== 'running' ? (
+                    {/* Start (subir parado) e Restart = operar (docker:control).
+                        Stop e Remove = destrutivo, só admin master (docker:destroy). */}
+                    {c.State !== 'running'
+                      ? canControl && (
                           <button title="Start" onClick={() => action(c.Id, 'start')} className="text-success hover:text-accent">
                             <Play size={14} />
                           </button>
-                        ) : (
+                        )
+                      : canDestroy && (
                           <button title="Stop" onClick={() => action(c.Id, 'stop')} className="text-warn hover:text-accent">
                             <Square size={14} />
                           </button>
                         )}
-                        <button title="Restart" onClick={() => action(c.Id, 'restart')} className="text-info hover:text-accent">
-                          <RotateCw size={14} />
-                        </button>
-                      </>
+                    {canControl && (
+                      <button title="Restart" onClick={() => action(c.Id, 'restart')} className="text-info hover:text-accent">
+                        <RotateCw size={14} />
+                      </button>
                     )}
-                    {/* Remover é destrutivo — só admin master (docker:destroy). */}
                     {canDestroy && (
                       <button title="Remove" onClick={() => remove(c.Id)} className="text-danger hover:text-accent">
                         <Trash2 size={14} />

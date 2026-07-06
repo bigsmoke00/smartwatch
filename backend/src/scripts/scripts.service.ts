@@ -105,6 +105,18 @@ export class ScriptsService {
     return { ...r, fileId: file.id };
   }
 
+  /** Apaga o arquivo no host (via agent) e o registro no banco (versões caem por CASCADE). */
+  async deleteFile(input: { serverId: string; path: string }) {
+    const r = await this.ctrl.invoke<{ deleted: boolean }>(input.serverId, 'fs.deleteFile', {
+      path: input.path,
+    });
+    await this.pool.query(
+      `DELETE FROM script_files WHERE server_id=$1 AND path=$2`,
+      [input.serverId, input.path],
+    );
+    return r;
+  }
+
   async listVersions(serverId: string, path: string) {
     const file = await this.findFile(serverId, path);
     if (!file) return [];

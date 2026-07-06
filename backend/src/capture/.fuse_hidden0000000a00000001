@@ -75,7 +75,7 @@ class CaptureController {
   // Lê o .pcap persistido (usado pelo "ver captura", que faz fetch+parse no
   // navegador — precisa dos bytes no JS). Auth por header (Bearer), streaming
   // do disco via StreamableFile sem carregar tudo em memória no backend.
-  @RequirePermission('capture:request')
+  @RequirePermission('capture:request', 'capture:approve')
   @Get(':id/pcap')
   async pcap(@Param('id') id: string, @Res({ passthrough: true }) res: Response): Promise<StreamableFile | undefined> {
     const info = await this.svc.pcapFile(id);
@@ -95,7 +95,7 @@ class CaptureController {
   // Authorization numa navegação/âncora de download, então o download vai por
   // um token efêmero na URL — assinado, escopado a esta captura e a este
   // usuário, com validade de 2min (se vazar em log de proxy, expira sozinho).
-  @RequirePermission('capture:request')
+  @RequirePermission('capture:request', 'capture:approve')
   @Get(':id/pcap/token')
   async pcapToken(@Param('id') id: string, @CurrentUser() u: JwtUserPayload) {
     const info = await this.svc.pcapFile(id);

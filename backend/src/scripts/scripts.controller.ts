@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Post, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { IsOptional, IsString } from 'class-validator';
 import { ScriptsService } from './scripts.service';
@@ -53,6 +53,15 @@ export class ScriptsController {
       actorEmail: u.email,
       comment: dto.comment,
     });
+  }
+
+  // Apagar arquivo é permissão SEPARADA de editar: scripts:write edita/cria,
+  // scripts:delete apaga. Assim dá pra ter um perfil que edita mas não apaga.
+  @RequirePermission('scripts:delete')
+  @Audit('scripts.delete')
+  @Delete('file')
+  del(@Param('serverId') serverId: string, @Query('path') path: string) {
+    return this.svc.deleteFile({ serverId, path });
   }
 
   @RequirePermission('scripts:read')

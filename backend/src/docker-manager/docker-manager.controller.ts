@@ -56,7 +56,8 @@ export class DockerManagerController {
     return this.ctrl.invoke(serverId, 'startContainer', { id });
   }
 
-  @RequirePermission('docker:control')
+  // stop é destrutivo (derruba o serviço) — só admin master, junto do remove.
+  @RequirePermission('docker:destroy')
   @Audit('docker.stop')
   @Post('containers/:id/stop')
   @HttpCode(200)

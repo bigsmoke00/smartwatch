@@ -10,9 +10,10 @@ import { Badge } from '@/components/ui/Badge';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Select } from '@/components/ui/Select';
 import { apiFetch } from '@/lib/api';
+import { loadMyPermissions, hasPerm } from '@/lib/perms';
 import { fmtTime, safeArray } from '@/lib/utils';
 import {
-  Folder, FileText, Save, Play, Download, Upload, History, ArrowUp, RefreshCw, FolderOpen, Code2,
+  Folder, FileText, Save, Play, Download, Upload, History, ArrowUp, RefreshCw, FolderOpen, Code2, Lock, Trash2,
 } from 'lucide-react';
 
 // Monaco é client-only — carrega via dynamic import
@@ -44,6 +45,14 @@ export default function ScriptsPage() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const [perms, setPerms] = useState<Set<string> | null>(null);
+  useEffect(() => { loadMyPermissions().then(setPerms); }, []);
+  const canWrite = hasPerm(perms, 'scripts:write');
+  const canExecute = hasPerm(perms, 'scripts:execute');
+  const canDelete = hasPerm(perms, 'scripts:delete');
+  // Modo leitura: só consegue ver (scripts:read), sem editar/executar/apagar.
+  const readOnly = perms !== null && !canWrite && !canExecute && !canDelete;
 
   const dirty = file && content !== file.content;
 
@@ -100,6 +109,19 @@ export default function ScriptsPage() {
         body: JSON.stringify({ path: file.path, content, comment }),
       });
       await openFile(file.path);
+    } catch (e: any) {
+      setError(e?.payload?.message || e.message);
+    } finally { setLoading(false); }
+  }
+
+  async function deleteFile() {
+    if (!file) return;
+    if (!confirm(`Apagar o arquivo ${file.path}? Esta ação não pode ser desfeita.`)) return;
+    setLoading(true);
+    try {
+      await apiFetch(`/scripts/${serverId}/file?path=${encodeURIComponent(file.path)}`, { method: 'DELETE' });
+      setFile(null); setContent(''); setVersions([]);
+      await loadDir(path);
     } catch (e: any) {
       setError(e?.payload?.message || e.message);
     } finally { setLoading(false); }
@@ -180,6 +202,19 @@ export default function ScriptsPage() {
           }
         />
 
+        {readOnly && (
+          <div className="rounded-lg border-2 border-warn/60 bg-warn/10 px-4 py-3 flex items-center gap-3">
+            <Lock size={22} className="text-warn shrink-0" />
+            <div>
+              <div className="text-warn font-semibold text-base">Modo somente leitura</div>
+              <div className="text-sm text-muted">
+                Você pode visualizar os scripts, mas <strong>não pode editar, executar nem apagar</strong> nada.
+                Peça a um administrador a permissão adequada (scripts:write, scripts:execute ou scripts:delete).
+              </div>
+            </div>
+          </div>
+        )}
+
         <div className="grid grid-cols-12 gap-3">
           {/* TREE */}
           <Card className="col-span-3 p-0 overflow-hidden">
@@ -246,18 +281,29 @@ export default function ScriptsPage() {
               {file && (
                 <div className="flex items-center gap-2">
                   <input ref={fileInputRef} type="file" onChange={uploadFile} className="hidden" />
-                  <Button variant="ghost" onClick={() => fileInputRef.current?.click()} title="Upload (substitui editor)">
-                    <Upload size={14} />
-                  </Button>
+                  {canWrite && (
+                    <Button variant="ghost" onClick={() => fileInputRef.current?.click()} title="Upload (substitui editor)">
+                      <Upload size={14} />
+                    </Button>
+                  )}
                   <Button variant="ghost" onClick={downloadCurrent} title="Download">
                     <Download size={14} />
                   </Button>
-                  <Button variant="secondary" onClick={() => save(prompt('Comentário?') ?? undefined)} disabled={!dirty}>
-                    <Save size={14} /> Salvar
-                  </Button>
-                  <Button onClick={execute}>
-                    <Play size={14} /> Executar
-                  </Button>
+                  {canWrite && (
+                    <Button variant="secondary" onClick={() => save(prompt('Comentário?') ?? undefined)} disabled={!dirty}>
+                      <Save size={14} /> Salvar
+                    </Button>
+                  )}
+                  {canDelete && (
+                    <Button variant="ghost" onClick={deleteFile} title="Apagar arquivo" className="text-danger">
+                      <Trash2 size={14} /> Apagar
+                    </Button>
+                  )}
+                  {canExecute && (
+                    <Button onClick={execute}>
+                      <Play size={14} /> Executar
+                    </Button>
+                  )}
                 </div>
               )}
             </div>
@@ -271,6 +317,7 @@ export default function ScriptsPage() {
                   options={{
                     fontSize: 13, minimap: { enabled: false }, automaticLayout: true,
                     scrollBeyondLastLine: false, renderWhitespace: 'selection',
+                    readOnly: !canWrite, // sem scripts:write o editor é só leitura
                   }}
                 />
               ) : (

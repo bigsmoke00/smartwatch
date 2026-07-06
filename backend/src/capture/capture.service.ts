@@ -107,20 +107,17 @@ export class CaptureService {
       ],
     );
     const id = r.rows[0].id;
-    // Captura SIP NÃO exige aprovação: já inicia, auto-aprovada pelo próprio
-    // solicitante. tcpdump/ping continuam exigindo aprovação por serem mais
-    // sensíveis (filtro BPF livre / alvo arbitrário). O front conecta no
-    // /ws/captures logo após receber o id; o buffer de catch-up do gateway
-    // cobre a corrida do WS vs. o agent já começar a mandar bytes.
-    if (opts.kind === 'sip') {
-      const s = await this.getOrThrow(id);
-      if (!this.control.isOnline(s.server_id)) {
-        throw new ForbiddenException('agent deste servidor está offline');
-      }
-      await this.startSession(s, opts.userId);
-      return { id, autoStarted: true };
+    // Captura NÃO exige mais aprovação: quem tem capture:request (acesso à tela)
+    // já dispara direto. Qualquer tipo (sip/tcpdump/ping) inicia na hora,
+    // auto-aprovado pelo próprio solicitante. O front conecta no /ws/captures
+    // logo após receber o id; o buffer de catch-up do gateway cobre a corrida
+    // do WS vs. o agent já começar a mandar bytes.
+    const s = await this.getOrThrow(id);
+    if (!this.control.isOnline(s.server_id)) {
+      throw new ForbiddenException('agent deste servidor está offline');
     }
-    return { id, autoStarted: false };
+    await this.startSession(s, opts.userId);
+    return { id, autoStarted: true };
   }
 
   private async getOrThrow(id: string): Promise<CaptureSessionRow> {

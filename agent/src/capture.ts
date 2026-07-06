@@ -257,8 +257,21 @@ async function runPacketCapture(args: CaptureArgs, onChunk?: (b64: string) => vo
     filterArgs = normalizeFilterExpr(args.filterExpr);
   }
 
+  // SEGURANÇA: o tcpdump roda como root. Sem a aprovação humana que existia
+  // antes, o filtro/interface do usuário vira argv direto — um token começando
+  // com '-' poderia injetar flags do tcpdump (ex.: -r pra ler arquivo, -z pra
+  // executar comando, -w pra gravar em disco). Rejeita qualquer token assim.
+  const iface = args.iface || 'any';
+  const injection = [iface, ...filterArgs].find((t) => /^-/.test(t));
+  if (injection) {
+    return { ok: false, error: `filtro/interface inválido: "${injection}" não pode começar com '-'` };
+  }
+  if (!/^[A-Za-z0-9._@:-]+$/.test(iface) || /^-/.test(iface)) {
+    return { ok: false, error: `interface inválida: "${iface}"` };
+  }
+
   const cmdArgs = [
-    '-i', args.iface || 'any',
+    '-i', iface,
     '-w', '-', // stdout — nunca toca disco
     '-c', String(maxPackets),
     '-s', '0',

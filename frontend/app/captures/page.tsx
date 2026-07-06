@@ -199,7 +199,6 @@ export default function CapturesPage() {
   }, []);
 
   const canRequest = hasPerm(perms, 'capture:request');
-  const canApprove = hasPerm(perms, 'capture:approve');
 
   async function submit() {
     if (!serverId || !reason.trim()) return alert('selecione um servidor e informe o motivo');
@@ -310,21 +309,6 @@ export default function CapturesPage() {
     });
   }
 
-  async function approve(id: string, kind: Kind) {
-    if (!confirm('Aprovar dispara a captura agora no servidor (até a duração configurada). É preciso manter esta página aberta — não tem replay, o conteúdo é só em tempo real. Confirmar?')) return;
-    watchSession(id, kind);
-    try {
-      await apiFetch(`/captures/${id}/approve`, { method: 'POST', body: '{}' });
-      loadSessions();
-    } catch (e) {
-      alert(e instanceof ApiError ? e.message : 'erro ao aprovar');
-      loadSessions();
-    }
-  }
-  async function reject(id: string) {
-    await apiFetch(`/captures/${id}/reject`, { method: 'POST', body: '{}' });
-    loadSessions();
-  }
 
   async function stopCapture(id: string) {
     try {
@@ -580,12 +564,6 @@ export default function CapturesPage() {
                       {s.error_text && !w && <div className="text-[10px] text-danger mt-0.5">{s.error_text}</div>}
                     </td>
                     <td className="px-3 py-1.5 text-right whitespace-nowrap space-x-2">
-                      {s.status === 'pending' && canApprove && (
-                        <>
-                          <button onClick={() => approve(s.id, s.kind)} className="text-success hover:underline text-xs">aprovar</button>
-                          <button onClick={() => reject(s.id)} className="text-danger hover:underline text-xs">rejeitar</button>
-                        </>
-                      )}
                       {(s.status === 'pending' || s.status === 'running') && !w && s.kind !== 'ping' && (
                         <button onClick={() => watchSession(s.id, s.kind)} className="text-accent hover:underline text-xs">assistir</button>
                       )}
