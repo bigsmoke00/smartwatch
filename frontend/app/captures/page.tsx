@@ -356,14 +356,23 @@ export default function CapturesPage() {
     return res.blob();
   }
 
-  // Baixa o .pcap salvo (sessões concluídas, retenção de 7 dias).
+  // Baixa o .pcap salvo por DOWNLOAD NATIVO (streaming do navegador), não mais
+  // fetch+blob. Antes o fetch carregava o arquivo INTEIRO na memória do JS
+  // antes de salvar — lento e pesado pra pcap grande. Agora pega um token curto
+  // (autenticado) e navega pra URL de download: o navegador baixa direto, em
+  // streaming, pelo gerenciador de downloads.
   async function downloadStoredPcap(id: string) {
-    const blob = await fetchStoredPcap(id);
-    if (!blob) { alert('pcap indisponível (não salvo ou expirado)'); return; }
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url; a.download = `capture-${id.slice(0, 8)}.pcap`; a.click();
-    URL.revokeObjectURL(url);
+    try {
+      const { token } = await apiFetch<{ token: string }>(`/captures/${id}/pcap/token`);
+      const a = document.createElement('a');
+      a.href = `${CAPTURES_API}/captures/${id}/pcap/download?dt=${encodeURIComponent(token)}`;
+      a.download = `capture-${id.slice(0, 8)}.pcap`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    } catch (e) {
+      alert(e instanceof ApiError ? e.message : 'pcap indisponível (não salvo ou expirado)');
+    }
   }
 
   // Re-visualiza uma captura já concluída: baixa o .pcap salvo e re-parseia no

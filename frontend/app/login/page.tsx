@@ -66,11 +66,12 @@ function LoginInner() {
             <label className="text-xs text-muted">Email</label>
             <Input
               type="email"
+              name="lw-email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               required
               placeholder="seu@email.com"
-              autoComplete="username"
+              autoComplete="off"
               disabled={needsMfa}
             />
           </div>

@@ -1,18 +1,21 @@
 import {
-  Body, Controller, Get, Module, Param, Post, Query, Res, StreamableFile,
+  Body, Controller, Get, Module, NotFoundException, Param, Post, Query, Res, StreamableFile,
 } from '@nestjs/common';
 import type { Response } from 'express';
 import { createReadStream } from 'fs';
-import { JwtModule } from '@nestjs/jwt';
+import { JwtModule, JwtService } from '@nestjs/jwt';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { IsIn, IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
 import { CaptureService } from './capture.service';
 import { CaptureGateway } from './capture.gateway';
 import { RequirePermission } from '../auth/permissions.decorator';
+import { Public } from '../auth/public.decorator';
 import { Audit } from '../audit/audit.decorator';
 import { CurrentUser, JwtUserPayload } from '../auth/current-user.decorator';
 import { DockerManagerModule } from '../docker-manager/docker-manager.module';
 import { RolesModule } from '../roles/roles.module';
+
+const JWT_SECRET = process.env.JWT_SECRET ?? 'dev-secret';
 
 class RequestCaptureDto {
   @IsString() serverId!: string;
@@ -32,7 +35,10 @@ class RequestCaptureDto {
 @ApiBearerAuth()
 @Controller('captures')
 class CaptureController {
-  constructor(private readonly svc: CaptureService) {}
+  constructor(
+    private readonly svc: CaptureService,
+    private readonly jwt: JwtService,
+  ) {}
 
   @RequirePermission('capture:request', 'capture:approve')
   @Get('servers')
@@ -81,13 +87,63 @@ class CaptureController {
     return this.svc.stop(id);
   }
 
-  // Baixa o .pcap persistido (7 dias). StreamableFile faz o streaming do
-  // arquivo do disco sem carregar tudo em memória e sem conflitar com o Nest
-  // (passthrough:true só define os headers). Content-Length pra o navegador
-  // mostrar progresso.
+  // Lê o .pcap persistido (usado pelo "ver captura", que faz fetch+parse no
+  // navegador — precisa dos bytes no JS). Auth por header (Bearer), streaming
+  // do disco via StreamableFile sem carregar tudo em memória no backend.
   @RequirePermission('capture:request', 'capture:approve')
   @Get(':id/pcap')
   async pcap(@Param('id') id: string, @Res({ passthrough: true }) res: Response): Promise<StreamableFile | undefined> {
+    const info = await this.svc.pcapFile(id);
+    if (!info) {
+      res.status(404).json({ message: 'pcap não disponível (não salvo ou expirado)' });
+      return undefined;
+    }
+    res.set({
+      'Content-Type': 'application/vnd.tcpdump.pcap',
+      'Content-Disposition': `attachment; filename="${info.filename}"`,
+      'Content-Length': String(info.size),
+    });
+    return new StreamableFile(createReadStream(info.path));
+  }
+
+  // Token CURTO (2min) pra download nativo. O navegador não manda o header
+  // Authorization numa navegação/âncora de download, então o download vai por
+  // um token efêmero na URL — assinado, escopado a esta captura e a este
+  // usuário, com validade de 2min (se vazar em log de proxy, expira sozinho).
+  @RequirePermission('capture:request', 'capture:approve')
+  @Get(':id/pcap/token')
+  async pcapToken(@Param('id') id: string, @CurrentUser() u: JwtUserPayload) {
+    const info = await this.svc.pcapFile(id);
+    if (!info) throw new NotFoundException('pcap não disponível (não salvo ou expirado)');
+    const token = await this.jwt.signAsync(
+      { sub: u.sub, cid: id, purpose: 'pcap-dl' },
+      { secret: JWT_SECRET, expiresIn: '120s' },
+    );
+    return { token };
+  }
+
+  // Download NATIVO/streaming: @Public (o guard global exige header, que o
+  // download nativo não manda) — valida o token curto da query no lugar. O
+  // navegador baixa direto pela URL, em streaming, sem carregar o arquivo
+  // inteiro na memória do JS (era o gargalo do fetch+blob no front).
+  @Public()
+  @Get(':id/pcap/download')
+  async pcapDownload(
+    @Param('id') id: string,
+    @Query('dt') dt: string,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<StreamableFile | undefined> {
+    let payload: any;
+    try {
+      payload = await this.jwt.verifyAsync(dt ?? '', { secret: JWT_SECRET });
+    } catch {
+      res.status(401).json({ message: 'token de download inválido ou expirado' });
+      return undefined;
+    }
+    if (payload?.purpose !== 'pcap-dl' || payload?.cid !== id) {
+      res.status(403).json({ message: 'token inválido para este arquivo' });
+      return undefined;
+    }
     const info = await this.svc.pcapFile(id);
     if (!info) {
       res.status(404).json({ message: 'pcap não disponível (não salvo ou expirado)' });
