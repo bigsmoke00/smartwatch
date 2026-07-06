@@ -31,7 +31,7 @@ const MAX_STORED_ROWS_PER_MINUTE = Math.max(
 // Fallback só usado se o servidor não vier com retentionDays carregado
 // (ex: integrações antigas) — o valor real fica em servers.retention_days,
 // configurável por servidor na criação/edição (1 a 365 dias).
-const DEFAULT_RETENTION_DAYS = 14;
+const DEFAULT_RETENTION_DAYS = 4;
 
 function detectLevel(message: string): string {
   const m = message.match(LEVEL_REGEX);
@@ -202,35 +202,72 @@ export class LogsService {
   }
 
   /**
-   * Aplica a retenção de logs configurada por servidor (servers.retention_days).
+   * Retenção de logs por servidor (servers.retention_days), do jeito EFICIENTE.
    *
-   * TimescaleDB não tem retenção por linha — a retention_policy nativa só
-   * dropa chunk inteiro (todos os servidores misturados). Por isso o
-   * enforcement real é aqui: roda de hora em hora e deleta, servidor por
-   * servidor, tudo que passou do prazo configurado. A retention_policy do
-   * TimescaleDB (ver migration 019) fica só como rede de segurança a 400 dias.
+   * Antes era só DELETE per-server de hora em hora. No TimescaleDB, DELETE em
+   * chunk COMPRIMIDO descomprime o chunk (infla 5-20x) e deixa dead tuples que,
+   * sem VACUUM FULL, não voltam pro SO — foi o que inchou o banco.
+   *
+   * Agora:
+   *  1. drop_chunks até a MAIOR retenção — dropa o CHUNK INTEIRO (DROP TABLE do
+   *     arquivo): devolve disco na hora, sem descomprimir, sem dead tuple. Se
+   *     todos os servidores têm a mesma retenção, isto sozinho já limpa tudo.
+   *  2. DELETE só o MÍNIMO: pros servidores com retenção MENOR que a máxima,
+   *     remove a janela [retenção, máx] que ainda vive em chunks novos demais
+   *     pra dropar inteiros. Só roda quando há retenções diferentes.
+   *  3. Recomprime na hora os chunks que o DELETE descomprimiu — devolve o
+   *     espaço sem precisar de VACUUM FULL.
    */
   @Cron(CronExpression.EVERY_HOUR)
   async purgeExpiredLogs() {
     const servers = await this.pool.query(
       `SELECT id, name, retention_days AS "retentionDays" FROM servers`,
     );
+    if (!servers.rowCount) return { serversChecked: 0, totalDeleted: 0 };
+
+    const maxRet = Math.max(...servers.rows.map((s) => Number(s.retentionDays)));
+
+    // 1) drop_chunks: barato, whole-chunk, devolve disco na hora.
+    try {
+      await this.pool.query(
+        `SELECT drop_chunks('logs', older_than => ($1 || ' days')::interval)`,
+        [maxRet],
+      );
+    } catch (e: any) {
+      this.logger.error(`Falha no drop_chunks de logs (>${maxRet}d): ${e?.message ?? e}`);
+    }
+
+    // 2) DELETE mínimo só pros servidores com retenção menor que a máxima.
     let totalDeleted = 0;
+    let deletedSomething = false;
     for (const s of servers.rows) {
+      if (Number(s.retentionDays) >= maxRet) continue; // já coberto pelo drop_chunks
       try {
         const r = await this.pool.query(
           `DELETE FROM logs WHERE server_id = $1 AND ts < now() - ($2 || ' days')::interval`,
           [s.id, s.retentionDays],
         );
-        if (r.rowCount) {
-          totalDeleted += r.rowCount;
-          this.logger.log(
-            `Retenção: removidas ${r.rowCount} linhas de logs do servidor ${s.name} (>${s.retentionDays}d)`,
-          );
-        }
+        if (r.rowCount) { totalDeleted += r.rowCount; deletedSomething = true; }
       } catch (e: any) {
         this.logger.error(`Falha ao purgar logs do servidor ${s.name}: ${e?.message ?? e}`);
       }
+    }
+
+    // 3) Recomprime os chunks que o DELETE descomprimiu (se_not_compressed pula
+    // os que já estão comprimidos) — sem isto o espaço só voltaria com VACUUM FULL.
+    if (deletedSomething) {
+      try {
+        await this.pool.query(
+          `SELECT compress_chunk(c, if_not_compressed => true)
+           FROM show_chunks('logs', older_than => interval '6 hours') AS c`,
+        );
+      } catch (e: any) {
+        this.logger.warn(`Recompressão pós-purga falhou: ${e?.message ?? e}`);
+      }
+    }
+
+    if (totalDeleted) {
+      this.logger.log(`Retenção: ${totalDeleted} linhas removidas (per-server) + drop_chunks >${maxRet}d`);
     }
     return { serversChecked: servers.rowCount, totalDeleted };
   }

@@ -93,7 +93,7 @@ export class ServersService {
         input.cloudAz ?? null,
         JSON.stringify(input.tags ?? []),
         JSON.stringify(input.labels ?? {}),
-        input.retentionDays ?? 14,
+        input.retentionDays ?? 4,
       ],
     );
     return this.get(r.rows[0].id);

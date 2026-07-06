@@ -40,7 +40,7 @@ export default function ServersPage() {
   const [description, setDescription] = useState('');
   const [cloud, setCloud] = useState<string>('onprem');
   const [cloudRegion, setCloudRegion] = useState('');
-  const [retentionDays, setRetentionDays] = useState('14');
+  const [retentionDays, setRetentionDays] = useState('4');
 
   // edição inline de retenção de um servidor já existente
   const [editingRetentionId, setEditingRetentionId] = useState<string | null>(null);
