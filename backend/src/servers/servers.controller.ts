@@ -66,7 +66,19 @@ class CreateApiKeyDto {
 export class ServersController {
   constructor(private readonly service: ServersService) {}
 
-  @RequirePermission('servers:read')
+  // Listar servidores é PRÉ-REQUISITO de quase toda tela por-servidor (o
+  // dropdown de servidor em Logs, Docker, Scripts, Métricas, Terminal, PG...).
+  // Por isso a LISTA é liberada pra qualquer permissão de leitura/uso por
+  // servidor — senão um perfil com logs:read (mas sem servers:read) não
+  // conseguia nem escolher o servidor pra ver os logs. O detalhe/criação/edição
+  // continua exigindo servers:read/servers:write.
+  @RequirePermission(
+    'servers:read', 'servers:write',
+    'logs:read', 'logs:export', 'logs:download',
+    'containers:read', 'docker:control', 'docker:deploy', 'docker:destroy',
+    'metrics:read', 'scripts:read', 'pg:read', 'db:query',
+    'capture:request', 'terminal:request', 'terminal:open', 'patroni:read',
+  )
   @Get()
   list(@Query('cloud') cloud?: string, @Query('tag') tag?: string) {
     return this.service.list({ cloud, tag });
