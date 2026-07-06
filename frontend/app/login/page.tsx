@@ -19,7 +19,7 @@ function LoginInner() {
   const router = useRouter();
   const params = useSearchParams();
   const next = params?.get('next') || '/';
-  const [email, setEmail] = useState('admin@logwatch.local');
+  const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [totp, setTotp] = useState('');
   const [needsMfa, setNeedsMfa] = useState(false);
@@ -69,6 +69,7 @@ function LoginInner() {
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               required
+              placeholder="seu@email.com"
               autoComplete="username"
               disabled={needsMfa}
             />
