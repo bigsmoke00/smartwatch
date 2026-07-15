@@ -8,7 +8,7 @@ import { Input } from '@/components/ui/Input';
 import { Badge } from '@/components/ui/Badge';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Select } from '@/components/ui/Select';
-import { apiFetch, Auth } from '@/lib/api';
+import { apiFetch, Auth, handleUnauthorized } from '@/lib/api';
 import { fmtTime, safeArray } from '@/lib/utils';
 import { Download, Package, Calendar, Trash2 } from 'lucide-react';
 
@@ -34,16 +34,25 @@ export default function ExportsPage() {
     setSchedules(safeArray<Schedule>(await apiFetch('/logs/schedules').catch(() => [])));
   }
 
-  // Export inline com download forçado (precisa header de auth no fetch direto).
+  // fetch com header de auth (download forçado) que, em 401 (token expirado),
+  // refresca e tenta de novo — como o apiFetch faz. Sem isto, o download
+  // falhava com "Falha (401)" toda vez que o access token vencia (15min).
+  async function authedFetch(url: string, retried = false): Promise<Response> {
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${Auth.token() ?? ''}` } });
+    if (res.status === 401 && !retried) {
+      const ok = await handleUnauthorized();
+      if (ok) return authedFetch(url, true);
+    }
+    return res;
+  }
+
   async function downloadExport(opts: {
     serverId?: string; from: string; to: string; format: string;
   }) {
     const qp = new URLSearchParams();
     if (opts.serverId) qp.set('serverId', opts.serverId);
     qp.set('from', opts.from); qp.set('to', opts.to); qp.set('format', opts.format);
-    const res = await fetch(`${API}/logs/export?${qp}`, {
-      headers: { Authorization: `Bearer ${Auth.token() ?? ''}` },
-    });
+    const res = await authedFetch(`${API}/logs/export?${qp}`);
     if (!res.ok) { alert(`Falha (${res.status})`); return; }
     triggerDownload(await res.blob(), filenameFromHeader(res.headers.get('content-disposition')));
   }
@@ -51,9 +60,7 @@ export default function ExportsPage() {
   async function downloadBundle(serverId: string, from: string, to: string) {
     const qp = new URLSearchParams();
     if (from) qp.set('from', from); if (to) qp.set('to', to);
-    const res = await fetch(`${API}/servers/${serverId}/logs/bundle?${qp}`, {
-      headers: { Authorization: `Bearer ${Auth.token() ?? ''}` },
-    });
+    const res = await authedFetch(`${API}/servers/${serverId}/logs/bundle?${qp}`);
     if (!res.ok) { alert(`Falha (${res.status})`); return; }
     triggerDownload(await res.blob(), `logs-${serverId.slice(0, 8)}.zip`);
   }

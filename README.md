@@ -224,6 +224,13 @@ detalhes de cada um.
   não 90 — ajuste a policy diretamente no banco se precisar de mais.
 - Compressão automática dos logs após algumas horas.
 - Linhas idênticas no mesmo segundo são consolidadas em `repeat_count`.
+- **Busca de chamada FreeSWITCH/Unity por call UUID**: linhas cujo primeiro
+  token é um UUID (ex.: trace de dialplan do FreeSWITCH) são reconhecidas na
+  ingestão e gravadas com o campo estruturado `call_uuid` (índice parcial
+  `idx_logs_call_uuid_ts`), sem exigir tabela nova. Fontes de altíssimo
+  volume (como esse FreeSWITCH) podem ter um teto de linhas
+  armazenadas/minuto maior via `servers.log_rate_limit_per_minute`. Veja a
+  tela **Unity (FreeSWITCH)** e [`docs/UNITY_FREESWITCH.md`](./docs/UNITY_FREESWITCH.md).
 
 ## Rate limiting
 
@@ -241,3 +248,5 @@ e a seção "Limitações conhecidas" acima para o que ainda não está pronto.
 - [`agent/README.md`](./agent/README.md) — o que o agent faz e como roda.
 - [`docs/LOGS.md`](./docs/LOGS.md) — detalhes da tela de Logs.
 - [`docs/SCRIPT_MANAGER.md`](./docs/SCRIPT_MANAGER.md) — Script Manager.
+- [`docs/UNITY_FREESWITCH.md`](./docs/UNITY_FREESWITCH.md) — integração
+  FreeSWITCH/Unity e busca de chamada por call UUID.

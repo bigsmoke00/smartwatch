@@ -100,6 +100,7 @@ export class LogsController {
     @Query('to') to?: string,
     @Query('page') page?: string,
     @Query('pageSize') pageSize?: string,
+    @Query('callUuid') callUuid?: string,
   ) {
     return this.logs.query({
       serverId,
@@ -112,7 +113,38 @@ export class LogsController {
       to,
       page: page ? parseInt(page, 10) : 1,
       pageSize: pageSize ? parseInt(pageSize, 10) : 100,
+      callUuid,
     });
+  }
+
+  /**
+   * Chamadas (call UUID) distintas vistas num intervalo — alimenta o painel
+   * "Chamadas recentes" da tela /unity (integração FreeSWITCH). serverId,
+   * from e to são obrigatórios.
+   *
+   * Janela clampada em 48h no máximo: em vez de rejeitar com 400 (mais
+   * atrito pro usuário que só quer "ver o máximo possível"), simplesmente
+   * empurra `from` pra `to - 48h` quando o pedido vier maior — consistente
+   * com o resto do controller, que também favorece resultado best-effort a
+   * erro explícito quando o filtro é só um limite de performance/custo (ver
+   * clamps de pageSize/interval nos outros endpoints desse controller).
+   */
+  @ApiBearerAuth()
+  @Get('logs/calls')
+  listRecentCalls(
+    @Query('serverId') serverId: string,
+    @Query('from') from: string,
+    @Query('to') to: string,
+  ) {
+    const MAX_WINDOW_MS = 48 * 60 * 60 * 1000;
+    const toMs = Date.parse(to);
+    const fromMs = Date.parse(from);
+    const toIso = Number.isFinite(toMs) ? new Date(toMs).toISOString() : to;
+    const clampedFrom =
+      Number.isFinite(toMs) && Number.isFinite(fromMs) && toMs - fromMs > MAX_WINDOW_MS
+        ? new Date(toMs - MAX_WINDOW_MS).toISOString()
+        : from;
+    return this.logs.listRecentCalls(serverId, clampedFrom, toIso);
   }
 
   /** Containers já vistos nos logs desse servidor — popula o seletor de container específico. */

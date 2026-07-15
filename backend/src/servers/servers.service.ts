@@ -26,6 +26,12 @@ export interface ServerRow {
   tags: string[];
   labels: Record<string, any>;
   retentionDays: number;
+  /**
+   * Override opcional do teto de linhas de log ARMAZENADAS/minuto (NULL =
+   * usa o default global LOGWATCH_MAX_STORED_ROWS_PER_MINUTE). Pensado para
+   * fontes de altíssimo volume, como o FreeSWITCH/Unity.
+   */
+  logRateLimitPerMinute?: number | null;
   lastSeenAt?: Date | null;
   createdAt: Date;
 }
@@ -35,6 +41,7 @@ const COLS = `id, name, description, hostname, ip::text AS ip,
               cloud_instance_id AS "cloudInstanceId", cloud_az AS "cloudAz",
               os, arch, agent_version AS "agentVersion",
               tags, labels, retention_days AS "retentionDays",
+              log_rate_limit_per_minute AS "logRateLimitPerMinute",
               last_seen_at AS "lastSeenAt", created_at AS "createdAt"`;
 
 @Injectable()
@@ -80,8 +87,8 @@ export class ServersService {
     const r = await this.pool.query(
       `INSERT INTO servers(name, description, hostname, cloud, cloud_region,
                            cloud_account, cloud_instance_id, cloud_az, tags, labels,
-                           retention_days)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id`,
+                           retention_days, log_rate_limit_per_minute)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id`,
       [
         input.name,
         input.description ?? null,
@@ -94,6 +101,7 @@ export class ServersService {
         JSON.stringify(input.tags ?? []),
         JSON.stringify(input.labels ?? {}),
         input.retentionDays ?? 4,
+        input.logRateLimitPerMinute ?? null,
       ],
     );
     return this.get(r.rows[0].id);
@@ -113,6 +121,7 @@ export class ServersService {
       cloudInstanceId: 'cloud_instance_id',
       cloudAz: 'cloud_az',
       retentionDays: 'retention_days',
+      logRateLimitPerMinute: 'log_rate_limit_per_minute',
     };
     for (const [k, col] of Object.entries(map)) {
       if ((patch as any)[k] !== undefined) {
@@ -271,6 +280,7 @@ export class ServersService {
       tags: row.tags,
       labels: row.labels,
       retentionDays: row.retention_days,
+      logRateLimitPerMinute: row.log_rate_limit_per_minute,
       lastSeenAt: row.last_seen_at,
       createdAt: row.created_at,
     };

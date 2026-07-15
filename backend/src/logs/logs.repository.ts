@@ -16,6 +16,12 @@ export interface LogDoc {
   message: string;
   meta?: Record<string, any>;
   repeatCount?: number;
+  /**
+   * UUID da chamada FreeSWITCH/Unity, extraído em LogsService.ingest() a
+   * partir do primeiro token da mensagem (ver CALL_UUID_REGEX). undefined
+   * pra qualquer log que não seja desse formato.
+   */
+  callUuid?: string;
 }
 
 export interface LogQuery {
@@ -45,6 +51,8 @@ export interface LogQuery {
   to?: string;
   page?: number;
   pageSize?: number;
+  /** Filtro exato por call UUID (FreeSWITCH/Unity) — ver tela /unity. */
+  callUuid?: string;
 }
 
 /** Resolve "now-15m", "now", ISO, ou epoch ms para timestamp do Postgres. */
@@ -99,17 +107,19 @@ export class LogsRepository {
     const msg = docs.map((d) => d.message.slice(0, 8192));
     const meta = docs.map((d) => (d.meta ? JSON.stringify(d.meta) : null));
     const repeatCount = docs.map((d) => d.repeatCount ?? 1);
+    const callUuid = docs.map((d) => d.callUuid ?? null);
 
     await this.pool.query(
       `INSERT INTO logs(ts, id, server_id, server_name, container_id, container_name,
-                        image, stream, level, message, meta, repeat_count)
+                        image, stream, level, message, meta, repeat_count, call_uuid)
        SELECT *
        FROM UNNEST(
          $1::timestamptz[], $2::uuid[], $3::uuid[], $4::text[],
          $5::text[], $6::text[], $7::text[],
-         $8::text[], $9::text[], $10::text[], $11::jsonb[], $12::integer[]
+         $8::text[], $9::text[], $10::text[], $11::jsonb[], $12::integer[],
+         $13::uuid[]
        )`,
-      [ts, ids, sid, sname, cid, cname, image, stream, level, msg, meta, repeatCount],
+      [ts, ids, sid, sname, cid, cname, image, stream, level, msg, meta, repeatCount, callUuid],
     );
   }
 
@@ -161,6 +171,10 @@ export class LogsRepository {
       params.push(filters.q);
       i++;
     }
+    if (filters.callUuid) {
+      where.push(`call_uuid = $${i++}`);
+      params.push(filters.callUuid);
+    }
 
     const w = where.length ? 'WHERE ' + where.join(' AND ') : '';
     const page = Math.max(1, filters.page ?? 1);
@@ -176,7 +190,7 @@ export class LogsRepository {
       SELECT id, ts, server_id AS "serverId", server_name AS "serverName",
              container_id AS "containerId", container_name AS "containerName",
              image, stream, level, message, meta,
-             repeat_count AS "repeatCount"
+             repeat_count AS "repeatCount", call_uuid AS "callUuid"
       FROM logs
       ${w}
       ORDER BY ts DESC
@@ -249,6 +263,33 @@ export class LogsRepository {
        ORDER BY substring(container_name from 6) ASC
        LIMIT 500`,
       [serverId],
+    );
+    return r.rows;
+  }
+
+  /**
+   * Chamadas (call UUID) distintas vistas num intervalo de tempo — alimenta
+   * o painel "Chamadas recentes" da tela /unity (FreeSWITCH). Exige uma
+   * janela de tempo (from/to já validada/clampada pelo controller em no
+   * máx. 48h) porque, ao contrário de distinctContainers/distinctFiles (que
+   * usam uma janela fixa de 7 dias), aqui o volume de linhas por chamada é
+   * altíssimo — uma janela livre sem limite faria o GROUP BY varrer chunks
+   * demais na hypertable.
+   */
+  async listRecentCalls(
+    serverId: string,
+    from: string,
+    to: string,
+  ): Promise<{ callUuid: string; startedAt: string; endedAt: string; lineCount: number }[]> {
+    const r = await this.pool.query(
+      `SELECT call_uuid AS "callUuid", min(ts) AS "startedAt", max(ts) AS "endedAt",
+              count(*)::int AS "lineCount"
+       FROM logs
+       WHERE server_id = $1 AND call_uuid IS NOT NULL AND ts >= $2 AND ts <= $3
+       GROUP BY call_uuid
+       ORDER BY min(ts) DESC
+       LIMIT 200`,
+      [serverId, from, to],
     );
     return r.rows;
   }

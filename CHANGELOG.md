@@ -8,6 +8,23 @@ no `GET /health` (backend) e no heartbeat do agent (`agentVersion`).
 
 ## [Não lançado]
 
+### Feature: busca de chamada FreeSWITCH/Unity por call UUID
+- Migration `027_unity_freeswitch_call_uuid.sql`: coluna `logs.call_uuid`
+  (uuid) + índice parcial `idx_logs_call_uuid_ts`, e
+  `servers.log_rate_limit_per_minute` (override opcional por servidor do
+  teto de linhas armazenadas/minuto).
+- `LogsService.ingest` extrai o call UUID do primeiro token da mensagem
+  (ex.: trace de dialplan do FreeSWITCH) — sem nenhuma mudança no agent, que
+  continua mandando as linhas cruas do jeito que já manda hoje via
+  `agent/src/host-logs.ts`.
+- Endpoints novos: `GET /logs?callUuid=...` (filtro exato) e
+  `GET /logs/calls?serverId&from&to` (chamadas distintas vistas numa janela,
+  teto de 48h).
+- Tela nova **Unity (FreeSWITCH)** (`/unity`): busca por call UUID numa
+  janela de tempo, painel "Chamadas recentes", copiar/exportar .txt.
+- Ver [`docs/UNITY_FREESWITCH.md`](./docs/UNITY_FREESWITCH.md) para o passo
+  a passo completo de deploy do agent nesse tipo de servidor.
+
 ### Correção: exclusão de usuário retornava 500
 - `DELETE /api/users/:id` quebrava com 500 cru quando o usuário tinha pedidos
   de acesso a banco, capturas ou sessões de terminal vinculados — a constraint

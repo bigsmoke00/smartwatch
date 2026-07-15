@@ -25,6 +25,7 @@ interface ServerRow {
   agentVersion?: string;
   tags: string[];
   retentionDays?: number;
+  logRateLimitPerMinute?: number;
   lastSeenAt?: string;
   createdAt: string;
 }
@@ -41,10 +42,21 @@ export default function ServersPage() {
   const [cloud, setCloud] = useState<string>('onprem');
   const [cloudRegion, setCloudRegion] = useState('');
   const [retentionDays, setRetentionDays] = useState('4');
+  // Override opcional do teto de linhas de log armazenadas/minuto — só
+  // relevante pra fontes de altíssimo volume (ex: trace de dialplan do
+  // FreeSWITCH/Unity). Vazio = usa o default global do backend.
+  const [logRateLimitPerMinute, setLogRateLimitPerMinute] = useState('');
 
   // edição inline de retenção de um servidor já existente
   const [editingRetentionId, setEditingRetentionId] = useState<string | null>(null);
   const [editRetentionValue, setEditRetentionValue] = useState('');
+
+  // edição inline do limite de linhas de log/minuto de um servidor já
+  // existente — mesmo padrão da retenção acima, útil pra ajustar depois de
+  // cadastrar (ex: subir o teto do FreeSWITCH/Unity sem precisar recriar
+  // o servidor).
+  const [editingRateLimitId, setEditingRateLimitId] = useState<string | null>(null);
+  const [editRateLimitValue, setEditRateLimitValue] = useState('');
 
   async function load() {
     const qp = new URLSearchParams();
@@ -66,12 +78,14 @@ export default function ServersPage() {
         cloud: cloud || null,
         cloudRegion: cloudRegion || null,
         retentionDays: retentionDays ? parseInt(retentionDays, 10) : undefined,
+        logRateLimitPerMinute: logRateLimitPerMinute ? parseInt(logRateLimitPerMinute, 10) : undefined,
       }),
     });
     setName('');
     setDescription('');
     setCloudRegion('');
     setRetentionDays('14');
+    setLogRateLimitPerMinute('');
     setShowNew(false);
     load();
   }
@@ -91,6 +105,27 @@ export default function ServersPage() {
       load();
     } catch (err: any) {
       alert(`Falha ao atualizar retenção: ${err?.payload?.message || err.message}`);
+    }
+  }
+
+  async function saveRateLimit(serverId: string) {
+    // Vazio = remove o override (volta pro default global) — por isso não
+    // valida "obrigatório", só o range quando algo foi digitado.
+    const raw = editRateLimitValue.trim();
+    const value = raw === '' ? null : parseInt(raw, 10);
+    if (value !== null && (!Number.isFinite(value) || value < 100 || value > 500000)) {
+      alert('Informe um valor entre 100 e 500000, ou deixe vazio para usar o default global.');
+      return;
+    }
+    try {
+      await apiFetch(`/servers/${serverId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ logRateLimitPerMinute: value }),
+      });
+      setEditingRateLimitId(null);
+      load();
+    } catch (err: any) {
+      alert(`Falha ao atualizar limite de linhas/minuto: ${err?.payload?.message || err.message}`);
     }
   }
 
@@ -176,6 +211,21 @@ export default function ServersPage() {
                 />
                 <div className="text-[11px] text-muted mt-0.5">
                   Logs deste servidor são apagados automaticamente após esse prazo (1 a 365 dias).
+                </div>
+              </div>
+              <div>
+                <label className="text-xs text-muted">Limite de linhas de log/minuto (fontes de alto volume)</label>
+                <Input
+                  type="number"
+                  min={100}
+                  max={500000}
+                  value={logRateLimitPerMinute}
+                  onChange={(e) => setLogRateLimitPerMinute(e.target.value)}
+                  placeholder="vazio = default global"
+                />
+                <div className="text-[11px] text-muted mt-0.5">
+                  Override opcional do teto de linhas ARMAZENADAS por minuto para este servidor
+                  (ex: 200000 para o FreeSWITCH/Unity). Deixe vazio para usar o default global.
                 </div>
               </div>
               <div className="md:col-span-2 flex gap-2">
@@ -264,6 +314,59 @@ export default function ServersPage() {
                                 e.stopPropagation();
                                 setEditingRetentionId(s.id);
                                 setEditRetentionValue(String(s.retentionDays ?? 14));
+                              }}
+                              className="text-muted hover:text-accent"
+                            >
+                              <Pencil size={12} />
+                            </button>
+                          )}
+                        </span>
+                      )}
+                      {editingRateLimitId === s.id ? (
+                        <span
+                          className="flex items-center gap-1"
+                          onClick={(e) => { e.preventDefault(); e.stopPropagation(); }}
+                        >
+                          <input
+                            type="number"
+                            min={100}
+                            max={500000}
+                            autoFocus
+                            placeholder="default"
+                            value={editRateLimitValue}
+                            onChange={(e) => setEditRateLimitValue(e.target.value)}
+                            className="w-20 rounded bg-panel2 border border-border px-1.5 py-0.5 text-xs"
+                          />
+                          <button
+                            title="Salvar"
+                            onClick={(e) => { e.preventDefault(); e.stopPropagation(); saveRateLimit(s.id); }}
+                            className="text-success hover:opacity-80"
+                          >
+                            <Check size={14} />
+                          </button>
+                          <button
+                            title="Cancelar"
+                            onClick={(e) => { e.preventDefault(); e.stopPropagation(); setEditingRateLimitId(null); }}
+                            className="text-muted hover:text-danger"
+                          >
+                            <X size={14} />
+                          </button>
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1">
+                          {s.logRateLimitPerMinute && (
+                            <Badge title="Limite de linhas de log armazenadas por minuto (override deste servidor)">
+                              {s.logRateLimitPerMinute.toLocaleString()} linhas/min
+                            </Badge>
+                          )}
+                          {(role === 'admin' || role === 'operator') && (
+                            <button
+                              title="Editar limite de linhas de log/minuto"
+                              onClick={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                setEditingRateLimitId(s.id);
+                                setEditRateLimitValue(s.logRateLimitPerMinute ? String(s.logRateLimitPerMinute) : '');
                               }}
                               className="text-muted hover:text-accent"
                             >
