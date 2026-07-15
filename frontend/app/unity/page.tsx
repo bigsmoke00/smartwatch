@@ -1,44 +1,42 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { io, Socket } from 'socket.io-client';
 import { AppShell } from '@/components/AppShell';
 import { Card } from '@/components/ui/Card';
 import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { ServerPicker } from '@/components/ServerPicker';
-import { apiFetch } from '@/lib/api';
-import { LEVEL_COLOR, fmtTime, safeArray } from '@/lib/utils';
-import { PhoneCall, Search, Copy, Download, RefreshCw, PhoneOutgoing } from 'lucide-react';
+import { apiFetch, ApiError, Auth } from '@/lib/api';
 import { TimeRangePicker, TimeRange } from '@/components/ui/TimeRangePicker';
+import { PhoneCall, Search, Copy, Download, RefreshCw, PhoneOutgoing, Info } from 'lucide-react';
 
 /**
- * Página /unity — busca dedicada de chamadas FreeSWITCH/Unity por call UUID.
+ * Página /unity — scan SOB DEMANDA dos arquivos de log do Unity/FreeSWITCH
+ * (unity.log "vivo" + rotacionados) por call UUID.
  *
- * Reaproveita a MESMA tabela/pipeline de /logs (campo estruturado
- * `call_uuid`, extraído no backend a partir do primeiro token da mensagem —
- * ver LogsService.ingest). Diferente de /logs, aqui a busca por UUID SEMPRE
- * exige uma janela de tempo (teto de 48h, também clampado no backend em
- * GET /logs/calls) — o volume desse servidor é grande demais pra permitir
- * busca livre sem limite de tempo.
+ * MUDANÇA DE ARQUITETURA (a pedido explícito do usuário): esta tela não
+ * consulta mais a hypertable `logs` do Postgres (antes: GET /logs?callUuid= e
+ * GET /logs/calls). Agora cada busca dispara POST /log-scan/start, que manda
+ * o AGENT do servidor vasculhar os arquivos do diretório NA HORA
+ * (request-time, sem nada persistido) e devolver as linhas casadas em tempo
+ * real via WebSocket (/ws/logscan). O agent decide quais arquivos rotacionados
+ * abrir com base no mtime deles — ver agent/src/log-scan.ts e
+ * backend/src/log-scan/ pra detalhes.
+ *
+ * A tabela `logs`/coluna `call_uuid` (ingest genérico) continua existindo no
+ * backend (logs.controller.ts/logs.repository.ts) para uso futuro — só esta
+ * tela específica parou de depender dela. Ver relatório da tarefa.
  */
-interface LogHit {
-  id: string;
-  ts: string;
-  serverId: string;
-  serverName: string;
-  containerName?: string;
-  level?: string;
-  message: string;
-  repeatCount?: number;
-  callUuid?: string;
-}
+
+const UNITY_LOG_DIR = '/opt/digivox/unity/unity-sip-server/var/log/unity';
 
 interface CallRow {
   callUuid: string;
-  startedAt: string;
-  endedAt: string;
-  lineCount: number;
+  count: number;
+  firstSeen: string;
+  lastSeen: string;
 }
 
 const MAX_WINDOW_MS = 48 * 60 * 60 * 1000;
@@ -53,7 +51,7 @@ const DEFAULT_UNITY_RANGE: TimeRange = {
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-/** Resolve "now", "now-15m" ou ISO para epoch ms. Espelha resolveTime() do backend (logs.repository.ts). */
+/** Resolve "now", "now-15m" ou ISO para epoch ms. */
 function toAbsoluteMs(t: string): number {
   if (!t || t === 'now') return Date.now();
   const m = t.match(/^now-(\d+)([smhdw])$/);
@@ -78,38 +76,101 @@ function effectiveRange(range: TimeRange): { fromIso: string; toIso: string; cla
   return { fromIso: new Date(fromMs).toISOString(), toIso: new Date(toMs).toISOString(), clamped };
 }
 
+function fmtTimeShort(iso: string): string {
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return iso;
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${pad(d.getDate())}/${pad(d.getMonth() + 1)} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
+interface ScanState {
+  sessionId: string;
+  connected: boolean;
+  done: boolean;
+  ok?: boolean;
+  error?: string;
+  truncated?: boolean;
+  filesScanned?: number;
+}
+
+const WS_BASE = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:4000';
+
 export default function UnityPage() {
   const [serverId, setServerId] = useState('');
   const [range, setRange] = useState<TimeRange>(DEFAULT_UNITY_RANGE);
   const [callUuid, setCallUuid] = useState('');
 
-  const [hits, setHits] = useState<LogHit[]>([]);
-  const [total, setTotal] = useState(0);
-  const [loading, setLoading] = useState(false);
-  const [searchError, setSearchError] = useState(false);
-  const [hasSearched, setHasSearched] = useState(false);
+  // ---- painel principal: busca por UUID (modo BUSCA do log-scan) ----
+  const [lines, setLines] = useState<string[]>([]);
+  const [searchScan, setSearchScan] = useState<ScanState | null>(null);
+  const searchSocketRef = useRef<Socket | null>(null);
 
+  // ---- painel lateral: chamadas recentes (modo LISTAGEM do log-scan) ----
   const [calls, setCalls] = useState<CallRow[]>([]);
-  const [callsLoading, setCallsLoading] = useState(false);
+  const [callsScan, setCallsScan] = useState<ScanState | null>(null);
+  const callsSocketRef = useRef<Socket | null>(null);
 
   const { fromIso, toIso, clamped } = useMemo(() => effectiveRange(range), [range]);
-
   const uuidLooksValid = callUuid.trim() === '' || UUID_REGEX.test(callUuid.trim());
 
+  function disconnectSearch() {
+    searchSocketRef.current?.disconnect();
+    searchSocketRef.current = null;
+  }
+  function disconnectCalls() {
+    callsSocketRef.current?.disconnect();
+    callsSocketRef.current = null;
+  }
+
+  // Desconecta os dois sockets ao desmontar a página.
+  useEffect(() => () => { disconnectSearch(); disconnectCalls(); }, []);
+
+  function watchCallsSession(sessionId: string) {
+    setCallsScan({ sessionId, connected: false, done: false });
+    const s = io(`${WS_BASE}/ws/logscan`, {
+      transports: ['websocket'],
+      auth: { token: Auth.token() ?? '', sessionId },
+    });
+    callsSocketRef.current = s;
+    s.on('watching', () => setCallsScan((w) => (w ? { ...w, connected: true } : w)));
+    s.on('chunk', (data: { calls?: CallRow[] }) => {
+      if (!data?.calls) return;
+      // Mescla por callUuid — o agent hoje manda um único resumo final, mas
+      // isto também suporta o agent evoluir pra mandar em lotes periódicos.
+      setCalls((prev) => {
+        const map = new Map(prev.map((c) => [c.callUuid, c]));
+        for (const c of data.calls!) map.set(c.callUuid, c);
+        return Array.from(map.values()).sort((a, b) => (a.lastSeen < b.lastSeen ? 1 : -1));
+      });
+    });
+    s.on('done', (meta: any) => {
+      setCallsScan((w) => (w ? {
+        ...w, done: true, ok: meta.ok, error: meta.error, truncated: meta.truncated, filesScanned: meta.filesScanned,
+      } : w));
+      s.disconnect();
+      callsSocketRef.current = null;
+    });
+    s.on('error', (e: any) => {
+      setCallsScan((w) => (w ? { ...w, connected: false, error: e?.message || 'erro de conexão' } : w));
+    });
+  }
+
   async function loadRecentCalls() {
-    if (!serverId) {
-      setCalls([]);
-      return;
-    }
-    setCallsLoading(true);
+    disconnectCalls();
+    setCalls([]);
+    if (!serverId) { setCallsScan(null); return; }
+    setCallsScan({ sessionId: '', connected: false, done: false });
     try {
-      const qp = new URLSearchParams({ serverId, from: fromIso, to: toIso });
-      const rows = await apiFetch<CallRow[]>(`/logs/calls?${qp.toString()}`);
-      setCalls(safeArray<CallRow>(rows));
-    } catch {
-      setCalls([]);
-    } finally {
-      setCallsLoading(false);
+      const { sessionId } = await apiFetch<{ sessionId: string }>('/log-scan/start', {
+        method: 'POST',
+        body: JSON.stringify({ serverId, directory: UNITY_LOG_DIR, from: fromIso, to: toIso }),
+      });
+      watchCallsSession(sessionId);
+    } catch (e) {
+      setCallsScan({
+        sessionId: '', connected: false, done: true, ok: false,
+        error: e instanceof ApiError ? e.message : 'erro ao iniciar scan',
+      });
     }
   }
 
@@ -118,27 +179,51 @@ export default function UnityPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [serverId, fromIso, toIso]);
 
+  function watchSearchSession(sessionId: string) {
+    setSearchScan({ sessionId, connected: false, done: false });
+    const s = io(`${WS_BASE}/ws/logscan`, {
+      transports: ['websocket'],
+      auth: { token: Auth.token() ?? '', sessionId },
+    });
+    searchSocketRef.current = s;
+    s.on('watching', () => setSearchScan((w) => (w ? { ...w, connected: true } : w)));
+    s.on('chunk', (data: { lines?: string[] }) => {
+      if (!data?.lines?.length) return;
+      // A ordem de chegada dos batches já é cronológica (arquivo mais antigo
+      // primeiro, ver agent/src/log-scan.ts) — só concatena na tela.
+      setLines((prev) => prev.concat(data.lines!));
+    });
+    s.on('done', (meta: any) => {
+      setSearchScan((w) => (w ? {
+        ...w, done: true, ok: meta.ok, error: meta.error, truncated: meta.truncated, filesScanned: meta.filesScanned,
+      } : w));
+      s.disconnect();
+      searchSocketRef.current = null;
+    });
+    s.on('error', (e: any) => {
+      setSearchScan((w) => (w ? { ...w, connected: false, error: e?.message || 'erro de conexão' } : w));
+    });
+  }
+
   async function search(uuidOverride?: string) {
     const uuid = (uuidOverride ?? callUuid).trim();
     if (!serverId || !uuid) return;
-    setLoading(true);
-    setSearchError(false);
-    setHasSearched(true);
+    disconnectSearch();
+    setLines([]);
+    setSearchScan({ sessionId: '', connected: false, done: false });
     try {
-      const qp = new URLSearchParams({
-        serverId,
-        callUuid: uuid.toLowerCase(),
-        from: fromIso,
-        to: toIso,
-        pageSize: '5000',
+      const { sessionId } = await apiFetch<{ sessionId: string }>('/log-scan/start', {
+        method: 'POST',
+        body: JSON.stringify({
+          serverId, directory: UNITY_LOG_DIR, from: fromIso, to: toIso, query: uuid.toLowerCase(),
+        }),
       });
-      const data = await apiFetch<{ hits: LogHit[]; total: number }>(`/logs?${qp.toString()}`);
-      setHits(safeArray<LogHit>(data?.hits));
-      setTotal(data?.total ?? 0);
-    } catch {
-      setSearchError(true);
-    } finally {
-      setLoading(false);
+      watchSearchSession(sessionId);
+    } catch (e) {
+      setSearchScan({
+        sessionId: '', connected: false, done: true, ok: false,
+        error: e instanceof ApiError ? e.message : 'erro ao iniciar scan',
+      });
     }
   }
 
@@ -147,15 +232,8 @@ export default function UnityPage() {
     search(c.callUuid);
   }
 
-  // Backend devolve DESC (mais recente primeiro, igual /logs) — aqui a tela
-  // é dedicada a LER uma chamada do início ao fim, então invertemos pra
-  // ordem cronológica ASCENDENTE.
-  const ascHits = useMemo(() => hits.slice().reverse(), [hits]);
-
   function allLinesText(): string {
-    return ascHits
-      .map((h) => `${h.ts ?? ''} [${(h.level ?? 'unknown').toUpperCase()}] ${h.message ?? ''}`)
-      .join('\n');
+    return lines.join('\n');
   }
 
   async function copyAll() {
@@ -176,11 +254,14 @@ export default function UnityPage() {
     URL.revokeObjectURL(url);
   }
 
+  const loading = !!searchScan && !searchScan.done;
+  const hasSearched = !!searchScan;
+
   return (
     <AppShell>
       <div className="p-6 space-y-3">
         <PageHeader
-          title="Unity (FreeSWITCH)"
+          title="Unity"
           description="Busca dedicada de chamadas pelo call UUID — cole o UUID e veja todas as linhas daquela chamada, em ordem cronológica."
           icon={<PhoneCall size={16} />}
           actions={
@@ -189,6 +270,15 @@ export default function UnityPage() {
             </Button>
           }
         />
+
+        <div className="rounded-md bg-panel2 border border-border px-3 py-2 text-xs text-muted flex items-start gap-2">
+          <Info size={14} className="shrink-0 mt-0.5" />
+          <span>
+            Este scan lê os arquivos diretamente no servidor, ao vivo — nada aqui é armazenado no banco.
+            Cada busca abre o(s) arquivo(s) de log do host que cobrem a janela de tempo escolhida (o vivo
+            e os rotacionados necessários) e devolve as linhas casadas em tempo real.
+          </span>
+        </div>
 
         <Card className="p-3">
           <div className="grid grid-cols-1 md:grid-cols-12 gap-2 items-end">
@@ -242,46 +332,42 @@ export default function UnityPage() {
             <div className="px-3 py-2 border-b border-border flex items-center justify-between">
               <div className="text-xs text-muted">
                 {hasSearched
-                  ? `${total.toLocaleString()} linha(s) encontradas para esta chamada nesta janela`
+                  ? `${lines.length.toLocaleString()} linha(s) encontradas até agora${loading ? ' — escaneando...' : ''}`
                   : 'Cole um call UUID e clique em Buscar, ou selecione uma chamada recente ao lado.'}
-                {searchError && (
-                  <span className="ml-2 text-warn">⚠ falha ao buscar — tente novamente</span>
+                {searchScan?.error && (
+                  <span className="ml-2 text-warn">⚠ {searchScan.error}</span>
+                )}
+                {searchScan?.done && searchScan.truncated && (
+                  <span className="ml-2 text-warn">⚠ resultado truncado (teto de arquivos/linhas do scan atingido)</span>
                 )}
               </div>
               <div className="flex items-center gap-2">
-                <Button variant="secondary" size="sm" onClick={copyAll} disabled={ascHits.length === 0}>
+                <Button variant="secondary" size="sm" onClick={copyAll} disabled={lines.length === 0}>
                   <Copy size={12} /> Copiar tudo
                 </Button>
-                <Button variant="secondary" size="sm" onClick={exportTxt} disabled={ascHits.length === 0}>
+                <Button variant="secondary" size="sm" onClick={exportTxt} disabled={lines.length === 0}>
                   <Download size={12} /> Exportar .txt
                 </Button>
               </div>
             </div>
             <div className="font-mono text-xs leading-relaxed max-h-[calc(100vh-360px)] overflow-auto">
-              {loading && (
+              {loading && lines.length === 0 && (
                 <div className="p-6 text-muted text-sm flex items-center gap-2">
                   <span className="inline-block h-3 w-3 rounded-full border-2 border-accent border-t-transparent animate-spin" />
-                  Buscando…
+                  Escaneando os arquivos no servidor…
                 </div>
               )}
-              {!loading && hasSearched && ascHits.length === 0 && (
+              {!loading && hasSearched && lines.length === 0 && searchScan?.done && !searchScan.error && (
                 <div className="p-6 text-muted text-sm">
                   Nenhuma linha encontrada para esse UUID nessa janela de tempo.
                 </div>
               )}
-              {!loading && ascHits.map((h) => (
+              {lines.map((line, i) => (
                 <div
-                  key={h.id || (h.ts ?? '') + (h.message ?? '')}
-                  className="px-3 py-1 border-b border-border/50 hover:bg-panel2 flex gap-3"
+                  key={i}
+                  className="px-3 py-1 border-b border-border/50 hover:bg-panel2 whitespace-pre-wrap break-all"
                 >
-                  <span className="text-muted shrink-0">{h.ts ? fmtTime(h.ts) : '—'}</span>
-                  <span className={`shrink-0 uppercase font-semibold ${LEVEL_COLOR[h.level || 'unknown']}`}>
-                    {(h.level || 'unknown').padEnd(5)}
-                  </span>
-                  {(h.repeatCount ?? 1) > 1 && (
-                    <span className="shrink-0 text-warn">×{h.repeatCount}</span>
-                  )}
-                  <span className="whitespace-pre-wrap break-all">{h.message ?? ''}</span>
+                  {line}
                 </div>
               ))}
             </div>
@@ -292,7 +378,7 @@ export default function UnityPage() {
               <div className="text-sm font-medium flex items-center gap-1.5">
                 <PhoneOutgoing size={13} /> Chamadas recentes
               </div>
-              {callsLoading && (
+              {callsScan && !callsScan.done && (
                 <span className="inline-block h-3 w-3 rounded-full border-2 border-accent border-t-transparent animate-spin" />
               )}
             </div>
@@ -300,10 +386,13 @@ export default function UnityPage() {
               {!serverId && (
                 <div className="p-4 text-xs text-muted">Selecione um servidor.</div>
               )}
-              {serverId && !callsLoading && calls.length === 0 && (
+              {serverId && callsScan?.done && calls.length === 0 && !callsScan.error && (
                 <div className="p-4 text-xs text-muted">
                   Nenhuma chamada com call UUID detectado nesta janela de tempo.
                 </div>
+              )}
+              {callsScan?.error && (
+                <div className="p-4 text-xs text-warn">{callsScan.error}</div>
               )}
               {calls.map((c) => (
                 <button
@@ -315,7 +404,7 @@ export default function UnityPage() {
                 >
                   <div className="font-mono text-[11px] text-accentSoft truncate">{c.callUuid}</div>
                   <div className="text-[11px] text-muted mt-0.5">
-                    {fmtTime(c.startedAt)} → {fmtTime(c.endedAt)} · {c.lineCount.toLocaleString()} linha(s)
+                    {fmtTimeShort(c.firstSeen)} → {fmtTimeShort(c.lastSeen)} · {c.count.toLocaleString()} linha(s)
                   </div>
                 </button>
               ))}

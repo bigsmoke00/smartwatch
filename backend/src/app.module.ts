@@ -28,6 +28,7 @@ import { ZeroTrustModule } from './zero-trust/zero-trust.module';
 import { PgMonitorModule } from './pg-monitor/pg-monitor.module';
 import { DbAccessModule } from './db-access/db-access.module';
 import { CaptureModule } from './capture/capture.module';
+import { LogScanModule } from './log-scan/log-scan.module';
 import { HealthModule } from './health/health.module';
 import { DbMaintenanceModule } from './db-maintenance/db-maintenance.module';
 import { BootstrapService } from './bootstrap.service';
@@ -95,6 +96,7 @@ import { BootstrapService } from './bootstrap.service';
     PgMonitorModule,
     DbAccessModule,
     CaptureModule,
+    LogScanModule,
     HealthModule,
     DbMaintenanceModule,
   ],

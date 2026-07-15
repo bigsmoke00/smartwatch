@@ -50,7 +50,10 @@ function toRealPath(virtualPath: string): string {
   return resolve(HOST_ROOT, '.' + safe);
 }
 
-function ensureAllowed(p: string): { virtualPath: string; realPath: string } {
+// Exportado para reuso por outros módulos do agent que precisam do mesmo
+// scoping de segurança (ex.: log-scan.ts) sem duplicar a lógica de
+// containment/../ traversal.
+export function ensureAllowed(p: string): { virtualPath: string; realPath: string } {
   const abs = toVirtualPath(p);
   for (const base of ALLOWED) {
     if (base === '/' || abs === base || abs.startsWith(base + sep)) {

@@ -23,89 +23,85 @@ não carregam UUID nenhum, e isso é esperado.
 O objetivo: colar o UUID de uma chamada e ver **todas as linhas daquela
 chamada**, numa tela dedicada (`/unity`).
 
-### Decisões de arquitetura
+## Decisão de arquitetura: scan sob demanda, SEM ingestão pro banco
 
-- **Reaproveita a hypertable `logs` já existente**, só com um campo
-  estruturado a mais (`call_uuid`), em vez de um módulo/tabela novos —
-  mais barato e mantém retenção/FTS/rate-limit de graça (migration
-  `027_unity_freeswitch_call_uuid.sql`).
-- **Ingestão continua linha a linha**, sem agrupar por chamada em memória no
-  agent: a linha de hangup não carrega o UUID, então não dá pra fechar um
-  agrupamento de forma confiável. Em vez disso: (a) a cota de linhas
-  armazenadas/minuto tem um override por servidor
-  (`servers.log_rate_limit_per_minute`) para acomodar o volume gigante desse
-  servidor, e (b) a busca por call UUID na UI **exige uma janela de tempo**
-  (from/to, teto de 48h) — não é uma busca livre sem limite.
-- **O agent não precisa de nenhuma mudança de código.** Ele já tem um tailer
-  genérico de arquivos de host (`agent/src/host-logs.ts`) que manda linhas
-  cruas pro mesmo endpoint `/ingest` que os logs de container já usam. A
-  extração do `call_uuid` acontece no **backend** (`LogsService.ingest`), a
-  partir da mensagem já recebida — assim dá pra ajustar o regex no futuro sem
-  redeployar o agent em produção.
+**Modelo atual (a partir desta versão):** cada busca em `/unity` dispara um
+scan **ao vivo, em tempo de requisição**, direto no agent do servidor — nada
+do conteúdo desse log é armazenado no Postgres. O fluxo:
 
-## Passo a passo: instalar o logwatch-agent do zero em `ocisp-sip-server1`
+1. O front chama `POST /log-scan/start` com `{ serverId, directory, from, to,
+   query? }` — `directory` é sempre o caminho fixo do FreeSWITCH acima,
+   `query` é o call UUID (omitido no modo "chamadas recentes").
+2. O backend (`backend/src/log-scan/`) responde IMEDIATAMENTE com um
+   `{ sessionId }` e, em paralelo, manda o **agent** (via o mesmo canal de
+   controle `/ws/control` usado por Docker/captura/terminal) rodar
+   `logscan.run` — ver `agent/src/log-scan.ts`.
+3. O agent lista os arquivos do diretório cujo nome começa com `unity.log`
+   (pega o arquivo "vivo" + os rotacionados), decide quais precisa abrir
+   olhando o **mtime** de cada um (arquivo rotacionado nunca é modificado de
+   novo depois da rotação, então o mtime marca exatamente o fim do intervalo
+   que aquele arquivo cobre) e lê **linha a linha** (nunca carrega o arquivo
+   inteiro em memória) os que intersectam a janela `[from, to]` pedida, do
+   mais antigo pro mais novo.
+4. Cada lote de linhas casadas (modo busca) — ou o resumo agregado por UUID
+   (modo listagem) — é repassado em tempo real pro backend via o canal
+   genérico de streaming (`docker:stream`), que por sua vez repassa pro
+   navegador via WebSocket dedicado `/ws/logscan`. O front conecta nesse WS
+   assim que recebe o `sessionId` do passo 2.
+5. Ao terminar (ou bater um teto de segurança), o agent resolve com um resumo
+   final (`filesScanned`, `truncated`, etc.), que vira o evento `done` no WS.
 
-Esse host ainda não tem nenhum agent rodando. No painel do LogWatch:
+**Por que essa mudança:** o modelo anterior (tailar `unity.log` linha a linha
+pro `/ingest` normal, armazenando tudo na hypertable `logs` com um campo
+`call_uuid` extraído por regex) foi **rejeitado explicitamente pelo usuário**
+— ele não quer esse volume de dados de chamada persistido no banco. O scan
+sob demanda resolve o mesmo caso de uso (achar todas as linhas de uma
+chamada) sem gravar nada: os arquivos já existem no host, rotacionados, e o
+scan só precisa saber "quais abrir" (mtime) e "o que procurar" (call UUID).
 
-1. **Servidores → Novo servidor**. Dê um nome claro (ex.: `ocisp-sip-server1`).
-   Configure já de cara (ver seção seguinte) uma retenção baixa e o
-   `logRateLimitPerMinute` alto.
-2. **Gerar API key** para esse servidor. Copie a chave (`sk_xxxx.yyyy`).
-3. No host `ocisp-sip-server1`, rode (baseado no exemplo de
-   [`README.md`](../README.md#conectar-um-servidor-agent), com as variáveis
-   específicas deste caso):
+### O que isso significa na prática
 
-```bash
-docker run -d \
-  --name logwatch-agent \
-  --restart unless-stopped \
-  -v /var/run/docker.sock:/var/run/docker.sock:ro \
-  -v /:/host:ro \
-  -e LOGWATCH_BASE_URL=https://logwatch.suainfra.com/api \
-  -e LOGWATCH_API_KEY=sk_xxxxxxxx.yyyyyyyyyyyyyyyyyyyyyyyy \
-  -e LOGWATCH_SERVER_NAME=ocisp-sip-server1 \
-  -e LOGWATCH_HOST_LOG_ENABLED=true \
-  -e LOGWATCH_HOST_LOG_PATHS=/opt/digivox/unity/unity-sip-server/var/log/unity/unity.log \
-  -e LOGWATCH_MAX_LINES_PER_SOURCE_PER_SECOND=20000 \
-  ghcr.io/suaorg/logwatch-agent:latest
-```
+- **Não é mais necessário** (e não é mais recomendado) colocar `unity.log` em
+  `LOGWATCH_HOST_LOG_PATHS` do agent — essa variável ligava o tailer contínuo
+  que empurrava cada linha pro `/ingest`. Isso ficou obsoleto para este caso
+  de uso; se algum agent em produção ainda tiver essa variável apontando pro
+  `unity.log`, pode ser removida sem impacto na tela `/unity` (ela não lê
+  mais dessa fonte).
+- **Único requisito no host:** o agent do `logwatch` precisa estar rodando e
+  com `LOGWATCH_ALLOWED_PATHS` cobrindo o diretório do FreeSWITCH. No deploy
+  real do cliente isso já é `LOGWATCH_ALLOWED_PATHS=/` (permissivo, decisão
+  intencional já em produção) — ou seja, **nenhuma mudança de configuração é
+  necessária** nos agents já implantados. Se um novo host for provisionado
+  com uma allowlist mais restrita, garanta que ela inclua
+  `/opt/digivox/unity/unity-sip-server/var/log/unity`.
+- A hypertable `logs` e a coluna `call_uuid` (migration
+  `027_unity_freeswitch_call_uuid.sql`) **continuam existindo** no backend —
+  `GET /logs?callUuid=` e `GET /logs/calls` não foram removidos, só **a tela
+  `/unity` parou de chamá-los**. Ficam disponíveis para outros usos futuros
+  (ex.: correlação com logs de container que passam pelo `/ingest` normal).
 
-Notas sobre essas variáveis (ver `agent/src/config.ts` e `agent/src/host-logs.ts`):
+## Como funciona por baixo (arquivos-chave)
 
-- `-v /:/host:ro` — bind read-only da raiz do host (`LOGWATCH_HOST_ROOT`,
-  default `/host`). Necessário pro tail de arquivo de host funcionar; sem
-  isso o agent loga "bind /host não encontrado" e o tail de host fica
-  desabilitado por completo.
-- `LOGWATCH_HOST_LOG_ENABLED=true` — liga o tailer genérico de arquivos de
-  host (desligado por padrão).
-- `LOGWATCH_HOST_LOG_PATHS` aponta pro **arquivo exato** `unity.log`, não
-  para o diretório `.../var/log/unity/` inteiro — esse diretório tem outras
-  subpastas (`cdr-csv/`, `ciosp/`, `xml_cdr/`, etc.) que não interessam pra
-  esse caso de uso. Os arquivos já rotacionados (ex.:
-  `unity.log.2026-07-13-00-02-50.1`) são ignorados automaticamente pelo
-  filtro `SKIP_ROTATED` do agent — só o arquivo `unity.log` "vivo" precisa
-  ser tailado. A rotação em si é detectada automaticamente por mudança de
-  inode (ver `readNew()` em `host-logs.ts`), então não tem gap quando o
-  unity.log rotaciona.
-- `LOGWATCH_MAX_LINES_PER_SOURCE_PER_SECOND=20000` — bem acima do default
-  (200). É só um **teto de segurança** contra runaway de um source
-  (proteção do buffer do agent), não uma meta de volume esperado — o volume
-  real desse log costuma ficar bem abaixo disso na maior parte do tempo,
-  mas picos de tráfego de chamadas podem gerar rajadas grandes.
-
-## Configuração do servidor na tela Servidores
-
-Depois de cadastrar o servidor, ajuste (na listagem de Servidores, ícone de
-lápis ao lado de cada badge, ou no formulário de criação):
-
-- **`logRateLimitPerMinute`**: um valor alto, ex. **200000** — o teto padrão
-  global (`LOGWATCH_MAX_STORED_ROWS_PER_MINUTE`, default 5000) é pensado pra
-  fontes normais e descartaria a maior parte do volume desse FreeSWITCH.
-- **Retenção (`retentionDays`)**: um valor **baixo**, ex. **1 a 2 dias** —
-  dado o volume gigante (~10MB a cada poucos minutos), reter por muito tempo
-  incha o banco rapidamente. Como a busca por call UUID já exige uma janela
-  de tempo curta (teto de 48h), reter mais do que isso tem pouco valor
-  prático pra esse caso de uso específico.
+- `agent/src/log-scan.ts` — lógica de seleção de arquivo por mtime, leitura
+  linha a linha via `readline`/`fs.createReadStream`, modo busca (`query`) e
+  modo listagem (agregação por UUID), tetos de segurança (máx. 300 arquivos
+  / ~2GB por scan, máx. de linhas casadas configurável).
+- `agent/src/control.ts` — despacha `logscan.run`/`logscan.stop` (mesmo
+  envelope `docker:invoke`/`docker:reply`/`docker:stream` usado por
+  Docker/captura/terminal).
+- `backend/src/log-scan/log-scan.service.ts` — dispara o agent via
+  `ControlGateway.invokeStream()` e devolve `{ sessionId }` na hora.
+- `backend/src/log-scan/log-scan.gateway.ts` — WebSocket `/ws/logscan`, só
+  repassa os batches pra quem estiver assistindo aquela sessão (com um
+  pequeno buffer de catch-up, sem persistência).
+- `backend/src/log-scan/log-scan.controller.ts` — `POST /log-scan/start` e
+  `POST /log-scan/:sessionId/stop`, exigindo a permissão `logs:read` (mesma
+  da tela `/logs`) e registrando a tentativa em `audit_events` (servidor,
+  diretório, se tinha `query`, quem pediu) — é leitura de arquivo de host,
+  então entra no mesmo padrão de auditoria de outras ações sensíveis do Zero
+  Trust (captura, terminal).
+- `frontend/app/unity/page.tsx` — dispara o scan e conecta no WS,
+  acumulando os lotes conforme chegam (já em ordem cronológica).
 
 ## Como usar a busca por call UUID
 
@@ -117,18 +113,20 @@ lápis ao lado de cada badge, ou no formulário de criação):
    "até").
 3. Cole o call UUID no campo de busca e clique em **Buscar** — ou escolha uma
    chamada no painel **"Chamadas recentes"** (que lista `callUuid`,
-   `startedAt`, `endedAt` e `lineCount` para todas as chamadas com UUID
-   detectado na janela escolhida); clicar numa linha já preenche o campo e
-   dispara a busca.
-4. As linhas aparecem em **ordem cronológica ascendente** (do início ao fim
-   da chamada), num painel estilo terminal. Use **Copiar tudo** ou
-   **Exportar .txt** para levar o resultado pra fora da plataforma (ex.:
-   anexar num ticket).
+   `firstSeen`/`lastSeen` estimados e a contagem de linhas detectadas na
+   janela escolhida); clicar numa linha já preenche o campo e dispara a
+   busca.
+4. As linhas aparecem **conforme chegam** (já em ordem cronológica
+   ascendente — arquivo mais antigo primeiro), num painel estilo terminal.
+   Use **Copiar tudo** ou **Exportar .txt** para levar o resultado pra fora
+   da plataforma (ex.: anexar num ticket).
+5. Um aviso fixo na tela deixa claro que **nada disso é armazenado no
+   banco** — é leitura ao vivo no servidor a cada busca.
 
 ### Alternativa: tela `/logs` genérica
 
-A busca `q=<uuid>` na tela `/logs` já funciona hoje via `ILIKE` mesmo sem os
-campos estruturados novos (não usa o índice `idx_logs_call_uuid_ts`, então é
-mais lenta em janelas grandes) — útil quando você quer ver o UUID misturado
-com outras linhas de contexto (ex.: outros canais do FreeSWITCH no mesmo
-período), em vez de isoladas por chamada.
+A busca `q=<uuid>` na tela `/logs` continua funcionando (via `ILIKE`) para
+qualquer servidor que envie seus logs pelo pipeline normal de ingestão — mas
+o FreeSWITCH/Unity **não está mais** configurado para mandar `unity.log` por
+esse caminho (ver seção acima), então essa alternativa só é útil se algum
+outro log desse mesmo host for ingerido normalmente no futuro.

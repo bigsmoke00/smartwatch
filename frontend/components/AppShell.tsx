@@ -47,7 +47,7 @@ const NAV_GROUPS: { title: string; items: NavItem[] }[] = [
     items: [
       { href: '/', label: 'Visão geral', icon: Activity },
       { href: '/logs', label: 'Logs', icon: ScrollText, perms: ['logs:read'] },
-      { href: '/unity', label: 'Unity (FreeSWITCH)', icon: PhoneCall, perms: ['logs:read'] },
+      { href: '/unity', label: 'Unity', icon: PhoneCall, perms: ['logs:read'] },
       { href: '/metrics', label: 'Métricas', icon: Gauge, perms: ['metrics:read'] },
       { href: '/alerts', label: 'Alertas', icon: Bell, perms: ['alerts:read'] },
     ],

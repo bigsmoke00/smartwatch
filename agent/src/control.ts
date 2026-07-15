@@ -23,6 +23,7 @@ import { config } from './config.js';
 import { listDir, readFile, writeFile, deleteFile, executeScript } from './fs-ops.js';
 import { spawnHostShell } from './host-shell.js';
 import { runCapture, stopCapture } from './capture.js';
+import { runLogScan, stopLogScan } from './log-scan.js';
 
 let socket: Socket | null = null;
 const activeTermStreams = new Map<string, NodeJS.ReadWriteStream>();
@@ -292,6 +293,18 @@ async function dispatch(docker: Docker, op: string, args: any, reqId: string): P
     // em andamento resolve sozinho quando o processo fecha (e vira 'done').
     case 'capture.stop':
       return stopCapture(args.sessionId);
+
+    // ========= Scan sob demanda de logs de host (ex.: unity.log) =========
+    // Nunca é persistido em banco — vasculha os arquivos do diretório na hora
+    // e devolve os batches via docker:stream (mesmo canal genérico usado por
+    // capture.run/pull-progress). Ver agent/src/log-scan.ts.
+    case 'logscan.run':
+      return runLogScan(args, (data) => {
+        socket?.emit('docker:stream', { reqId, data });
+      });
+
+    case 'logscan.stop':
+      return stopLogScan(args.sessionId);
 
     default:
       throw new Error(`Unknown op: ${op}`);
