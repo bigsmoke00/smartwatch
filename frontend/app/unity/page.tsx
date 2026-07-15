@@ -203,6 +203,10 @@ export default function UnityPage() {
   const [lines, setLines] = useState<string[]>([]);
   const [searchScan, setSearchScan] = useState<ScanState | null>(null);
   const searchSocketRef = useRef<Socket | null>(null);
+  // Espelha o sessionId atual fora do state — usado só no cleanup de
+  // desmontagem (useEffect com deps []), onde o `searchScan` capturado no
+  // closure ficaria desatualizado (stale closure clássico do React).
+  const searchSessionRef = useRef<string>('');
 
   // ---- virtualização da lista de linhas ----
   // Sem isso, um resultado grande (agora sem teto prático de linhas, só os
@@ -236,6 +240,7 @@ export default function UnityPage() {
   const [calls, setCalls] = useState<CallRow[]>([]);
   const [callsScan, setCallsScan] = useState<ScanState | null>(null);
   const callsSocketRef = useRef<Socket | null>(null);
+  const callsSessionRef = useRef<string>('');
 
   const { fromIso, toIso, clamped } = useMemo(() => effectiveRange(range), [range]);
 
@@ -248,10 +253,33 @@ export default function UnityPage() {
     callsSocketRef.current = null;
   }
 
-  // Desconecta os dois sockets ao desmontar a página.
-  useEffect(() => () => { disconnectSearch(); disconnectCalls(); }, []);
+  // Manda o AGENT abortar um scan que ainda está rodando, antes de largar o
+  // socket do navegador. Sem isso, trocar de filtro rapidamente (ex.: clicar
+  // em "Pass" enquanto o scan "Todos" anterior ainda está processando um
+  // diretório grande) só derrubava a conexão do NAVEGADOR — o agent
+  // continuava escaneando a sessão abandonada em segundo plano, competindo
+  // pelo mesmo processo Node de thread única com o scan novo, que então
+  // estourava o teto de tempo antes de sequer conseguir progredir (visto na
+  // prática: qualquer troca de filtro travava em "agent timeout"). Fire-and-
+  // forget — não precisa bloquear o início do próximo scan por causa disto.
+  function stopScan(sessionId: string | undefined) {
+    if (!sessionId) return;
+    apiFetch(`/log-scan/${sessionId}/stop`, { method: 'POST' }).catch(() => {});
+  }
+
+  // Desconecta os dois sockets E aborta os scans no agent ao desmontar a
+  // página — usa as refs (não o state) porque o closure deste efeito (deps
+  // []) só vê os valores da primeira renderização.
+  useEffect(() => () => {
+    disconnectSearch();
+    disconnectCalls();
+    stopScan(searchSessionRef.current);
+    stopScan(callsSessionRef.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   function watchCallsSession(sessionId: string) {
+    callsSessionRef.current = sessionId;
     setCallsScan({ sessionId, connected: false, done: false });
     const s = io(`${WS_BASE}/ws/logscan`, {
       transports: ['websocket'],
@@ -273,6 +301,7 @@ export default function UnityPage() {
       setCallsScan((w) => (w ? {
         ...w, done: true, ok: meta.ok, error: meta.error, truncated: meta.truncated, filesScanned: meta.filesScanned,
       } : w));
+      callsSessionRef.current = '';
       s.disconnect();
       callsSocketRef.current = null;
     });
@@ -282,6 +311,7 @@ export default function UnityPage() {
   }
 
   async function loadRecentCalls() {
+    if (callsScan && !callsScan.done) stopScan(callsScan.sessionId);
     disconnectCalls();
     setCalls([]);
     if (!serverId) { setCallsScan(null); return; }
@@ -306,6 +336,7 @@ export default function UnityPage() {
   }, [serverId, fromIso, toIso]);
 
   function watchSearchSession(sessionId: string) {
+    searchSessionRef.current = sessionId;
     setSearchScan({ sessionId, connected: false, done: false });
     const s = io(`${WS_BASE}/ws/logscan`, {
       transports: ['websocket'],
@@ -323,6 +354,7 @@ export default function UnityPage() {
       setSearchScan((w) => (w ? {
         ...w, done: true, ok: meta.ok, error: meta.error, truncated: meta.truncated, filesScanned: meta.filesScanned,
       } : w));
+      searchSessionRef.current = '';
       s.disconnect();
       searchSocketRef.current = null;
     });
@@ -338,6 +370,7 @@ export default function UnityPage() {
   async function search(queryOverride?: string) {
     if (!serverId) return;
     const q = (queryOverride ?? callUuid).trim();
+    if (searchScan && !searchScan.done) stopScan(searchScan.sessionId);
     disconnectSearch();
     setLines([]);
     setSearchScan({ sessionId: '', connected: false, done: false });
