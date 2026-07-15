@@ -204,6 +204,34 @@ export default function UnityPage() {
   const [searchScan, setSearchScan] = useState<ScanState | null>(null);
   const searchSocketRef = useRef<Socket | null>(null);
 
+  // ---- virtualização da lista de linhas ----
+  // Sem isso, um resultado grande (agora sem teto prático de linhas, só os
+  // tetos de arquivos/bytes/janela do scan) renderizaria uma <div> por linha
+  // no DOM inteiro — trava o navegador bem antes de chegar em centenas de
+  // milhares de linhas. Em vez de importar uma lib nova, faz um windowing
+  // manual: só as linhas visíveis (+ overscan) viram nó do DOM; o resto vira
+  // um espaçador de altura equivalente. Só funciona limpo com altura de linha
+  // FIXA — por isso as linhas não quebram mais (nowrap + scroll horizontal no
+  // container, como qualquer visualizador de log/terminal).
+  const ROW_HEIGHT = 24;
+  const OVERSCAN = 30;
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [scrollTop, setScrollTop] = useState(0);
+  const [viewportH, setViewportH] = useState(600);
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const measure = () => setViewportH(el.clientHeight);
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  const totalHeight = lines.length * ROW_HEIGHT;
+  const startIndex = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - OVERSCAN);
+  const endIndex = Math.min(lines.length, Math.ceil((scrollTop + viewportH) / ROW_HEIGHT) + OVERSCAN);
+  const visibleLines = lines.slice(startIndex, endIndex);
+
   // ---- painel lateral: chamadas recentes (modo LISTAGEM do log-scan) ----
   const [calls, setCalls] = useState<CallRow[]>([]);
   const [callsScan, setCallsScan] = useState<ScanState | null>(null);
@@ -502,7 +530,11 @@ export default function UnityPage() {
                 </Button>
               </div>
             </div>
-            <div className="font-mono text-xs leading-relaxed max-h-[calc(100vh-360px)] overflow-auto">
+            <div
+              ref={scrollRef}
+              onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}
+              className="font-mono text-xs leading-relaxed max-h-[calc(100vh-360px)] overflow-auto"
+            >
               {loading && lines.length === 0 && (
                 <div className="p-6 text-muted text-sm flex items-center gap-2">
                   <span className="inline-block h-3 w-3 rounded-full border-2 border-accent border-t-transparent animate-spin" />
@@ -514,14 +546,21 @@ export default function UnityPage() {
                   Nenhuma linha encontrada para esse filtro nessa janela de tempo.
                 </div>
               )}
-              {lines.map((line, i) => (
-                <div
-                  key={i}
-                  className="px-3 py-1 border-b border-border/50 hover:bg-panel2 whitespace-pre-wrap break-all"
-                >
-                  <ColoredLogLine line={line} />
+              {lines.length > 0 && (
+                <div style={{ height: totalHeight, position: 'relative' }}>
+                  <div style={{ position: 'absolute', top: startIndex * ROW_HEIGHT, left: 0 }}>
+                    {visibleLines.map((line, i) => (
+                      <div
+                        key={startIndex + i}
+                        style={{ height: ROW_HEIGHT }}
+                        className="px-3 flex items-center border-b border-border/50 hover:bg-panel2 whitespace-nowrap"
+                      >
+                        <ColoredLogLine line={line} />
+                      </div>
+                    ))}
+                  </div>
                 </div>
-              ))}
+              )}
             </div>
           </Card>
 

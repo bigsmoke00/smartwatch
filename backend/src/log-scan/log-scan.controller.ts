@@ -22,7 +22,9 @@ class StartLogScanDto {
   // de "campo presente vazio" (modo busca sem termo, abre tudo) no service.
   @IsOptional() @IsString() @MaxLength(4096) query?: string;
   @IsOptional() @IsIn(['pass', 'fail']) status?: 'pass' | 'fail';
-  @IsOptional() @IsInt() @Min(1) @Max(200_000) maxMatches?: number;
+  // Teto era 200_000 — baixo demais pro modo "abrir tudo" (ver
+  // agent/src/log-scan.ts); acompanha o novo default do agent.
+  @IsOptional() @IsInt() @Min(1) @Max(2_000_000) maxMatches?: number;
 }
 
 @ApiTags('log-scan')

@@ -40,7 +40,15 @@ import { join } from 'node:path';
 import { ensureAllowed } from './fs-ops.js';
 
 const DEFAULT_FILE_PREFIX = 'unity.log';
-const DEFAULT_MAX_MATCHES = 20_000;
+// Era 20_000 — baixo demais pro modo "abrir tudo" sem filtro (ver
+// LogScanArgs.query): dialplan trace é MUITO verboso, uma janela de poucos
+// minutos já emite dezenas de milhares de linhas, então o cap antigo
+// truncava quase imediatamente mesmo num scan saudável. MAX_FILES_PER_SCAN e
+// MAX_TOTAL_BYTES abaixo já limitam o trabalho físico do scan (arquivos/
+// bytes) — esse aqui é só uma rede de segurança final pra não devolver um
+// array literalmente sem fim pro backend/frontend caso os outros tetos não
+// tenham disparado ainda.
+const DEFAULT_MAX_MATCHES = 2_000_000;
 const MAX_FILES_PER_SCAN = 300;
 const MAX_TOTAL_BYTES = 2 * 1024 * 1024 * 1024; // ~2GB somados
 const FIRST_FILE_LOOKBACK_MS = 60 * 60 * 1000; // heurística: 1h antes do mtime do arquivo mais antigo da lista
