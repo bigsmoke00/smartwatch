@@ -8,6 +8,7 @@ import { Badge } from '@/components/ui/Badge';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { StatCard } from '@/components/ui/StatCard';
 import { apiFetch } from '@/lib/api';
+import { useServers } from '@/lib/useServers';
 import { fmtTime, safeArray, sumBy } from '@/lib/utils';
 import {
   ResponsiveContainer,
@@ -28,29 +29,33 @@ interface Bucket {
 
 export default function HomePage() {
   const [hist, setHist] = useState<Bucket[]>([]);
-  const [servers, setServers] = useState<any[]>([]);
   const [fleet, setFleet] = useState<any[]>([]);
   const [alerts, setAlerts] = useState<any[]>([]);
   const [patroni, setPatroni] = useState<any>(null);
+  // Servidores agora vêm do cache compartilhado (useServers) em vez de um
+  // GET /servers próprio desta página — reload() abaixo reaproveita o mesmo
+  // polling de 15s que já existia aqui, só que agora atualiza o cache global
+  // (outras telas que estejam montadas se beneficiam também).
+  const { servers, reload: reloadServers } = useServers();
 
   useEffect(() => {
     const load = async () => {
-      const [s, f, a, h, p] = await Promise.all([
-        apiFetch('/servers').catch(() => []),
+      const [f, a, h, p] = await Promise.all([
         apiFetch('/metrics/fleet').catch(() => []),
         apiFetch('/alerts/events').catch(() => []),
         apiFetch('/logs/histogram?from=now-1h&to=now&interval=1 minute').catch(() => []),
         apiFetch('/patroni/cluster').catch(() => null),
       ]);
-      setServers(safeArray(s));
       setFleet(safeArray(f));
       setAlerts(safeArray<any>(a).slice(0, 5));
       setHist(safeArray<Bucket>(h));
       setPatroni(p);
+      reloadServers();
     };
     load();
     const t = setInterval(load, 15_000);
     return () => clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const totalLogs = sumBy<Bucket>(hist, (b) => b?.total);

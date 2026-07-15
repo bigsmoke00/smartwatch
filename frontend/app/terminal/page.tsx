@@ -8,6 +8,8 @@ import { Input } from '@/components/ui/Input';
 import { Badge } from '@/components/ui/Badge';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Select } from '@/components/ui/Select';
+import { ServerPicker } from '@/components/ServerPicker';
+import { useServers } from '@/lib/useServers';
 import { apiFetch, Auth } from '@/lib/api';
 import { fmtTime, safeArray } from '@/lib/utils';
 import dynamic from 'next/dynamic';
@@ -15,7 +17,6 @@ import { TerminalSquare } from 'lucide-react';
 
 const TerminalView = dynamic(() => import('@/components/TerminalView'), { ssr: false });
 
-interface Server { id: string; name: string; environment?: string }
 interface Session {
   id: string; serverId: string; serverName: string; status: string;
   reason: string; ttlMinutes: number; createdAt: string; expiresAt?: string;
@@ -54,7 +55,10 @@ function downloadText(filename: string, text: string) {
 
 export default function TerminalPage() {
   const isAdmin = Auth.user()?.role === 'admin';
-  const [servers, setServers] = useState<Server[]>([]);
+  // Lista de servidores agora vem do cache compartilhado (useServers) — ver
+  // lib/useServers.ts. Antes esta tela fazia seu PRÓPRIO GET /servers a
+  // cada 5s junto com o polling de sessões (linha do load() abaixo).
+  const { servers, reload: reloadServers } = useServers();
   const [sessions, setSessions] = useState<Session[]>([]);
   const [serverId, setServerId] = useState('');
   const [reason, setReason] = useState('');
@@ -79,7 +83,7 @@ export default function TerminalPage() {
   const [mapAllowRw, setMapAllowRw] = useState(true);
 
   async function load() {
-    setServers(safeArray<Server>(await apiFetch('/servers').catch(() => [])));
+    reloadServers();
     setSessions(safeArray<Session>(await apiFetch('/terminal/sessions').catch(() => [])));
   }
   useEffect(() => { load(); const t = setInterval(load, 5_000); return () => clearInterval(t); }, []);
@@ -185,12 +189,7 @@ export default function TerminalPage() {
             <Card className="p-4 grid md:grid-cols-4 gap-2 items-end">
               <div>
                 <label className="text-xs text-muted">Servidor</label>
-                <Select value={serverId} onChange={(e) => setServerId(e.target.value)}>
-                  <option value="">—</option>
-                  {safeArray<Server>(servers).map((s) => (
-                    <option key={s.id} value={s.id}>{s.name}</option>
-                  ))}
-                </Select>
+                <ServerPicker value={serverId} onChange={setServerId} placeholder="—" />
               </div>
               <div>
                 <label className="text-xs text-muted">Alvo</label>
@@ -295,7 +294,7 @@ export default function TerminalPage() {
                         <label className="text-muted">Servidor (vazio = todos)</label>
                         <Select value={mapServerId} onChange={(e) => setMapServerId(e.target.value)} className="text-xs py-1.5">
                           <option value="">todos (default)</option>
-                          {safeArray<Server>(servers).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                          {servers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
                         </Select>
                       </div>
                       <div>

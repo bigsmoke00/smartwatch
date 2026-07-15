@@ -216,28 +216,52 @@ export class LogsRepository {
   }
 
   /**
+   * Upsert em lote das fontes (container/arquivo de host) distintas vistas
+   * num batch de ingest — ver LogsService.ingest(). Chamado com as
+   * combinações JÁ deduplicadas em memória pelo chamador (normalmente poucas
+   * dezenas por batch, mesmo quando o batch tem milhares de linhas), então
+   * isto não é uma query por linha. UNNEST + ON CONFLICT para 1 round-trip.
+   */
+  async upsertSources(
+    rows: { serverId: string; sourceName: string; kind: 'container' | 'host'; image: string | null }[],
+  ): Promise<void> {
+    if (!rows.length) return;
+    const sid = rows.map((r) => r.serverId);
+    const name = rows.map((r) => r.sourceName);
+    const kind = rows.map((r) => r.kind);
+    const image = rows.map((r) => r.image);
+    await this.pool.query(
+      `INSERT INTO log_sources(server_id, source_name, kind, image, last_seen_at)
+       SELECT s.*, now()
+       FROM UNNEST($1::uuid[], $2::text[], $3::text[], $4::text[]) AS s(server_id, source_name, kind, image)
+       ON CONFLICT (server_id, source_name)
+       DO UPDATE SET last_seen_at = now(),
+                     image = coalesce(EXCLUDED.image, log_sources.image)`,
+      [sid, name, kind, image],
+    );
+  }
+
+  /**
    * Containers distintos já vistos nos logs de um servidor — usado pelo
-   * filtro "container específico" da tela de Logs. Olhamos a tabela `logs`
-   * em vez do docker.sock em tempo real porque assim aparecem containers
-   * que já pararam/foram removidos mas ainda têm log armazenado, e porque
-   * não depende do agent estar respondendo nesse momento. Exclui as linhas
-   * "host:..." (são arquivos de /var/log do host, não containers).
+   * filtro "container específico" da tela de Logs.
+   *
+   * Antes fazia GROUP BY direto na hypertable `logs` (com bound de 7 dias
+   * pra ficar rápido) — mas mesmo com esse bound, o GROUP BY ainda varria/
+   * agregava toda linha da janela, o que ficou pesado demais depois que um
+   * servidor de altíssimo volume (FreeSWITCH/Unity, até 500k linhas/min)
+   * entrou na frota. Agora lê de `log_sources` (migration 028): 1 linha por
+   * servidor+container, upsertada a cada ingest (ver
+   * LogsService.ingest()/upsertSources acima) — leitura por PK, independe
+   * do volume/retenção de `logs`. Containers que já pararam continuam
+   * aparecendo (a linha só é limpa pela rotina de retenção, ver
+   * LogsService.purgeExpiredLogs).
    */
   async distinctContainers(serverId: string): Promise<{ containerName: string; image: string | null }[]> {
-    // Bound temporal (7 dias) é o que deixa isto RÁPIDO: sem ele o GROUP BY
-    // varria a hypertable inteira (retenção até 14d) e a listagem demorava.
-    // Com o corte por ts o TimescaleDB exclui os chunks antigos e só agrega os
-    // recentes — cobre praticamente todo container ativo. Quem não loga há
-    // mais de 7 dias sai do atalho (ainda dá pra usar o filtro de texto livre).
     const r = await this.pool.query(
-      `SELECT container_name AS "containerName", max(image) AS image
-       FROM logs
-       WHERE server_id = $1
-         AND ts >= now() - interval '7 days'
-         AND container_name IS NOT NULL
-         AND container_name NOT LIKE 'host:%'
-       GROUP BY container_name
-       ORDER BY container_name ASC
+      `SELECT source_name AS "containerName", image
+       FROM log_sources
+       WHERE server_id = $1 AND kind = 'container'
+       ORDER BY last_seen_at DESC
        LIMIT 500`,
       [serverId],
     );
@@ -246,25 +270,30 @@ export class LogsRepository {
 
   /**
    * Arquivos de /var/log distintos já vistos nos logs "host" de um servidor
-   * — usado pelo filtro "arquivo" da tela de Logs (analogamente a
-   * distinctContainers, mas pro lado host: ao contrário do filtro de
-   * container, aqui pegamos só as linhas QUE COMEÇAM com 'host:' e
-   * devolvemos o nome já sem esse prefixo, que é só uma convenção do agent
-   * pra diferenciar host de container nessa mesma coluna).
+   * — mesmo padrão de distinctContainers acima, lendo de `log_sources`
+   * (kind='host'). O nome aqui já vem SEM o prefixo 'host:' (removido em
+   * LogsService.ingest() antes do upsert), diferente da query antiga que
+   * tirava o prefixo em SQL com substring().
    */
   async distinctFiles(serverId: string): Promise<{ fileName: string }[]> {
     const r = await this.pool.query(
-      `SELECT substring(container_name from 6) AS "fileName"
-       FROM logs
-       WHERE server_id = $1
-         AND ts >= now() - interval '7 days'
-         AND container_name LIKE 'host:%'
-       GROUP BY container_name
-       ORDER BY substring(container_name from 6) ASC
+      `SELECT source_name AS "fileName"
+       FROM log_sources
+       WHERE server_id = $1 AND kind = 'host'
+       ORDER BY last_seen_at DESC
        LIMIT 500`,
       [serverId],
     );
     return r.rows;
+  }
+
+  /** Limpa fontes (containers/arquivos) não vistas há mais que `retentionDays` — companheiro do purgeExpiredLogs. */
+  async purgeExpiredSources(serverId: string, retentionDays: number): Promise<number> {
+    const r = await this.pool.query(
+      `DELETE FROM log_sources WHERE server_id = $1 AND last_seen_at < now() - ($2 || ' days')::interval`,
+      [serverId, retentionDays],
+    );
+    return r.rowCount ?? 0;
   }
 
   /**

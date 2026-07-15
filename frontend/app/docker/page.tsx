@@ -8,6 +8,7 @@ import { Input } from '@/components/ui/Input';
 import { Badge } from '@/components/ui/Badge';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Select } from '@/components/ui/Select';
+import { ServerPicker } from '@/components/ServerPicker';
 import { apiFetch } from '@/lib/api';
 import { loadMyPermissions, hasPerm } from '@/lib/perms';
 import { safeArray } from '@/lib/utils';
@@ -24,11 +25,9 @@ import {
   Boxes,
 } from 'lucide-react';
 
-interface ServerRow { id: string; name: string; lastSeenAt?: string }
 type Tab = 'containers' | 'images' | 'volumes' | 'deploy';
 
 export default function DockerPage() {
-  const [servers, setServers] = useState<ServerRow[]>([]);
   const [serverId, setServerId] = useState<string>('');
   const [online, setOnline] = useState<boolean>(false);
   const [tab, setTab] = useState<Tab>('containers');
@@ -45,16 +44,6 @@ export default function DockerPage() {
   // Remoção destrutiva (apagar container/imagem/volume) é só do admin master.
   // Quem não tem nem vê o ícone de remover.
   const canDestroy = hasPerm(perms, 'docker:destroy');
-
-  useEffect(() => {
-    apiFetch<ServerRow[]>('/servers')
-      .then((rows) => {
-        const arr = safeArray<ServerRow>(rows);
-        setServers(arr);
-        if (arr[0]) setServerId(arr[0].id);
-      })
-      .catch(() => setServers([]));
-  }, []);
 
   useEffect(() => {
     if (!serverId) return;
@@ -75,11 +64,13 @@ export default function DockerPage() {
           icon={<Boxes size={16} />}
           actions={
             <div className="flex items-center gap-2">
-              <Select value={serverId} onChange={(e) => setServerId(e.target.value)} className="w-auto">
-                {safeArray<ServerRow>(servers).map((s) => (
-                  <option key={s.id} value={s.id}>{s.name}</option>
-                ))}
-              </Select>
+              <ServerPicker
+                value={serverId}
+                onChange={setServerId}
+                className="flex items-center gap-2"
+                selectClassName="w-auto"
+                autoSelectFirst
+              />
               {serverId && (
                 <Badge tone={online ? 'success' : 'warn'}>
                   {online ? '● agent online' : '● agent offline'}

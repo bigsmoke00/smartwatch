@@ -5,8 +5,8 @@ import { AppShell } from '@/components/AppShell';
 import { Card } from '@/components/ui/Card';
 import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
-import { Select } from '@/components/ui/Select';
 import { PageHeader } from '@/components/ui/PageHeader';
+import { ServerPicker } from '@/components/ServerPicker';
 import { apiFetch } from '@/lib/api';
 import { LEVEL_COLOR, fmtTime, safeArray } from '@/lib/utils';
 import { PhoneCall, Search, Copy, Download, RefreshCw, PhoneOutgoing } from 'lucide-react';
@@ -32,11 +32,6 @@ interface LogHit {
   message: string;
   repeatCount?: number;
   callUuid?: string;
-}
-
-interface ServerRow {
-  id: string;
-  name: string;
 }
 
 interface CallRow {
@@ -84,7 +79,6 @@ function effectiveRange(range: TimeRange): { fromIso: string; toIso: string; cla
 }
 
 export default function UnityPage() {
-  const [servers, setServers] = useState<ServerRow[]>([]);
   const [serverId, setServerId] = useState('');
   const [range, setRange] = useState<TimeRange>(DEFAULT_UNITY_RANGE);
   const [callUuid, setCallUuid] = useState('');
@@ -97,12 +91,6 @@ export default function UnityPage() {
 
   const [calls, setCalls] = useState<CallRow[]>([]);
   const [callsLoading, setCallsLoading] = useState(false);
-
-  useEffect(() => {
-    apiFetch<ServerRow[]>('/servers')
-      .then((rows) => setServers(safeArray<ServerRow>(rows)))
-      .catch(() => setServers([]));
-  }, []);
 
   const { fromIso, toIso, clamped } = useMemo(() => effectiveRange(range), [range]);
 
@@ -206,12 +194,7 @@ export default function UnityPage() {
           <div className="grid grid-cols-1 md:grid-cols-12 gap-2 items-end">
             <div className="md:col-span-3">
               <label className="text-xs text-muted">Servidor</label>
-              <Select value={serverId} onChange={(e) => setServerId(e.target.value)}>
-                <option value="">Selecione um servidor</option>
-                {safeArray<ServerRow>(servers).map((s) => (
-                  <option key={s.id} value={s.id}>{s.name}</option>
-                ))}
-              </Select>
+              <ServerPicker value={serverId} onChange={setServerId} placeholder="Selecione um servidor" />
             </div>
             <div className="md:col-span-4">
               <label className="text-xs text-muted">Call UUID</label>

@@ -9,6 +9,7 @@ import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
 import { Select } from '@/components/ui/Select';
 import { PageHeader } from '@/components/ui/PageHeader';
+import { ServerPicker } from '@/components/ServerPicker';
 import { apiFetch, Auth, handleUnauthorized } from '@/lib/api';
 import { LEVEL_COLOR, fmtTime, safeArray } from '@/lib/utils';
 import { Pause, Play, Search, RefreshCw, Wifi, WifiOff, Server as ServerIcon, Container as ContainerIcon, FileText, ScrollText } from 'lucide-react';
@@ -25,11 +26,6 @@ interface LogHit {
   level?: string;
   message: string;
   repeatCount?: number;
-}
-
-interface ServerRow {
-  id: string;
-  name: string;
 }
 
 const LEVELS = ['error', 'warn', 'info', 'debug', 'trace', 'fatal', 'unknown'];
@@ -51,7 +47,6 @@ export default function LogsPage() {
 
 function LogsPageInner() {
   const params = useSearchParams();
-  const [servers, setServers] = useState<ServerRow[]>([]);
   const [serverId, setServerId] = useState<string>(params?.get('serverId') ?? '');
   const [q, setQ] = useState('');
   const [levels, setLevels] = useState<string[]>([]);
@@ -93,12 +88,6 @@ function LogsPageInner() {
   useEffect(() => { sourceRef.current = source; }, [source]);
   useEffect(() => { containerNameRef.current = containerName; }, [containerName]);
   useEffect(() => { fileNameRef.current = fileName; }, [fileName]);
-
-  useEffect(() => {
-    apiFetch<ServerRow[]>('/servers')
-      .then((rows) => setServers(safeArray<ServerRow>(rows)))
-      .catch(() => setServers([]));
-  }, []);
 
   // Lista de containers já vistos nos logs desse servidor, pra popular o
   // seletor "container específico". Refaz quando troca de servidor; se o
@@ -456,12 +445,7 @@ function LogsPageInner() {
           <div className="grid grid-cols-1 md:grid-cols-12 gap-2 items-end">
             <div className="md:col-span-3">
               <label className="text-xs text-muted">Servidor</label>
-              <Select value={serverId} onChange={(e) => setServerId(e.target.value)}>
-                <option value="">Todos</option>
-                {safeArray<ServerRow>(servers).map((s) => (
-                  <option key={s.id} value={s.id}>{s.name}</option>
-                ))}
-              </Select>
+              <ServerPicker value={serverId} onChange={setServerId} allowAll allLabel="Todos" />
             </div>
             <div className="md:col-span-6">
               <label className="text-xs text-muted">Query</label>

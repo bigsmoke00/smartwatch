@@ -188,6 +188,7 @@ export class LogsService {
     }
 
     await this.repo.insertBatch(acceptedDocs);
+    await this.upsertSources(server.id, acceptedDocs);
     this.gateway.emitBatch(acceptedDocs);
     const accepted = acceptedDocs.reduce(
       (total, doc) => total + (doc.repeatCount ?? 1),
@@ -199,6 +200,44 @@ export class LogsService {
       collapsed: Math.max(0, accepted - acceptedDocs.length),
       dropped: rejected + quotaDropped,
     };
+  }
+
+  /**
+   * Upsert em `log_sources` das combinações DISTINTAS (server_id, containerName)
+   * vistas neste batch — alimenta distinctContainers()/distinctFiles() (ver
+   * LogsRepository) sem depender de GROUP BY na hypertable `logs`. Deduplica
+   * em memória ANTES do upsert (um Map é suficiente: batches normalmente têm
+   * poucas dezenas de containers/arquivos distintos mesmo com milhares de
+   * linhas), então isto é barato e roda em todo ingest.
+   */
+  private async upsertSources(serverId: string, docs: LogDoc[]) {
+    const bySource = new Map<string, { sourceName: string; kind: 'container' | 'host'; image: string | null }>();
+    for (const d of docs) {
+      if (!d.containerName) continue;
+      const isHost = d.containerName.startsWith('host:');
+      // Sem prefixo pro lado host — mesma convenção que distinctFiles() já
+      // devolvia antes (substring(container_name from 6)), só que agora
+      // removida aqui em vez de em SQL.
+      const sourceName = isHost ? d.containerName.slice(5) : d.containerName;
+      if (!sourceName) continue;
+      const key = `${isHost ? 'host' : 'container'}${sourceName}`;
+      const existing = bySource.get(key);
+      if (existing) {
+        if (!existing.image && d.image) existing.image = d.image;
+        continue;
+      }
+      bySource.set(key, { sourceName, kind: isHost ? 'host' : 'container', image: d.image ?? null });
+    }
+    if (!bySource.size) return;
+    try {
+      await this.repo.upsertSources(
+        Array.from(bySource.values()).map((s) => ({ serverId, ...s })),
+      );
+    } catch (e: any) {
+      // Não deve derrubar o ingest (que já persistiu os logs em si) por causa
+      // de uma falha só no registro auxiliar de fontes.
+      this.logger.warn(`Falha ao atualizar log_sources do servidor ${serverId}: ${e?.message ?? e}`);
+    }
   }
 
   private compactMeta(meta?: Record<string, any>): Record<string, any> | undefined {
@@ -307,6 +346,24 @@ export class LogsService {
     if (totalDeleted) {
       this.logger.log(`Retenção: ${totalDeleted} linhas removidas (per-server) + drop_chunks >${maxRet}d`);
     }
-    return { serversChecked: servers.rowCount, totalDeleted };
+
+    // 4) log_sources não é hypertable e não tem retenção automática — sem
+    // isto, containers/arquivos que pararam de existir há muito tempo
+    // ficariam "fantasmas" pra sempre no filtro de fonte da tela de Logs.
+    // Aproveita o mesmo cron/lista de servidores já carregada acima; barato
+    // (tabela pequena, DELETE por índice server_id+kind+last_seen_at).
+    let sourcesDeleted = 0;
+    for (const s of servers.rows) {
+      try {
+        sourcesDeleted += await this.repo.purgeExpiredSources(s.id, Number(s.retentionDays));
+      } catch (e: any) {
+        this.logger.error(`Falha ao purgar log_sources do servidor ${s.name}: ${e?.message ?? e}`);
+      }
+    }
+    if (sourcesDeleted) {
+      this.logger.log(`Retenção: ${sourcesDeleted} fontes (log_sources) expiradas removidas`);
+    }
+
+    return { serversChecked: servers.rowCount, totalDeleted, sourcesDeleted };
   }
 }

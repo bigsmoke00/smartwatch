@@ -8,11 +8,11 @@ import { Input } from '@/components/ui/Input';
 import { Badge } from '@/components/ui/Badge';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Select } from '@/components/ui/Select';
+import { ServerPicker } from '@/components/ServerPicker';
 import { apiFetch, Auth, handleUnauthorized } from '@/lib/api';
 import { fmtTime, safeArray } from '@/lib/utils';
 import { Download, Package, Calendar, Trash2 } from 'lucide-react';
 
-interface Server { id: string; name: string }
 interface Schedule {
   id: string; name: string; format: string; scheduleCron: string;
   destination: any; enabled: boolean; lastRunAt?: string; lastStatus?: string;
@@ -21,12 +21,10 @@ interface Schedule {
 const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api';
 
 export default function ExportsPage() {
-  const [servers, setServers] = useState<Server[]>([]);
   const [schedules, setSchedules] = useState<Schedule[]>([]);
   const [showSchedule, setShowSchedule] = useState(false);
 
   useEffect(() => {
-    apiFetch<Server[]>('/servers').then((r) => setServers(safeArray<Server>(r))).catch(() => setServers([]));
     loadSchedules();
   }, []);
 
@@ -72,7 +70,7 @@ export default function ExportsPage() {
 
         <Card className="p-4">
           <h2 className="text-sm font-medium mb-3">Download por servidor</h2>
-          <ServerExportList servers={servers} onExport={downloadExport} onBundle={downloadBundle} />
+          <ServerExportList onExport={downloadExport} onBundle={downloadBundle} />
         </Card>
 
         <div className="flex justify-between items-center">
@@ -139,9 +137,8 @@ export default function ExportsPage() {
 }
 
 function ServerExportList({
-  servers, onExport, onBundle,
+  onExport, onBundle,
 }: {
-  servers: Server[];
   onExport: (o: { serverId?: string; from: string; to: string; format: string }) => Promise<void>;
   onBundle: (serverId: string, from: string, to: string) => Promise<void>;
 }) {
@@ -155,10 +152,12 @@ function ServerExportList({
       <div className="grid md:grid-cols-5 gap-2 items-end">
         <div>
           <label className="text-xs text-muted">Servidor</label>
-          <Select value={serverId} onChange={(e) => setServerId(e.target.value)}>
-            <option value="">Todos</option>
-            {safeArray<Server>(servers).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-          </Select>
+          <ServerPicker
+            value={serverId}
+            onChange={setServerId}
+            allowAll
+            allLabel="Todos"
+          />
         </div>
         <div><label className="text-xs text-muted">De</label><Input value={from} onChange={(e) => setFrom(e.target.value)} /></div>
         <div><label className="text-xs text-muted">Até</label><Input value={to} onChange={(e) => setTo(e.target.value)} /></div>

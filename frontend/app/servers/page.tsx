@@ -10,7 +10,8 @@ import { Badge } from '@/components/ui/Badge';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Select } from '@/components/ui/Select';
 import { apiFetch, Auth } from '@/lib/api';
-import { Plus, ChevronRight, Trash2, Pencil, Check, X, Server as ServerIcon } from 'lucide-react';
+import { invalidateServersCache } from '@/lib/useServers';
+import { Plus, ChevronRight, Trash2, Pencil, Server as ServerIcon } from 'lucide-react';
 import { fmtTime, safeArray } from '@/lib/utils';
 
 interface ServerRow {
@@ -47,16 +48,65 @@ export default function ServersPage() {
   // FreeSWITCH/Unity). Vazio = usa o default global do backend.
   const [logRateLimitPerMinute, setLogRateLimitPerMinute] = useState('');
 
-  // edição inline de retenção de um servidor já existente
-  const [editingRetentionId, setEditingRetentionId] = useState<string | null>(null);
-  const [editRetentionValue, setEditRetentionValue] = useState('');
+  // Edição inline de um servidor já existente — UM único popover por linha
+  // com TODOS os campos editáveis (retenção, limite de linhas/min, cloud,
+  // região). Antes eram 2 blocos de inline-edit copiados um do outro
+  // (retenção e limite de linhas/min), cada um com seu próprio lápis — 2
+  // ícones por linha, que o usuário reportou como poluído. Consolidado num
+  // único botão de edição + um PATCH só com todos os campos alterados.
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editForm, setEditForm] = useState({
+    retentionDays: '',
+    logRateLimitPerMinute: '',
+    cloud: 'onprem',
+    cloudRegion: '',
+  });
+  const [editSaving, setEditSaving] = useState(false);
 
-  // edição inline do limite de linhas de log/minuto de um servidor já
-  // existente — mesmo padrão da retenção acima, útil pra ajustar depois de
-  // cadastrar (ex: subir o teto do FreeSWITCH/Unity sem precisar recriar
-  // o servidor).
-  const [editingRateLimitId, setEditingRateLimitId] = useState<string | null>(null);
-  const [editRateLimitValue, setEditRateLimitValue] = useState('');
+  function openEdit(s: ServerRow) {
+    setEditingId(s.id);
+    setEditForm({
+      retentionDays: String(s.retentionDays ?? 14),
+      logRateLimitPerMinute: s.logRateLimitPerMinute ? String(s.logRateLimitPerMinute) : '',
+      cloud: s.cloud || 'onprem',
+      cloudRegion: s.cloudRegion || '',
+    });
+  }
+
+  async function saveEdit(serverId: string) {
+    const days = parseInt(editForm.retentionDays, 10);
+    if (!Number.isFinite(days) || days < 1 || days > 365) {
+      alert('Informe um número de dias entre 1 e 365 para a retenção.');
+      return;
+    }
+    // Vazio = remove o override do limite de linhas/min (volta pro default
+    // global) — por isso só valida o range quando algo foi digitado.
+    const rawLimit = editForm.logRateLimitPerMinute.trim();
+    const limit = rawLimit === '' ? null : parseInt(rawLimit, 10);
+    if (limit !== null && (!Number.isFinite(limit) || limit < 100 || limit > 500000)) {
+      alert('Limite de linhas/minuto deve estar entre 100 e 500000, ou vazio para usar o default global.');
+      return;
+    }
+    setEditSaving(true);
+    try {
+      await apiFetch(`/servers/${serverId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          retentionDays: days,
+          logRateLimitPerMinute: limit,
+          cloud: editForm.cloud || null,
+          cloudRegion: editForm.cloudRegion || null,
+        }),
+      });
+      setEditingId(null);
+      load();
+      invalidateServersCache(); // outras telas (useServers/ServerPicker) usam cloud/região desatualizados senão
+    } catch (err: any) {
+      alert(`Falha ao salvar alterações: ${err?.payload?.message || err.message}`);
+    } finally {
+      setEditSaving(false);
+    }
+  }
 
   async function load() {
     const qp = new URLSearchParams();
@@ -88,45 +138,7 @@ export default function ServersPage() {
     setLogRateLimitPerMinute('');
     setShowNew(false);
     load();
-  }
-
-  async function saveRetention(serverId: string) {
-    const days = parseInt(editRetentionValue, 10);
-    if (!Number.isFinite(days) || days < 1 || days > 365) {
-      alert('Informe um número de dias entre 1 e 365.');
-      return;
-    }
-    try {
-      await apiFetch(`/servers/${serverId}`, {
-        method: 'PATCH',
-        body: JSON.stringify({ retentionDays: days }),
-      });
-      setEditingRetentionId(null);
-      load();
-    } catch (err: any) {
-      alert(`Falha ao atualizar retenção: ${err?.payload?.message || err.message}`);
-    }
-  }
-
-  async function saveRateLimit(serverId: string) {
-    // Vazio = remove o override (volta pro default global) — por isso não
-    // valida "obrigatório", só o range quando algo foi digitado.
-    const raw = editRateLimitValue.trim();
-    const value = raw === '' ? null : parseInt(raw, 10);
-    if (value !== null && (!Number.isFinite(value) || value < 100 || value > 500000)) {
-      alert('Informe um valor entre 100 e 500000, ou deixe vazio para usar o default global.');
-      return;
-    }
-    try {
-      await apiFetch(`/servers/${serverId}`, {
-        method: 'PATCH',
-        body: JSON.stringify({ logRateLimitPerMinute: value }),
-      });
-      setEditingRateLimitId(null);
-      load();
-    } catch (err: any) {
-      alert(`Falha ao atualizar limite de linhas/minuto: ${err?.payload?.message || err.message}`);
-    }
+    invalidateServersCache(); // servidor novo precisa aparecer nos ServerPicker de outras telas
   }
 
   return (
@@ -257,6 +269,7 @@ export default function ServersPage() {
               try {
                 await apiFetch(url, { method: 'DELETE' });
                 load();
+                invalidateServersCache();
               } catch (err: any) {
                 alert(`Falha ao excluir: ${err?.payload?.message || err.message}`);
               }
@@ -266,142 +279,129 @@ export default function ServersPage() {
               Date.now() - new Date(s.lastSeenAt).getTime() < 5 * 60_000;
             return (
               <Link key={s.id} href={`/servers/${s.id}`}>
-                <Card className="p-4 flex items-center justify-between hover:border-accent transition">
-                  <div className="space-y-1">
-                    <div className="font-medium flex items-center gap-2">
-                      {s.name}
-                      {s.cloud && <Badge tone="info">{s.cloud}</Badge>}
-                      {s.cloudRegion && <Badge>{s.cloudRegion}</Badge>}
-                      {editingRetentionId === s.id ? (
-                        <span
-                          className="flex items-center gap-1"
-                          onClick={(e) => { e.preventDefault(); e.stopPropagation(); }}
-                        >
-                          <input
-                            type="number"
-                            min={1}
-                            max={365}
-                            autoFocus
-                            value={editRetentionValue}
-                            onChange={(e) => setEditRetentionValue(e.target.value)}
-                            className="w-16 rounded bg-panel2 border border-border px-1.5 py-0.5 text-xs"
-                          />
-                          <button
-                            title="Salvar"
-                            onClick={(e) => { e.preventDefault(); e.stopPropagation(); saveRetention(s.id); }}
-                            className="text-success hover:opacity-80"
-                          >
-                            <Check size={14} />
-                          </button>
-                          <button
-                            title="Cancelar"
-                            onClick={(e) => { e.preventDefault(); e.stopPropagation(); setEditingRetentionId(null); }}
-                            className="text-muted hover:text-danger"
-                          >
-                            <X size={14} />
-                          </button>
-                        </span>
-                      ) : (
-                        <span className="inline-flex items-center gap-1">
-                          <Badge title="Retenção de logs">
-                            {s.retentionDays ?? 14}d retenção
+                <Card className="p-4 hover:border-accent transition">
+                  <div className="flex items-center justify-between">
+                    <div className="space-y-1">
+                      <div className="font-medium flex items-center gap-2">
+                        {s.name}
+                        {s.cloud && <Badge tone="info">{s.cloud}</Badge>}
+                        {s.cloudRegion && <Badge>{s.cloudRegion}</Badge>}
+                        <Badge title="Retenção de logs">
+                          {s.retentionDays ?? 14}d retenção
+                        </Badge>
+                        {s.logRateLimitPerMinute && (
+                          <Badge title="Limite de linhas de log armazenadas por minuto (override deste servidor)">
+                            {s.logRateLimitPerMinute.toLocaleString()} linhas/min
                           </Badge>
-                          {(role === 'admin' || role === 'operator') && (
-                            <button
-                              title="Editar retenção"
-                              onClick={(e) => {
-                                e.preventDefault();
-                                e.stopPropagation();
-                                setEditingRetentionId(s.id);
-                                setEditRetentionValue(String(s.retentionDays ?? 14));
-                              }}
-                              className="text-muted hover:text-accent"
-                            >
-                              <Pencil size={12} />
-                            </button>
-                          )}
-                        </span>
-                      )}
-                      {editingRateLimitId === s.id ? (
-                        <span
-                          className="flex items-center gap-1"
-                          onClick={(e) => { e.preventDefault(); e.stopPropagation(); }}
-                        >
-                          <input
-                            type="number"
-                            min={100}
-                            max={500000}
-                            autoFocus
-                            placeholder="default"
-                            value={editRateLimitValue}
-                            onChange={(e) => setEditRateLimitValue(e.target.value)}
-                            className="w-20 rounded bg-panel2 border border-border px-1.5 py-0.5 text-xs"
-                          />
+                        )}
+                        {(role === 'admin' || role === 'operator') && (
                           <button
-                            title="Salvar"
-                            onClick={(e) => { e.preventDefault(); e.stopPropagation(); saveRateLimit(s.id); }}
-                            className="text-success hover:opacity-80"
+                            title="Editar servidor"
+                            onClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              editingId === s.id ? setEditingId(null) : openEdit(s);
+                            }}
+                            className="text-muted hover:text-accent"
                           >
-                            <Check size={14} />
+                            <Pencil size={12} />
                           </button>
-                          <button
-                            title="Cancelar"
-                            onClick={(e) => { e.preventDefault(); e.stopPropagation(); setEditingRateLimitId(null); }}
-                            className="text-muted hover:text-danger"
-                          >
-                            <X size={14} />
-                          </button>
+                        )}
+                      </div>
+                      <div className="text-xs text-muted">
+                        {s.hostname || '—'} · {s.os || '—'} ·{' '}
+                        {s.agentVersion ? `agent v${s.agentVersion}` : 'sem agent'}
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {safeArray<string>(s.tags).map((t) => (
+                          <Badge key={t}>{t}</Badge>
+                        ))}
+                        <span className={recent ? 'text-success text-xs' : 'text-muted text-xs'}>
+                          {recent ? '● ativo · ' : '● offline · '}
+                          {s.lastSeenAt ? fmtTime(s.lastSeenAt) : 'nunca conectou'}
                         </span>
-                      ) : (
-                        <span className="inline-flex items-center gap-1">
-                          {s.logRateLimitPerMinute && (
-                            <Badge title="Limite de linhas de log armazenadas por minuto (override deste servidor)">
-                              {s.logRateLimitPerMinute.toLocaleString()} linhas/min
-                            </Badge>
-                          )}
-                          {(role === 'admin' || role === 'operator') && (
-                            <button
-                              title="Editar limite de linhas de log/minuto"
-                              onClick={(e) => {
-                                e.preventDefault();
-                                e.stopPropagation();
-                                setEditingRateLimitId(s.id);
-                                setEditRateLimitValue(s.logRateLimitPerMinute ? String(s.logRateLimitPerMinute) : '');
-                              }}
-                              className="text-muted hover:text-accent"
-                            >
-                              <Pencil size={12} />
-                            </button>
-                          )}
-                        </span>
-                      )}
-                    </div>
-                    <div className="text-xs text-muted">
-                      {s.hostname || '—'} · {s.os || '—'} ·{' '}
-                      {s.agentVersion ? `agent v${s.agentVersion}` : 'sem agent'}
+                      </div>
                     </div>
                     <div className="flex items-center gap-2">
-                      {safeArray<string>(s.tags).map((t) => (
-                        <Badge key={t}>{t}</Badge>
-                      ))}
-                      <span className={recent ? 'text-success text-xs' : 'text-muted text-xs'}>
-                        {recent ? '● ativo · ' : '● offline · '}
-                        {s.lastSeenAt ? fmtTime(s.lastSeenAt) : 'nunca conectou'}
-                      </span>
+                      {role === 'admin' && (
+                        <button
+                          onClick={onDelete}
+                          title="Excluir servidor"
+                          className="text-muted hover:text-danger p-1"
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      )}
+                      <ChevronRight size={18} className="text-muted" />
                     </div>
                   </div>
-                  <div className="flex items-center gap-2">
-                    {role === 'admin' && (
-                      <button
-                        onClick={onDelete}
-                        title="Excluir servidor"
-                        className="text-muted hover:text-danger p-1"
-                      >
-                        <Trash2 size={16} />
-                      </button>
-                    )}
-                    <ChevronRight size={18} className="text-muted" />
-                  </div>
+
+                  {editingId === s.id && (
+                    // Popover inline único com TODOS os campos editáveis do
+                    // servidor — substitui os 2 lápis antigos (retenção +
+                    // limite de linhas/min), cada um com seu próprio par
+                    // input/check/x. onClick com stopPropagation aqui porque
+                    // o card inteiro está dentro de um <Link> (navegação pro
+                    // detalhe do servidor) — sem isto, clicar em qualquer
+                    // campo do formulário navegaria pra /servers/[id].
+                    <div
+                      onClick={(e) => { e.preventDefault(); e.stopPropagation(); }}
+                      className="mt-3 pt-3 border-t border-border grid sm:grid-cols-2 gap-3"
+                    >
+                      <div>
+                        <label className="text-xs text-muted">Retenção de logs (dias)</label>
+                        <Input
+                          type="number"
+                          min={1}
+                          max={365}
+                          autoFocus
+                          value={editForm.retentionDays}
+                          onChange={(e) => setEditForm({ ...editForm, retentionDays: e.target.value })}
+                        />
+                      </div>
+                      <div>
+                        <label className="text-xs text-muted">Limite de linhas de log/minuto</label>
+                        <Input
+                          type="number"
+                          min={100}
+                          max={500000}
+                          placeholder="vazio = default global"
+                          value={editForm.logRateLimitPerMinute}
+                          onChange={(e) => setEditForm({ ...editForm, logRateLimitPerMinute: e.target.value })}
+                        />
+                      </div>
+                      <div>
+                        <label className="text-xs text-muted">Cloud</label>
+                        <Select
+                          value={editForm.cloud}
+                          onChange={(e) => setEditForm({ ...editForm, cloud: e.target.value })}
+                        >
+                          <option value="onprem">on-prem</option>
+                          <option value="aws">aws</option>
+                          <option value="oci">oci</option>
+                          <option value="gcp">gcp</option>
+                          <option value="azure">azure</option>
+                          <option value="other">other</option>
+                        </Select>
+                      </div>
+                      <div>
+                        <label className="text-xs text-muted">Região</label>
+                        <Input
+                          value={editForm.cloudRegion}
+                          onChange={(e) => setEditForm({ ...editForm, cloudRegion: e.target.value })}
+                          placeholder="us-east-1 / sa-east-1"
+                        />
+                      </div>
+                      <div className="sm:col-span-2 flex gap-2">
+                        <Button size="sm" onClick={() => saveEdit(s.id)} loading={editSaving}>
+                          Salvar
+                        </Button>
+                        <Button size="sm" variant="secondary" onClick={() => setEditingId(null)}>
+                          Cancelar
+                        </Button>
+                      </div>
+                    </div>
+                  )}
                 </Card>
               </Link>
             );

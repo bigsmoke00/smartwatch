@@ -8,7 +8,8 @@ import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Badge } from '@/components/ui/Badge';
 import { PageHeader } from '@/components/ui/PageHeader';
-import { Select } from '@/components/ui/Select';
+import { ServerPicker } from '@/components/ServerPicker';
+import { useServers } from '@/lib/useServers';
 import { apiFetch } from '@/lib/api';
 import { loadMyPermissions, hasPerm } from '@/lib/perms';
 import { fmtTime, safeArray } from '@/lib/utils';
@@ -19,7 +20,6 @@ import {
 // Monaco é client-only — carrega via dynamic import
 const Editor = dynamic(() => import('@monaco-editor/react').then((m) => m.default), { ssr: false });
 
-interface ServerRow { id: string; name: string; environment?: string }
 interface FsItem {
   name: string; path: string; type: 'dir' | 'file' | 'symlink';
   size: number | null; mtime: string | null;
@@ -34,7 +34,7 @@ interface Version {
 }
 
 export default function ScriptsPage() {
-  const [servers, setServers] = useState<ServerRow[]>([]);
+  const { servers } = useServers();
   const [serverId, setServerId] = useState<string>('');
   const [path, setPath] = useState<string>('/');
   const [items, setItems] = useState<FsItem[]>([]);
@@ -55,17 +55,6 @@ export default function ScriptsPage() {
   const readOnly = perms !== null && !canWrite && !canExecute && !canDelete;
 
   const dirty = file && content !== file.content;
-
-  // ---- carregar servidores
-  useEffect(() => {
-    apiFetch<ServerRow[]>('/servers')
-      .then((rows) => {
-        const arr = safeArray<ServerRow>(rows);
-        setServers(arr);
-        if (arr[0]) setServerId(arr[0].id);
-      })
-      .catch(() => setServers([]));
-  }, []);
 
   // ---- listar diretório
   async function loadDir(p: string) {
@@ -188,11 +177,13 @@ export default function ScriptsPage() {
           icon={<Code2 size={16} />}
           actions={
             <div className="flex items-center gap-2">
-              <Select value={serverId} onChange={(e) => setServerId(e.target.value)} className="w-auto">
-                {safeArray<ServerRow>(servers).map((s) => (
-                  <option key={s.id} value={s.id}>{s.name}</option>
-                ))}
-              </Select>
+              <ServerPicker
+                value={serverId}
+                onChange={setServerId}
+                className="flex items-center gap-2"
+                selectClassName="w-auto"
+                autoSelectFirst
+              />
               {env && (
                 <Badge tone={env === 'production' ? 'danger' : 'info'}>
                   {env}
