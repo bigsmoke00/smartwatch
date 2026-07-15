@@ -18,22 +18,22 @@ export interface LogScanParams {
   maxMatches?: number;
 }
 
-// Teto de tempo do invokeStream. 60s fixo se mostrou curto demais na prática:
-// unity.log rotaciona a cada poucos minutos (~10MB/rotação), então uma janela
-// de 12h já significa ler mais de uma centena desses arquivos linha a linha
-// (leitura sequencial no agent, sem paralelismo) — passa fácil de 60s mesmo
-// com o agent saudável. Em modo LISTAGEM (sem query, usado por "chamadas
-// recentes") isso é ainda mais crítico: só existe UM onChunk, no final do
-// scan inteiro (ver agent/src/log-scan.ts) — se estourar o timeout, o usuário
-// não vê NADA, mesmo que o agent estivesse a poucos arquivos de terminar.
-// Escalamos o timeout com o tamanho da janela pedida em vez de um valor fixo:
-// piso de 60s (janelas curtas, minutos), teto de 5min (perto do limite de 48h
-// da tela /unity) — long enough pra não cortar scans grandes de agents
-// saudáveis, sem deixar uma sessão pendurada indefinidamente se o agent
-// realmente estiver travado.
-const SCAN_TIMEOUT_MIN_MS = 60_000;
-const SCAN_TIMEOUT_MAX_MS = 5 * 60_000;
-const SCAN_TIMEOUT_MS_PER_HOUR = 10_000;
+// Teto de tempo do invokeStream. Escalar por HORA (versão anterior) fazia
+// pouca diferença dentro do teto de 10min da tela /unity (2/5/10min geram
+// quase o mesmo orçamento, ~60-62s) — e na prática esse volume já é curto
+// demais: o SIP-Server de produção gera um volume de trace ABSURDO (300-400
+// mil linhas em só 2-10 minutos, modo "abrir tudo"/sem filtro), então mesmo
+// as linhas chegando certinho via streaming, o invokeStream como um todo (só
+// resolve quando o agent manda o "docker:reply" final, depois de varrer TODOS
+// os arquivos selecionados) estourava o timeout por pouco — visto em
+// produção: 60.8s não bastou pra ~350k linhas, 61.7s não bastou pra ~420k.
+// Escala agora por MINUTO de janela pedida, com piso bem mais alto: cobre
+// esse volume com folga sem deixar uma sessão realmente travada rodando pra
+// sempre (teto ainda existe, só que generoso — mesma ordem de grandeza do
+// teto de janela da própria tela, 10min).
+const SCAN_TIMEOUT_MIN_MS = 3 * 60_000;
+const SCAN_TIMEOUT_MAX_MS = 10 * 60_000;
+const SCAN_TIMEOUT_MS_PER_MINUTE = 30_000;
 
 function computeScanTimeoutMs(from: string, to: string): number {
   const fromMs = Date.parse(from);
@@ -41,8 +41,8 @@ function computeScanTimeoutMs(from: string, to: string): number {
   if (!Number.isFinite(fromMs) || !Number.isFinite(toMs) || toMs <= fromMs) {
     return SCAN_TIMEOUT_MIN_MS;
   }
-  const windowHours = (toMs - fromMs) / 3_600_000;
-  const scaled = SCAN_TIMEOUT_MIN_MS + windowHours * SCAN_TIMEOUT_MS_PER_HOUR;
+  const windowMinutes = (toMs - fromMs) / 60_000;
+  const scaled = SCAN_TIMEOUT_MIN_MS + windowMinutes * SCAN_TIMEOUT_MS_PER_MINUTE;
   return Math.min(SCAN_TIMEOUT_MAX_MS, Math.max(SCAN_TIMEOUT_MIN_MS, scaled));
 }
 
