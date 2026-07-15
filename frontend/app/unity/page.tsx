@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { io, Socket } from 'socket.io-client';
 import { AppShell } from '@/components/AppShell';
 import { Card } from '@/components/ui/Card';
@@ -50,6 +50,85 @@ const DEFAULT_UNITY_RANGE: TimeRange = {
 };
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// ---------------------------------------------------------------------------
+// Syntax highlighting das linhas de log (estilo terminal SIP/FreeSWITCH).
+// Cada linha começa repetindo o call UUID (formato do próprio unity.log) —
+// isolamos esse prefixo primeiro (cor neutra/dimmed, já é redundante em toda
+// linha) pra evitar que pedaços dele batam com o realce de "número" a seguir
+// (grupos hex do UUID que só têm dígitos, ex.: "2665", ficariam bounded por
+// hífen e casariam com \d{2,8} se não fossem tratados à parte).
+// O resto da linha passa por um tokenizer único (regex com alternância) que
+// resolve, na ordem: nível [DEBUG]/[WARNING]/etc., timestamp, IP, palavras-
+// chave de resultado (Success/Failed/...), nome de codec/protocolo SIP, e por
+// fim números soltos (portas, seq, payload type). A ordem importa: o
+// timestamp (todo em dígitos) precisa ser reconhecido ANTES do realce de
+// número genérico, senão cada grupo de dígitos do timestamp vira um "número"
+// solto colorido em vez do timestamp inteiro em cinza.
+// ---------------------------------------------------------------------------
+const LEADING_UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/i;
+
+const LOG_TOKEN_REGEX = new RegExp(
+  [
+    '(\\[(?:DEBUG|NOTICE|WARNING|WARN|INFO|ERR|ERROR|CRIT)\\])', // 1: nível
+    '(\\d{4}-\\d{2}-\\d{2}[ T]\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?)', // 2: timestamp
+    '(\\b(?:\\d{1,3}\\.){3}\\d{1,3}\\b)', // 3: IPv4
+    '(\\b(?:Success|Successful|Failed|Failure|Denied|Refused|Timeout)\\b)', // 4: resultado
+    '(\\b(?:PCMA|PCMU|G729|G722|G723|OPUS|GSM|AMR|ILBC|RTP|RTCP|AVP|SAVP|SDP|SIP|UDP|TCP|TLS)\\b)', // 5: codec/protocolo
+    '(\\b\\d{2,8}\\b)', // 6: número solto (porta, seq, payload type...)
+  ].join('|'),
+  'g',
+);
+
+function levelClassName(tag: string): string {
+  const t = tag.toUpperCase();
+  if (t.includes('DEBUG')) return 'text-sky-400';
+  if (t.includes('WARN')) return 'text-amber-400';
+  if (t.includes('ERR') || t.includes('CRIT')) return 'text-red-400';
+  if (t.includes('INFO')) return 'text-emerald-400';
+  return 'text-slate-300'; // NOTICE e afins: neutro
+}
+
+function keywordClassName(word: string): string {
+  const w = word.toLowerCase();
+  if (w.startsWith('success')) return 'text-emerald-400';
+  return 'text-red-400'; // failed/failure/denied/refused/timeout
+}
+
+/** Aplica o highlighter tokenizando `text` com LOG_TOKEN_REGEX. */
+function highlightTokens(text: string, keyOffset: number): ReactNode[] {
+  const nodes: ReactNode[] = [];
+  let lastIndex = 0;
+  let key = keyOffset;
+  for (const m of text.matchAll(LOG_TOKEN_REGEX)) {
+    const idx = m.index ?? 0;
+    if (idx > lastIndex) nodes.push(text.slice(lastIndex, idx));
+    const [full, level, ts, ip, keyword, codec] = m;
+    let cls = '';
+    if (level) cls = levelClassName(level);
+    else if (ts) cls = 'text-slate-500';
+    else if (ip) cls = 'text-fuchsia-400';
+    else if (keyword) cls = keywordClassName(keyword);
+    else if (codec) cls = 'text-emerald-400 font-medium';
+    else cls = 'text-emerald-400'; // número solto
+    nodes.push(<span key={key++} className={cls}>{full}</span>);
+    lastIndex = idx + full.length;
+  }
+  if (lastIndex < text.length) nodes.push(text.slice(lastIndex));
+  return nodes;
+}
+
+function ColoredLogLine({ line }: { line: string }) {
+  const uuidMatch = line.match(LEADING_UUID_REGEX);
+  const uuidPart = uuidMatch?.[0] ?? '';
+  const rest = uuidPart ? line.slice(uuidPart.length) : line;
+  return (
+    <>
+      {uuidPart && <span className="text-slate-500">{uuidPart}</span>}
+      {highlightTokens(rest, 1)}
+    </>
+  );
+}
 
 /** Resolve "now", "now-15m" ou ISO para epoch ms. */
 function toAbsoluteMs(t: string): number {
@@ -261,7 +340,7 @@ export default function UnityPage() {
     <AppShell>
       <div className="p-6 space-y-3">
         <PageHeader
-          title="Unity"
+          title="Logs de chamadas SIP-Server"
           description="Busca dedicada de chamadas pelo call UUID — cole o UUID e veja todas as linhas daquela chamada, em ordem cronológica."
           icon={<PhoneCall size={16} />}
           actions={
@@ -367,7 +446,7 @@ export default function UnityPage() {
                   key={i}
                   className="px-3 py-1 border-b border-border/50 hover:bg-panel2 whitespace-pre-wrap break-all"
                 >
-                  {line}
+                  <ColoredLogLine line={line} />
                 </div>
               ))}
             </div>

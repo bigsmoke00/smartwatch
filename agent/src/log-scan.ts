@@ -96,6 +96,42 @@ interface FileInterval extends CandidateFile {
 // entre arquivos (não a cada linha — custaria caro num arquivo de 10MB+).
 const activeScans = new Map<string, { stopped: boolean }>();
 
+// Cache de stat por caminho real, persistente entre scans (mesmo processo do
+// agent). Motivo: o passo 1 fazia um fs.stat() sequencial por arquivo
+// candidato, em TODO o diretório — não só nos que intersectam a janela
+// pedida (só dá pra saber quem intersecta DEPOIS de ler o mtime). Se o
+// diretório acumula retenção de meses de unity.log.<n> rotacionado (comum
+// quando não há limpeza automática), isso sozinho passa de 60-70s mesmo pra
+// uma janela de "última hora" — o teto de tempo escalado por janela
+// (log-scan.service.ts) não ajuda em nada aqui, porque o gargalo é achar os
+// arquivos, não lê-los.
+// Arquivos já rotacionados são imutáveis (mtime nunca muda de novo depois da
+// rotação), então cachear por realPath é seguro indefinidamente — só o
+// arquivo "vivo" (mesmo nome do prefixo) é sempre re-stat'ado. Se um arquivo
+// cacheado for removido do disco (rotação de retenção externa), ele
+// simplesmente some do próximo readdir() e o cache correspondente vira lixo
+// órfão inofensivo (nunca mais é lido).
+const statCache = new Map<string, { mtimeMs: number; size: number }>();
+
+/** Roda `fn` sobre `items` com no máximo `concurrency` em voo por vez. */
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let next = 0;
+  async function worker() {
+    while (true) {
+      const i = next++;
+      if (i >= items.length) return;
+      results[i] = await fn(items[i]);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, worker));
+  return results;
+}
+
 /** Parada manual (botão na UI, ou timeout do backend): interrompe cedo. */
 export function stopLogScan(sessionId: string): { ok: boolean; stopped: boolean } {
   const s = activeScans.get(sessionId);
@@ -135,19 +171,27 @@ async function doRunLogScan(
 
   // 1) lista arquivos cujo nome começa com o prefixo (pega o vivo + os
   // rotacionados, ignora outras subpastas/arquivos do mesmo diretório).
+  // Rotacionados: reusa stat cacheado (imutáveis, ver comentário do
+  // statCache). Só o arquivo vivo e os nunca vistos precisam de fs.stat
+  // fresco — e esses vão em paralelo (pool), não um por um.
   const entries = await fs.readdir(dirRealPath, { withFileTypes: true });
-  const candidates: CandidateFile[] = [];
-  for (const e of entries) {
-    if (!e.isFile() && !e.isSymbolicLink()) continue;
-    if (!e.name.startsWith(prefix)) continue;
+  const names = entries.filter((e) => (e.isFile() || e.isSymbolicLink()) && e.name.startsWith(prefix));
+
+  const candidateResults = await mapWithConcurrency(names, 16, async (e): Promise<CandidateFile | null> => {
     const realPath = join(dirRealPath, e.name);
+    const isLive = e.name === prefix;
+    const cached = !isLive ? statCache.get(realPath) : undefined;
+    if (cached) return { name: e.name, realPath, mtimeMs: cached.mtimeMs, size: cached.size };
     try {
       const st = await fs.stat(realPath);
-      candidates.push({ name: e.name, realPath, mtimeMs: st.mtimeMs, size: st.size });
+      if (!isLive) statCache.set(realPath, { mtimeMs: st.mtimeMs, size: st.size });
+      return { name: e.name, realPath, mtimeMs: st.mtimeMs, size: st.size };
     } catch {
       // arquivo sumiu entre o readdir e o stat (rotação concorrente) — ignora
+      return null;
     }
-  }
+  });
+  const candidates: CandidateFile[] = candidateResults.filter((c): c is CandidateFile => c !== null);
   if (!candidates.length) {
     return { filesScanned: 0, truncated: false, mode };
   }
