@@ -489,41 +489,17 @@ export class PgMonitorService implements OnModuleInit {
           }
 
           // ---------- pg_stat_user_tables (saúde) ----------
-          try {
-            const tbl = await dbClient.query<any>(`
-              SELECT schemaname, relname, n_live_tup, n_dead_tup,
-                     last_vacuum, last_autovacuum, last_analyze, last_autoanalyze,
-                     pg_total_relation_size(relid) AS total_size
-              FROM pg_stat_user_tables
-            `);
-            const placeholders: string[] = [];
-            const params: any[] = [];
-            let i = 1;
-            for (const t of tbl) {
-              const dead = Number(t.n_dead_tup ?? 0);
-              const live = Number(t.n_live_tup ?? 0);
-              const pct = live + dead > 0 ? (dead / (live + dead)) * 100 : 0;
-              placeholders.push(`(now(),$${i++},$${i++},$${i++},$${i++},$${i++},$${i++},$${i++},$${i++},$${i++},$${i++},$${i++},$${i++})`);
-              params.push(
-                c.id, datname, t.schemaname, t.relname, live, dead, pct,
-                t.last_vacuum, t.last_autovacuum, t.last_analyze, t.last_autoanalyze, t.total_size,
-              );
-            }
-            if (placeholders.length) {
-              await this.pool.query(
-                `INSERT INTO pg_table_health(ts, cluster_id, datname, schema_name, relname, n_live_tup,
-                                              n_dead_tup, dead_pct, last_vacuum, last_autovacuum,
-                                              last_analyze, last_autoanalyze, total_size_bytes)
-                 VALUES ${placeholders.join(',')}`,
-                params,
-              );
-            }
-          } catch (e: any) {
-            // Antes ficava em silêncio total — se isso falhasse na coleta, a
-            // aba "Saúde" ficava pra sempre vazia sem nenhum jeito de saber
-            // o motivo. Loga pra aparecer no log do backend.
-            this.logger.error(`tableHealth collect ${c.name}/${datname}: ${e.message}`);
-          }
+          // REMOVIDO (ver migration 030_drop_pg_table_health.sql): isto
+          // insersérie uma linha em `pg_table_health` por TABELA de cada
+          // database, a cada poll (poll_seconds, default 10s) — write-only,
+          // nada no backend nem no frontend jamais fazia SELECT nessa
+          // tabela (a tela "Saúde" usa collectTableHealth()/tableHealth()
+          // logo abaixo, que lê pg_stat_user_tables ao vivo e cacheia em
+          // Redis, sem tocar em SQL histórico). Rodando sem parar desde a
+          // criação da tabela (migration 004), isso sozinho chegou a 118GB
+          // em produção sem nenhum uso — auditoria pedida pelo usuário em
+          // 2026-07-15. A tabela foi dropada; não recriar sem um consumidor
+          // real (endpoint + tela) pro histórico.
         } catch (e: any) {
           this.logger.error(`coleta multi-db ${c.name}/${datname}: ${e.message}`);
         } finally {

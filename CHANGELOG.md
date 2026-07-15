@@ -8,6 +8,26 @@ no `GET /health` (backend) e no heartbeat do agent (`agentVersion`).
 
 ## [Não lançado]
 
+### Correção crítica: 118GB de disco desperdiçados em `pg_table_health`
+- Auditoria de espaço em disco (produção reportou banco de 126GB sem o
+  espaço "voltar" mesmo com retenção configurada). Achado: a hypertable
+  `pg_table_health` era escrita a cada poll do PgMonitorService (a cada
+  `poll_seconds`, default 10s, 1 linha por tabela por database por cluster
+  monitorado) desde a migration `004_modules_5.sql`, mas NUNCA foi lida por
+  nenhum código — a tela "Saúde" migrou para uma coleta ao vivo cacheada em
+  Redis (`collectTableHealth`/`tableHealth`) e o INSERT antigo nunca foi
+  removido. Write-only, sem nenhum consumidor, sozinho chegou a 118GB.
+- `pg-monitor.service.ts`: removido o INSERT morto em `pg_table_health`
+  dentro do poll de 10s.
+- Migration `030_drop_pg_table_health.sql`: `DROP TABLE pg_table_health` —
+  devolve os 118GB ao SO imediatamente (ao contrário de DELETE, não precisa
+  de VACUUM depois).
+- Migration `029_missing_retention_policies.sql`: auditoria completa de
+  todas as hypertables do schema contra retention_policy — adicionada
+  retenção (nativa, TimescaleDB) que faltava em `alert_events` (180d),
+  `credential_rotation_events` (180d) e `log_export_runs` (180d), as únicas
+  outras hypertables ativas sem nenhum mecanismo de expurgo.
+
 ### Feature: busca de chamada FreeSWITCH/Unity por call UUID
 - Migration `027_unity_freeswitch_call_uuid.sql`: coluna `logs.call_uuid`
   (uuid) + índice parcial `idx_logs_call_uuid_ts`, e
