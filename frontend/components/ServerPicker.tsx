@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo } from 'react';
 import { Select } from './ui/Select';
-import { useServers } from '@/lib/useServers';
+import { useServers, type ServerRow } from '@/lib/useServers';
 
 const ALL_KEY = '__all__';
 
@@ -37,6 +37,15 @@ export interface ServerPickerProps {
    */
   autoSelectFirst?: boolean;
   disabled?: boolean;
+  /**
+   * Filtra quais servidores aparecem no SEGUNDO select (dentro do ambiente já
+   * escolhido) — o nível de ambiente (cloud/região) continua mostrando todos
+   * os grupos normalmente, só a lista de servidores dentro de cada grupo é
+   * filtrada. Uso: telas dedicadas a um tipo específico de host (ex.: só
+   * `sip-server` na tela de logs de chamadas) sem duplicar o componente nem
+   * afetar as outras telas que não passam essa prop.
+   */
+  serverFilter?: (s: ServerRow) => boolean;
 }
 
 /**
@@ -67,16 +76,28 @@ export function ServerPicker({
   allLabel,
   autoSelectFirst,
   disabled,
+  serverFilter,
 }: ServerPickerProps) {
   const { groups, loading } = useServers();
 
+  // Grupos de ambiente sempre completos (cloud/região não é filtrada); só a
+  // lista de servidores DENTRO de cada grupo passa pelo serverFilter, quando
+  // fornecido. Grupos que ficam sem nenhum servidor após o filtro continuam
+  // aparecendo no select de ambiente (evita o ambiente "sumir" da lista só
+  // porque nenhum servidor dele bate o filtro agora) — o segundo select é
+  // que fica vazio nesse caso.
+  const filteredGroups = useMemo(() => {
+    if (!serverFilter) return groups;
+    return groups.map((g) => ({ ...g, servers: g.servers.filter(serverFilter) }));
+  }, [groups, serverFilter]);
+
   const effectiveGroups = useMemo(() => {
-    if (!allowAll) return groups;
+    if (!allowAll) return filteredGroups;
     return [
       { cloud: '', region: null, key: ALL_KEY, label: allLabel ?? 'Todos os servidores', servers: [] },
-      ...groups,
+      ...filteredGroups,
     ];
-  }, [groups, allowAll, allLabel]);
+  }, [filteredGroups, allowAll, allLabel]);
 
   const currentGroup = useMemo(() => {
     if (!effectiveGroups.length) return null;
@@ -94,11 +115,11 @@ export function ServerPicker({
   // (telas que sempre precisam de um servidor escolhido pra funcionar, como
   // Docker manager e Script Manager).
   useEffect(() => {
-    if (autoSelectFirst && !value && !allowAll && groups.length && groups[0].servers[0]) {
-      onChange(groups[0].servers[0].id);
+    if (autoSelectFirst && !value && !allowAll && filteredGroups.length && filteredGroups[0].servers[0]) {
+      onChange(filteredGroups[0].servers[0].id);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoSelectFirst, value, allowAll, groups]);
+  }, [autoSelectFirst, value, allowAll, filteredGroups]);
 
   function onGroupChange(key: string) {
     if (key === ALL_KEY) {

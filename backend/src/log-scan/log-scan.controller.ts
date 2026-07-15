@@ -1,7 +1,7 @@
 import { Body, Controller, Post, Param, Req } from '@nestjs/common';
 import type { Request } from 'express';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import { IsInt, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator';
+import { IsIn, IsInt, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator';
 import { LogScanService } from './log-scan.service';
 import { RequirePermission } from '../auth/permissions.decorator';
 import { CurrentUser, JwtUserPayload } from '../auth/current-user.decorator';
@@ -16,7 +16,12 @@ class StartLogScanDto {
   @IsOptional() @IsString() @MaxLength(255) filePrefix?: string;
   @IsString() from!: string;
   @IsString() to!: string;
+  // @IsOptional aqui permite string vazia passar (class-validator só pula a
+  // validação quando o valor é undefined/null — '' segue validado normalmente
+  // por @IsString) — é assim que distinguimos "campo ausente" (modo listagem)
+  // de "campo presente vazio" (modo busca sem termo, abre tudo) no service.
   @IsOptional() @IsString() @MaxLength(4096) query?: string;
+  @IsOptional() @IsIn(['pass', 'fail']) status?: 'pass' | 'fail';
   @IsOptional() @IsInt() @Min(1) @Max(200_000) maxMatches?: number;
 }
 
@@ -56,6 +61,7 @@ export class LogScanController {
         from: dto.from,
         to: dto.to,
         hasQuery: !!dto.query,
+        status: dto.status,
       },
       result: 'ok',
     });
@@ -65,6 +71,7 @@ export class LogScanController {
       from: dto.from,
       to: dto.to,
       query: dto.query,
+      status: dto.status,
       maxMatches: dto.maxMatches,
     });
   }

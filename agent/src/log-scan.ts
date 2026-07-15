@@ -61,7 +61,18 @@ export interface LogScanArgs {
   filePrefix?: string;
   from: string;
   to: string;
+  // string vazia ('') é significativa aqui — diferente de ausente/undefined.
+  // Ver doRunLogScan: query !== undefined é o que decide o modo 'search'
+  // (mesmo com string vazia, pra permitir "abrir tudo" sem termo nenhum);
+  // query AUSENTE (undefined) é o modo 'list' usado pelo painel de chamadas
+  // recentes (resumo agregado, nunca linha a linha).
   query?: string;
+  // Filtro por resultado do dialplan: casa literalmente "Regex (PASS)" /
+  // "Regex (FAIL)" nas linhas de trace do Unity/FreeSWITCH — NÃO é um
+  // veredito de "a chamada toda passou/falhou" (uma chamada tem várias
+  // condições de dialplan avaliadas, cada uma com seu PASS/FAIL próprio); é
+  // um filtro de linha, combinável (AND) com `query`.
+  status?: 'pass' | 'fail';
   maxMatches?: number;
 }
 
@@ -165,9 +176,15 @@ async function doRunLogScan(
     throw new Error('from/to inválidos (esperado ISO 8601)');
   }
 
-  const mode: 'search' | 'list' = args.query ? 'search' : 'list';
+  // query !== undefined (mesmo '') => modo busca/streaming linha a linha,
+  // inclusive "abrir tudo" quando query é string vazia e não há status. Só
+  // quando o CAMPO está ausente (undefined) — nunca enviado pelo painel de
+  // busca, só pelo painel de "chamadas recentes" — cai no modo listagem
+  // (resumo agregado, ver mais abaixo).
+  const mode: 'search' | 'list' = args.query !== undefined ? 'search' : 'list';
   const maxMatches = Math.max(1, args.maxMatches ?? DEFAULT_MAX_MATCHES);
-  const queryLower = args.query?.toLowerCase();
+  const queryLower = args.query ? args.query.toLowerCase() : undefined;
+  const statusMarker = args.status === 'pass' ? '(PASS)' : args.status === 'fail' ? '(FAIL)' : undefined;
 
   // 1) lista arquivos cujo nome começa com o prefixo (pega o vivo + os
   // rotacionados, ignora outras subpastas/arquivos do mesmo diretório).
@@ -277,7 +294,12 @@ async function doRunLogScan(
         if (lineNo % 500 === 0 && state.stopped) { rl.close(); return; }
         if (mode === 'search') {
           if (stoppedForMaxMatches) return;
-          if (!queryLower || !line.toLowerCase().includes(queryLower)) return;
+          // Sem query nem status: modo "abrir tudo" (janela curta, sem
+          // filtro) — toda linha passa. Com um ou ambos: AND entre eles
+          // (a linha precisa bater o texto E o marcador pass/fail, quando
+          // os dois estiverem preenchidos).
+          if (queryLower && !line.toLowerCase().includes(queryLower)) return;
+          if (statusMarker && !line.includes(statusMarker)) return;
           pendingLines.push(line);
           matchCount++;
           if (matchCount >= maxMatches) {

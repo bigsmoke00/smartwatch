@@ -8,7 +8,13 @@ export interface LogScanParams {
   filePrefix?: string;
   from: string;
   to: string;
+  // '' (string vazia) é diferente de omitido — ver agent/src/log-scan.ts.
+  // Omitido = modo listagem (chamadas recentes); presente (mesmo vazio) =
+  // modo busca/streaming, inclusive "abrir tudo" sem termo nenhum.
   query?: string;
+  // Filtro por "Regex (PASS)"/"Regex (FAIL)" literal nas linhas — combinável
+  // (AND) com query. Ver comentário equivalente em agent/src/log-scan.ts.
+  status?: 'pass' | 'fail';
   maxMatches?: number;
 }
 

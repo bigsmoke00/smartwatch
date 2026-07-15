@@ -9,7 +9,7 @@ import { Button } from '@/components/ui/Button';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { ServerPicker } from '@/components/ServerPicker';
 import { apiFetch, ApiError, Auth } from '@/lib/api';
-import { TimeRangePicker, TimeRange } from '@/components/ui/TimeRangePicker';
+import { type TimeRange } from '@/components/ui/TimeRangePicker';
 import { PhoneCall, Search, Copy, Download, RefreshCw, PhoneOutgoing, Info } from 'lucide-react';
 
 /**
@@ -39,17 +39,36 @@ interface CallRow {
   lastSeen: string;
 }
 
-const MAX_WINDOW_MS = 48 * 60 * 60 * 1000;
+// Teto de janela BEM mais curto que o resto do app (48h em /logs): o volume
+// de trace do unity.log é grande demais (rotaciona a cada poucos minutos,
+// ~10MB/arquivo) — mesmo com o gargalo de fs.stat resolvido (ver
+// agent/src/log-scan.ts), janelas maiores viram MUITOS arquivos e MUITAS
+// linhas pra escanear/transportar. A pedido explícito do usuário, esta tela
+// fica travada em no máximo 10 min, com 3 presets fixos — nada de picker
+// livre igual /logs.
+const WINDOW_PRESETS: { minutes: number; label: string }[] = [
+  { minutes: 2, label: '2 min' },
+  { minutes: 5, label: '5 min' },
+  { minutes: 10, label: '10 min' },
+];
+const MAX_WINDOW_MS = 10 * 60_000;
 
-/** Default específico desta tela: última 1 hora (diferente do default de /logs, 15min). */
-const DEFAULT_UNITY_RANGE: TimeRange = {
-  from: 'now-1h',
-  to: 'now',
-  label: 'Última hora',
-  relative: true,
-};
+function rangeForMinutes(minutes: number): TimeRange {
+  return { from: `now-${minutes}m`, to: 'now', label: `Últimos ${minutes} min`, relative: true };
+}
 
-const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/** Default específico desta tela: 5 min (meio-termo dos 3 presets). */
+const DEFAULT_UNITY_RANGE: TimeRange = rangeForMinutes(5);
+
+// Filtro de servidor específico desta tela: só hosts SIP (FreeSWITCH/Unity) —
+// o resto da frota (app servers, proxies http/sip, etc.) não tem unity.log e
+// só teria poluído a lista. Ver ServerPicker.serverFilter.
+const SIP_SERVER_FILTER = (s: { name: string }) => s.name.toLowerCase().includes('sip-server');
+
+// Filtro de resultado do dialplan — casa literalmente "Regex (PASS)"/
+// "Regex (FAIL)" nas linhas de trace (ver agent/src/log-scan.ts). NÃO é um
+// veredito de a chamada inteira ter dado certo/errado, é por linha/condição.
+type StatusFilter = '' | 'pass' | 'fail';
 
 // ---------------------------------------------------------------------------
 // Syntax highlighting das linhas de log (estilo terminal SIP/FreeSWITCH).
@@ -143,7 +162,7 @@ function toAbsoluteMs(t: string): number {
   return isNaN(d.getTime()) ? Date.now() : d.getTime();
 }
 
-/** Converte o TimeRange em ISO absoluto, clampando a janela em no máx. 48h. */
+/** Converte o TimeRange em ISO absoluto, clampando a janela em no máx. 10 min. */
 function effectiveRange(range: TimeRange): { fromIso: string; toIso: string; clamped: boolean } {
   const toMs = toAbsoluteMs(range.to);
   let fromMs = toAbsoluteMs(range.from);
@@ -178,6 +197,7 @@ export default function UnityPage() {
   const [serverId, setServerId] = useState('');
   const [range, setRange] = useState<TimeRange>(DEFAULT_UNITY_RANGE);
   const [callUuid, setCallUuid] = useState('');
+  const [status, setStatus] = useState<StatusFilter>('');
 
   // ---- painel principal: busca por UUID (modo BUSCA do log-scan) ----
   const [lines, setLines] = useState<string[]>([]);
@@ -190,7 +210,6 @@ export default function UnityPage() {
   const callsSocketRef = useRef<Socket | null>(null);
 
   const { fromIso, toIso, clamped } = useMemo(() => effectiveRange(range), [range]);
-  const uuidLooksValid = callUuid.trim() === '' || UUID_REGEX.test(callUuid.trim());
 
   function disconnectSearch() {
     searchSocketRef.current?.disconnect();
@@ -284,9 +303,13 @@ export default function UnityPage() {
     });
   }
 
-  async function search(uuidOverride?: string) {
-    const uuid = (uuidOverride ?? callUuid).trim();
-    if (!serverId || !uuid) return;
+  // `query` vai SEMPRE presente no body (mesmo '') — é isso que o backend/
+  // agent usam pra distinguir modo busca (inclusive "abrir tudo" sem termo)
+  // do modo listagem usado só pelo painel de chamadas recentes (que nunca
+  // chama esta função). Ver comentário em agent/src/log-scan.ts.
+  async function search(queryOverride?: string) {
+    if (!serverId) return;
+    const q = (queryOverride ?? callUuid).trim();
     disconnectSearch();
     setLines([]);
     setSearchScan({ sessionId: '', connected: false, done: false });
@@ -294,7 +317,12 @@ export default function UnityPage() {
       const { sessionId } = await apiFetch<{ sessionId: string }>('/log-scan/start', {
         method: 'POST',
         body: JSON.stringify({
-          serverId, directory: UNITY_LOG_DIR, from: fromIso, to: toIso, query: uuid.toLowerCase(),
+          serverId,
+          directory: UNITY_LOG_DIR,
+          from: fromIso,
+          to: toIso,
+          query: q.toLowerCase(),
+          ...(status ? { status } : {}),
         }),
       });
       watchSearchSession(sessionId);
@@ -305,6 +333,15 @@ export default function UnityPage() {
       });
     }
   }
+
+  // Re-escaneia automaticamente ao trocar ambiente/servidor/janela/status —
+  // igual o painel de chamadas recentes já fazia. Texto digitado (UUID/
+  // número) fica de fora de propósito (senão escanearia a cada tecla); pra
+  // isso o usuário aperta Enter ou clica Buscar.
+  useEffect(() => {
+    search();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [serverId, fromIso, toIso, status]);
 
   function pickCall(c: CallRow) {
     setCallUuid(c.callUuid);
@@ -328,7 +365,7 @@ export default function UnityPage() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `unity-call-${callUuid || 'export'}-${Date.now()}.txt`;
+    a.download = `sip-logs-${callUuid || status || 'export'}-${Date.now()}.txt`;
     a.click();
     URL.revokeObjectURL(url);
   }
@@ -341,10 +378,10 @@ export default function UnityPage() {
       <div className="p-6 space-y-3">
         <PageHeader
           title="Logs de chamadas SIP-Server"
-          description="Busca dedicada de chamadas pelo call UUID — cole o UUID e veja todas as linhas daquela chamada, em ordem cronológica."
+          description="Logs ao vivo do SIP-Server (janela de até 10 min) — filtre por call UUID, número/ramal e/ou resultado do dialplan (pass/fail), ou deixe tudo vazio pra ver tudo."
           icon={<PhoneCall size={16} />}
           actions={
-            <Button variant="secondary" onClick={() => search()} disabled={loading || !serverId || !callUuid.trim()}>
+            <Button variant="secondary" onClick={() => search()} disabled={loading || !serverId}>
               <RefreshCw size={14} /> Buscar
             </Button>
           }
@@ -362,46 +399,82 @@ export default function UnityPage() {
         <Card className="p-3">
           <div className="grid grid-cols-1 md:grid-cols-12 gap-2 items-end">
             <div className="md:col-span-3">
-              <label className="text-xs text-muted">Servidor</label>
-              <ServerPicker value={serverId} onChange={setServerId} placeholder="Selecione um servidor" />
+              <label className="text-xs text-muted">Ambiente</label>
+              <ServerPicker
+                value={serverId}
+                onChange={setServerId}
+                placeholder="Selecione um servidor"
+                serverFilter={SIP_SERVER_FILTER}
+              />
             </div>
             <div className="md:col-span-4">
-              <label className="text-xs text-muted">Call UUID</label>
+              <label className="text-xs text-muted">Call UUID / Número / Ramal</label>
               <div className="relative">
                 <Input
                   value={callUuid}
                   onChange={(e) => setCallUuid(e.target.value)}
                   onKeyDown={(e) => e.key === 'Enter' && search()}
-                  placeholder="eedd879e-067e-4213-838f-1531a4637d1d"
+                  placeholder="UUID, número ou ramal — vazio mostra tudo"
                   className="pl-8 font-mono text-xs"
-                  error={!uuidLooksValid}
                 />
                 <Search size={14} className="absolute left-2 top-2.5 text-muted" />
               </div>
-              {!uuidLooksValid && (
-                <div className="text-[11px] text-warn mt-0.5">
-                  Isso não parece um UUID válido (formato esperado: 8-4-4-4-12 caracteres hex) — a busca ainda funciona, é só um aviso.
-                </div>
-              )}
             </div>
             <div className="md:col-span-3">
-              <label className="text-xs text-muted">Janela (teto de 48h)</label>
-              <TimeRangePicker value={range} onChange={setRange} />
+              <label className="text-xs text-muted">Janela (máx. 10 min)</label>
+              <div className="flex gap-1">
+                {WINDOW_PRESETS.map((p) => (
+                  <button
+                    key={p.minutes}
+                    onClick={() => setRange(rangeForMinutes(p.minutes))}
+                    className={`flex-1 rounded-md border px-2 py-2 text-xs ${
+                      range.label === `Últimos ${p.minutes} min`
+                        ? 'border-accent bg-accent/10 text-accent'
+                        : 'border-border bg-panel2 text-muted hover:border-accent'
+                    }`}
+                  >
+                    {p.label}
+                  </button>
+                ))}
+              </div>
             </div>
             <div className="md:col-span-2">
-              <Button className="w-full" onClick={() => search()} disabled={loading || !serverId || !callUuid.trim()}>
+              <Button className="w-full" onClick={() => search()} disabled={loading || !serverId}>
                 <Search size={14} /> Buscar
               </Button>
             </div>
           </div>
+          <div className="mt-2 flex items-center gap-2">
+            <span className="text-xs text-muted">Resultado do dialplan:</span>
+            {(['', 'pass', 'fail'] as StatusFilter[]).map((s) => (
+              <button
+                key={s || 'todos'}
+                onClick={() => setStatus(s)}
+                className={`rounded-md border px-2.5 py-1 text-xs capitalize ${
+                  status === s
+                    ? s === 'fail'
+                      ? 'border-red-400 bg-red-400/10 text-red-400'
+                      : s === 'pass'
+                        ? 'border-emerald-400 bg-emerald-400/10 text-emerald-400'
+                        : 'border-accent bg-accent/10 text-accent'
+                    : 'border-border bg-panel2 text-muted hover:border-accent'
+                }`}
+              >
+                {s === '' ? 'Todos' : s}
+              </button>
+            ))}
+            <span className="text-[11px] text-muted">
+              (casa "Regex (PASS)"/"Regex (FAIL)" literal nas linhas — combinável com o campo ao lado)
+            </span>
+          </div>
           {clamped && (
             <div className="text-[11px] text-warn mt-2">
-              Janela solicitada maior que 48h — ajustada automaticamente para as últimas 48h a partir do "até".
+              Janela solicitada maior que 10 min — ajustada automaticamente para os últimos 10 min a partir do "até".
             </div>
           )}
           {!serverId && (
             <div className="text-[11px] text-muted mt-2">
-              Selecione um servidor para ver as chamadas recentes e poder buscar por UUID.
+              Selecione um servidor para ver os logs — com o campo e o filtro de resultado vazios, mostra tudo na janela escolhida.
             </div>
           )}
         </Card>
@@ -412,7 +485,7 @@ export default function UnityPage() {
               <div className="text-xs text-muted">
                 {hasSearched
                   ? `${lines.length.toLocaleString()} linha(s) encontradas até agora${loading ? ' — escaneando...' : ''}`
-                  : 'Cole um call UUID e clique em Buscar, ou selecione uma chamada recente ao lado.'}
+                  : 'Selecione um servidor para ver os logs da janela escolhida.'}
                 {searchScan?.error && (
                   <span className="ml-2 text-warn">⚠ {searchScan.error}</span>
                 )}
@@ -438,7 +511,7 @@ export default function UnityPage() {
               )}
               {!loading && hasSearched && lines.length === 0 && searchScan?.done && !searchScan.error && (
                 <div className="p-6 text-muted text-sm">
-                  Nenhuma linha encontrada para esse UUID nessa janela de tempo.
+                  Nenhuma linha encontrada para esse filtro nessa janela de tempo.
                 </div>
               )}
               {lines.map((line, i) => (
