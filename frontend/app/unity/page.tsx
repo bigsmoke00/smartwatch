@@ -10,7 +10,7 @@ import { PageHeader } from '@/components/ui/PageHeader';
 import { ServerPicker } from '@/components/ServerPicker';
 import { apiFetch, ApiError, Auth } from '@/lib/api';
 import { type TimeRange } from '@/components/ui/TimeRangePicker';
-import { PhoneCall, Search, Copy, Download, RefreshCw, PhoneOutgoing, Info } from 'lucide-react';
+import { PhoneCall, Search, Copy, Download, Eraser, PhoneOutgoing, Info, Maximize2, Minimize2 } from 'lucide-react';
 
 /**
  * Página /unity — scan SOB DEMANDA dos arquivos de log do Unity/FreeSWITCH
@@ -41,24 +41,25 @@ interface CallRow {
 
 // Teto de janela BEM mais curto que o resto do app (48h em /logs): o volume
 // de trace do unity.log é grande demais (rotaciona a cada poucos minutos,
-// ~10MB/arquivo) — mesmo com o gargalo de fs.stat resolvido (ver
+// ~10MB/arquivo, e o SIP-Server real gera até 300-400 mil linhas em só
+// alguns minutos) — mesmo com o gargalo de fs.stat resolvido (ver
 // agent/src/log-scan.ts), janelas maiores viram MUITOS arquivos e MUITAS
 // linhas pra escanear/transportar. A pedido explícito do usuário, esta tela
-// fica travada em no máximo 10 min, com 3 presets fixos — nada de picker
+// fica travada em no máximo 5 min, com 3 presets fixos — nada de picker
 // livre igual /logs.
 const WINDOW_PRESETS: { minutes: number; label: string }[] = [
   { minutes: 2, label: '2 min' },
+  { minutes: 3, label: '3 min' },
   { minutes: 5, label: '5 min' },
-  { minutes: 10, label: '10 min' },
 ];
-const MAX_WINDOW_MS = 10 * 60_000;
+const MAX_WINDOW_MS = 5 * 60_000;
 
 function rangeForMinutes(minutes: number): TimeRange {
   return { from: `now-${minutes}m`, to: 'now', label: `Últimos ${minutes} min`, relative: true };
 }
 
-/** Default específico desta tela: 5 min (meio-termo dos 3 presets). */
-const DEFAULT_UNITY_RANGE: TimeRange = rangeForMinutes(5);
+/** Default desta tela: sempre abre no preset mais curto (2 min). */
+const DEFAULT_UNITY_RANGE: TimeRange = rangeForMinutes(2);
 
 // Filtro de servidor específico desta tela: só hosts SIP (FreeSWITCH/Unity) —
 // o resto da frota (app servers, proxies http/sip, etc.) não tem unity.log e
@@ -162,7 +163,7 @@ function toAbsoluteMs(t: string): number {
   return isNaN(d.getTime()) ? Date.now() : d.getTime();
 }
 
-/** Converte o TimeRange em ISO absoluto, clampando a janela em no máx. 10 min. */
+/** Converte o TimeRange em ISO absoluto, clampando a janela em no máx. 5 min. */
 function effectiveRange(range: TimeRange): { fromIso: string; toIso: string; clamped: boolean } {
   const toMs = toAbsoluteMs(range.to);
   let fromMs = toAbsoluteMs(range.from);
@@ -198,6 +199,9 @@ export default function UnityPage() {
   const [range, setRange] = useState<TimeRange>(DEFAULT_UNITY_RANGE);
   const [callUuid, setCallUuid] = useState('');
   const [status, setStatus] = useState<StatusFilter>('');
+  // Visão expandida (tela cheia) do painel de logs — mesmo padrão da tela de
+  // captura SIP (ver components/CaptureLiveView.tsx: fixed inset-0 z-50).
+  const [fullscreen, setFullscreen] = useState(false);
 
   // ---- painel principal: busca por UUID (modo BUSCA do log-scan) ----
   const [lines, setLines] = useState<string[]>([]);
@@ -431,6 +435,19 @@ export default function UnityPage() {
     URL.revokeObjectURL(url);
   }
 
+  // Substitui o antigo botão "Buscar": a busca já dispara sozinha ao trocar
+  // ambiente/janela/status (useEffect acima) e ao apertar Enter no campo de
+  // texto — um botão manual de busca virou redundante. Em troca, um jeito
+  // rápido de limpar a tela principal (sem mexer nos filtros escolhidos) é
+  // mais útil no dia a dia.
+  function clearLog() {
+    if (searchScan && !searchScan.done) stopScan(searchScan.sessionId);
+    disconnectSearch();
+    setLines([]);
+    setSearchScan(null);
+    setCallUuid('');
+  }
+
   const loading = !!searchScan && !searchScan.done;
   const hasSearched = !!searchScan;
 
@@ -439,11 +456,11 @@ export default function UnityPage() {
       <div className="p-6 space-y-3">
         <PageHeader
           title="Logs de chamadas SIP-Server"
-          description="Logs ao vivo do SIP-Server (janela de até 10 min) — filtre por call UUID, número/ramal e/ou resultado do dialplan (pass/fail), ou deixe tudo vazio pra ver tudo."
+          description="Logs ao vivo do SIP-Server (janela de até 5 min) — filtre por call UUID, número/ramal e/ou resultado do dialplan (pass/fail), ou deixe tudo vazio pra ver tudo."
           icon={<PhoneCall size={16} />}
           actions={
-            <Button variant="secondary" onClick={() => search()} disabled={loading || !serverId}>
-              <RefreshCw size={14} /> Buscar
+            <Button variant="secondary" onClick={clearLog} disabled={lines.length === 0 && !callUuid}>
+              <Eraser size={14} /> Limpar
             </Button>
           }
         />
@@ -482,7 +499,7 @@ export default function UnityPage() {
               </div>
             </div>
             <div className="md:col-span-3">
-              <label className="text-xs text-muted">Janela (máx. 10 min)</label>
+              <label className="text-xs text-muted">Janela (máx. 5 min)</label>
               <div className="flex gap-1">
                 {WINDOW_PRESETS.map((p) => (
                   <button
@@ -500,8 +517,8 @@ export default function UnityPage() {
               </div>
             </div>
             <div className="md:col-span-2">
-              <Button className="w-full" onClick={() => search()} disabled={loading || !serverId}>
-                <Search size={14} /> Buscar
+              <Button className="w-full" variant="secondary" onClick={clearLog} disabled={lines.length === 0 && !callUuid}>
+                <Eraser size={14} /> Limpar
               </Button>
             </div>
           </div>
@@ -530,7 +547,7 @@ export default function UnityPage() {
           </div>
           {clamped && (
             <div className="text-[11px] text-warn mt-2">
-              Janela solicitada maior que 10 min — ajustada automaticamente para os últimos 10 min a partir do "até".
+              Janela solicitada maior que 5 min — ajustada automaticamente para os últimos 5 min a partir do "até".
             </div>
           )}
           {!serverId && (
@@ -540,9 +557,15 @@ export default function UnityPage() {
           )}
         </Card>
 
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
-          <Card className="p-0 overflow-hidden lg:col-span-2">
-            <div className="px-3 py-2 border-b border-border flex items-center justify-between">
+        <div className="grid grid-cols-1 lg:grid-cols-5 gap-3">
+          <Card
+            className={
+              fullscreen
+                ? 'p-0 fixed inset-0 z-50 rounded-none flex flex-col'
+                : 'p-0 overflow-hidden lg:col-span-4'
+            }
+          >
+            <div className="px-3 py-2 border-b border-border flex items-center justify-between shrink-0">
               <div className="text-xs text-muted">
                 {hasSearched
                   ? `${lines.length.toLocaleString()} linha(s) encontradas até agora${loading ? ' — escaneando...' : ''}`
@@ -561,12 +584,18 @@ export default function UnityPage() {
                 <Button variant="secondary" size="sm" onClick={exportTxt} disabled={lines.length === 0}>
                   <Download size={12} /> Exportar .txt
                 </Button>
+                <Button variant="secondary" size="sm" onClick={() => setFullscreen((v) => !v)}>
+                  {fullscreen ? <Minimize2 size={12} /> : <Maximize2 size={12} />}
+                  {fullscreen ? 'Sair da tela cheia' : 'Tela cheia'}
+                </Button>
               </div>
             </div>
             <div
               ref={scrollRef}
               onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}
-              className="font-mono text-xs leading-relaxed max-h-[calc(100vh-360px)] overflow-auto"
+              className={`font-mono text-xs leading-relaxed overflow-auto ${
+                fullscreen ? 'flex-1' : 'max-h-[calc(100vh-360px)]'
+              }`}
             >
               {loading && lines.length === 0 && (
                 <div className="p-6 text-muted text-sm flex items-center gap-2">
