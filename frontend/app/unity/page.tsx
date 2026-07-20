@@ -10,7 +10,7 @@ import { PageHeader } from '@/components/ui/PageHeader';
 import { ServerPicker } from '@/components/ServerPicker';
 import { apiFetch, ApiError, Auth } from '@/lib/api';
 import { type TimeRange } from '@/components/ui/TimeRangePicker';
-import { PhoneCall, Search, Copy, Download, Eraser, PhoneOutgoing, Info, Maximize2, Minimize2 } from 'lucide-react';
+import { PhoneCall, Search, Copy, Download, Eraser, PhoneOutgoing, Info, Maximize2, Minimize2, RefreshCw } from 'lucide-react';
 
 /**
  * Página /unity — scan SOB DEMANDA dos arquivos de log do Unity/FreeSWITCH
@@ -371,12 +371,23 @@ export default function UnityPage() {
   // agent usam pra distinguir modo busca (inclusive "abrir tudo" sem termo)
   // do modo listagem usado só pelo painel de chamadas recentes (que nunca
   // chama esta função). Ver comentário em agent/src/log-scan.ts.
-  async function search(queryOverride?: string) {
+  //
+  // `append`: quando true, NÃO limpa `lines` antes de escanear — o novo
+  // resultado (janela atual: server/window/query/status de agora) é
+  // concatenado ao que já está na tela em vez de substituir (o `chunk` do
+  // watchSearchSession já faz `prev.concat(...)`, então só de não zerar
+  // `lines` aqui o resto já funciona). É o botão "Buscar" manual (ao lado
+  // dos presets de janela): clicar de novo empilha mais um pedaço recente,
+  // deixando construir um histórico mais longo que o teto de 5min sem
+  // precisar aumentar a janela. Troca automática de ambiente/janela/status
+  // continua chamando search() SEM append (substitui, é o comportamento que
+  // já existia) — só o clique manual acumula.
+  async function search(queryOverride?: string, opts?: { append?: boolean }) {
     if (!serverId) return;
     const q = (queryOverride ?? callUuid).trim();
     if (searchScan && !searchScan.done) stopScan(searchScan.sessionId);
     disconnectSearch();
-    setLines([]);
+    if (!opts?.append) setLines([]);
     setSearchScan({ sessionId: '', connected: false, done: false });
     try {
       const { sessionId } = await apiFetch<{ sessionId: string }>('/log-scan/start', {
@@ -517,8 +528,13 @@ export default function UnityPage() {
               </div>
             </div>
             <div className="md:col-span-2">
-              <Button className="w-full" variant="secondary" onClick={clearLog} disabled={lines.length === 0 && !callUuid}>
-                <Eraser size={14} /> Limpar
+              <Button
+                className="w-full"
+                onClick={() => search(undefined, { append: true })}
+                disabled={loading || !serverId}
+                title="Busca a janela atual (2/3/5 min) com o filtro de agora e adiciona ao que já está na tela, sem apagar o que já tem"
+              >
+                <RefreshCw size={14} /> Buscar
               </Button>
             </div>
           </div>
