@@ -4,8 +4,8 @@
 
 html,
 body {
-  background: #0a0b0f;
-  color: #eef0f5;
+  background: #0a0d0f;
+  color: #eef2f4;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   font-feature-settings: 'tnum' 1, 'cv11' 1;
@@ -19,23 +19,23 @@ body {
    na tela "Acesso a banco" — mesma ideia do Metabase/DBeaver: escreve várias
    instruções separadas por ; e só a instrução em destaque é executada. */
 .sql-active-stmt {
-  background-color: rgba(124, 108, 255, 0.18);
+  background-color: rgba(20, 151, 168, 0.18);
 }
 
 ::selection {
-  background: rgba(124, 108, 255, 0.35);
+  background: rgba(20, 151, 168, 0.35);
   color: #fff;
 }
 
 :focus-visible {
-  outline: 2px solid rgba(124, 108, 255, 0.55);
+  outline: 2px solid rgba(20, 151, 168, 0.55);
   outline-offset: 1px;
 }
 
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: #242832; border-radius: 6px; }
-::-webkit-scrollbar-thumb:hover { background: #33394a; }
+::-webkit-scrollbar-thumb { background: #232d33; border-radius: 6px; }
+::-webkit-scrollbar-thumb:hover { background: #33424a; }
 
 /* numerais tabulares por padrão em qualquer tabela/métrica numérica */
 .tabular {

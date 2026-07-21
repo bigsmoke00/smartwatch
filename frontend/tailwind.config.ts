@@ -6,20 +6,23 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
-        bg: '#0a0b0f',
-        panel: '#12141a',
-        panel2: '#181b23',
-        panel3: '#1e222c',
-        border: '#242832',
-        borderStrong: '#33394a',
-        muted: '#8b92a5',
-        mutedFaint: '#5b6275',
-        text: '#eef0f5',
-        accent: '#7c6cff',
-        accentSoft: '#9c8fff',
+        // Tema dark "azul petróleo" — derivado da marca Smartspace. Os
+        // neutros levam um leve tom teal (verde-azulado) pra casar com o
+        // accent petrol; o accent substitui o antigo roxo em toda a UI.
+        bg: '#0a0d0f',
+        panel: '#111619',
+        panel2: '#171d21',
+        panel3: '#1d252b',
+        border: '#232d33',
+        borderStrong: '#33424a',
+        muted: '#8a95a0',
+        mutedFaint: '#586269',
+        text: '#eef2f4',
+        accent: '#1497a8',
+        accentSoft: '#4fc1d0',
         success: '#2ecc81',
         warn: '#f5a623',
-        danger: '#f0526b',
+        danger: '#ef5566',
         info: '#4b9bf5',
       },
       fontFamily: {
@@ -31,14 +34,14 @@ const config: Config = {
       },
       boxShadow: {
         elevate: '0 1px 2px rgba(0,0,0,0.4), 0 8px 24px -8px rgba(0,0,0,0.5)',
-        glow: '0 0 0 1px rgba(124,108,255,0.4), 0 0 24px -4px rgba(124,108,255,0.45)',
+        glow: '0 0 0 1px rgba(20,151,168,0.4), 0 0 24px -4px rgba(20,151,168,0.45)',
       },
       borderRadius: {
         xl: '0.875rem',
         '2xl': '1.125rem',
       },
       backgroundImage: {
-        'accent-gradient': 'linear-gradient(135deg, #7c6cff 0%, #5b4dd6 100%)',
+        'accent-gradient': 'linear-gradient(135deg, #1aa6b8 0%, #0c6373 100%)',
         sheen: 'linear-gradient(180deg, rgba(255,255,255,0.05), rgba(255,255,255,0))',
       },
       keyframes: {

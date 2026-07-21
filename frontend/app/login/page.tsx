@@ -2,6 +2,7 @@
 
 import { Suspense, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
+import { Eye, EyeOff, Activity } from 'lucide-react';
 import { Auth } from '@/lib/api';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
@@ -21,6 +22,7 @@ function LoginInner() {
   const next = params?.get('next') || '/';
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [showPw, setShowPw] = useState(false);
   const [totp, setTotp] = useState('');
   const [needsMfa, setNeedsMfa] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -52,48 +54,91 @@ function LoginInner() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center px-4">
-      <Card className="w-full max-w-sm p-6">
-        <div className="mb-6">
-          <div className="font-semibold text-xl flex items-center gap-2">
-            <img src="/logo.jpeg" alt="SmartWatch" className="w-7 h-7 rounded-lg" />
-            SmartWatch
+    <div className="min-h-screen grid lg:grid-cols-2">
+      {/* Coluna do formulário */}
+      <div className="flex items-center justify-center px-6 py-12">
+        <div className="w-full max-w-sm">
+          <div className="mb-8 flex items-center gap-2.5">
+            <img
+              src="/logo.jpeg"
+              alt="SmartWatch"
+              className="w-9 h-9 rounded-xl shadow-[0_1px_0_0_rgba(255,255,255,0.15)_inset]"
+            />
+            <span className="font-semibold text-xl tracking-tight">SmartWatch</span>
           </div>
-          <p className="text-sm text-muted mt-1">Acesse seu painel.</p>
+
+          <h1 className="text-2xl font-semibold tracking-tight">Login</h1>
+          <p className="text-sm text-muted mt-1 mb-6">Acesse seu painel.</p>
+
+          <form onSubmit={submit} className="space-y-4">
+            <div>
+              <label className="text-xs font-medium text-muted">E-mail</label>
+              <div className="mt-1.5">
+                <Input
+                  type="email"
+                  name="lw-email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  required
+                  placeholder="seu@email.com"
+                  autoComplete="off"
+                  disabled={needsMfa}
+                />
+              </div>
+            </div>
+            <div>
+              <label className="text-xs font-medium text-muted">Senha</label>
+              <div className="mt-1.5 relative">
+                <Input
+                  type={showPw ? 'text' : 'password'}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  required
+                  autoComplete="current-password"
+                  disabled={needsMfa}
+                  className="pr-10"
+                />
+                <button
+                  type="button"
+                  tabIndex={-1}
+                  onClick={() => setShowPw((v) => !v)}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-mutedFaint hover:text-muted transition-colors"
+                  aria-label={showPw ? 'Ocultar senha' : 'Mostrar senha'}
+                >
+                  {showPw ? <EyeOff size={16} /> : <Eye size={16} />}
+                </button>
+              </div>
+            </div>
+            {!needsMfa && error && (
+              <div className="text-sm text-danger">{error}</div>
+            )}
+            <Button type="submit" className="w-full" disabled={loading || needsMfa}>
+              {loading ? 'Entrando...' : 'Entrar'}
+            </Button>
+          </form>
         </div>
-        <form onSubmit={submit} className="space-y-3">
-          <div>
-            <label className="text-xs text-muted">Email</label>
-            <Input
-              type="email"
-              name="lw-email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              required
-              placeholder="seu@email.com"
-              autoComplete="off"
-              disabled={needsMfa}
-            />
+      </div>
+
+      {/* Coluna hero (petrol) — some em telas pequenas */}
+      <div className="relative hidden lg:flex items-center justify-center overflow-hidden bg-accent-gradient">
+        {/* brilho + textura sutil */}
+        <div className="absolute inset-0 bg-[radial-gradient(120%_120%_at_80%_0%,rgba(255,255,255,0.14),transparent_55%)]" />
+        <div className="absolute -bottom-24 -left-24 w-96 h-96 rounded-full bg-white/10 blur-3xl" />
+        <div className="relative z-10 max-w-md px-12 text-white">
+          <div className="inline-flex items-center gap-2 rounded-full bg-white/15 border border-white/20 px-3 py-1 text-xs font-medium backdrop-blur-sm">
+            <Activity size={13} /> Observabilidade em tempo real
           </div>
-          <div>
-            <label className="text-xs text-muted">Senha</label>
-            <Input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-              autoComplete="current-password"
-              disabled={needsMfa}
-            />
-          </div>
-          {!needsMfa && error && (
-            <div className="text-sm text-danger">{error}</div>
-          )}
-          <Button type="submit" className="w-full" disabled={loading || needsMfa}>
-            {loading ? 'Entrando...' : 'Entrar'}
-          </Button>
-        </form>
-      </Card>
+          <h2 className="mt-6 text-4xl font-semibold leading-tight tracking-tight">
+            Olá,
+            <br />
+            bem-vindo ao SmartWatch
+          </h2>
+          <p className="mt-4 text-white/80 leading-relaxed">
+            Logs, capturas SIP, métricas e chamadas da sua infraestrutura — tudo
+            em uma única plataforma.
+          </p>
+        </div>
+      </div>
 
       {needsMfa && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4">
