@@ -12,7 +12,7 @@ import { PageHeader } from '@/components/ui/PageHeader';
 import { ServerPicker } from '@/components/ServerPicker';
 import { apiFetch, Auth, handleUnauthorized } from '@/lib/api';
 import { LEVEL_COLOR, fmtTime, safeArray } from '@/lib/utils';
-import { Pause, Play, Search, RefreshCw, Wifi, WifiOff, Server as ServerIcon, Container as ContainerIcon, FileText, ScrollText } from 'lucide-react';
+import { Pause, Play, Search, RefreshCw, Wifi, WifiOff, Server as ServerIcon, Container as ContainerIcon, FileText, ScrollText, ChevronDown } from 'lucide-react';
 import { TimeRangePicker, DEFAULT_RANGE, TimeRange } from '@/components/ui/TimeRangePicker';
 
 interface LogHit {
@@ -57,8 +57,11 @@ function LogsPageInner() {
   const [containerName, setContainerName] = useState('');
   const [containerOptions, setContainerOptions] = useState<{ containerName: string; image: string | null }[]>([]);
   const [containersLoading, setContainersLoading] = useState(false);
-  // Arquivo específico de /var/log dentro do source=host (vazio = todos os arquivos)
-  const [fileName, setFileName] = useState('');
+  // Arquivo(s) de /var/log dentro do source=host (vazio = todos os arquivos).
+  // Array — dá pra selecionar mais de um ao mesmo tempo (ex.: access.log +
+  // error.log juntos, na mesma timeline) pra correlacionar componentes
+  // relacionados sem precisar trocar de filtro toda hora.
+  const [fileNames, setFileNames] = useState<string[]>([]);
   const [fileOptions, setFileOptions] = useState<{ fileName: string }[]>([]);
   const [hits, setHits] = useState<LogHit[]>([]);
   const [total, setTotal] = useState(0);
@@ -82,12 +85,12 @@ function LogsPageInner() {
   const sourceRef = useRef(source);
   const serverIdRef = useRef(serverId);
   const containerNameRef = useRef(containerName);
-  const fileNameRef = useRef(fileName);
+  const fileNamesRef = useRef(fileNames);
   useEffect(() => { levelsRef.current = levels; }, [levels]);
   useEffect(() => { qRef.current = q; }, [q]);
   useEffect(() => { sourceRef.current = source; }, [source]);
   useEffect(() => { containerNameRef.current = containerName; }, [containerName]);
-  useEffect(() => { fileNameRef.current = fileName; }, [fileName]);
+  useEffect(() => { fileNamesRef.current = fileNames; }, [fileNames]);
 
   // Lista de containers já vistos nos logs desse servidor, pra popular o
   // seletor "container específico". Refaz quando troca de servidor; se o
@@ -109,12 +112,15 @@ function LogsPageInner() {
   // pra popular o seletor "arquivo específico" — mesmo padrão de
   // containerOptions acima, só que do lado host.
   useEffect(() => {
-    if (!serverId) { setFileOptions([]); setFileName(''); return; }
+    if (!serverId) { setFileOptions([]); setFileNames([]); return; }
     apiFetch<{ fileName: string }[]>(`/logs/files?serverId=${serverId}`)
       .then((rows) => {
         const arr = safeArray<{ fileName: string }>(rows);
         setFileOptions(arr);
-        setFileName((prev) => (arr.some((f) => f.fileName === prev) ? prev : ''));
+        // Mantém só os selecionados que ainda existem nesse servidor —
+        // mesma ideia do single-select antigo, só que filtrando o array em
+        // vez de zerar um valor único.
+        setFileNames((prev) => prev.filter((fn) => arr.some((f) => f.fileName === fn)));
       })
       .catch(() => setFileOptions([]));
   }, [serverId]);
@@ -170,9 +176,10 @@ function LogsPageInner() {
     // Container específico já filtra no banco (exato) — mais preciso e
     // mais barato que pedir uma página grande e filtrar no client.
     if (source === 'container' && containerName) qp.set('containerName', containerName);
-    // Arquivo específico de /var/log — mesma lógica do containerName acima,
-    // só que pro lado host (filtra no banco, antes do LIMIT).
-    if (source === 'host' && fileName) qp.set('fileName', fileName);
+    // Arquivo(s) de /var/log — mesma lógica do containerName acima, só que
+    // pro lado host (filtra no banco, antes do LIMIT). CSV, mesmo padrão de
+    // `level` (backend faz .split(',') — ver logs.controller.ts).
+    if (source === 'host' && fileNames.length) qp.set('fileName', fileNames.join(','));
     // Fonte (host/container) agora vai pro backend e filtra ANTES do LIMIT
     // (ver logs.repository.ts) — antes era filtrado aqui no client DEPOIS de
     // já ter vindo uma página de 500 linhas mais recentes sem esse filtro, e
@@ -210,7 +217,7 @@ function LogsPageInner() {
   useEffect(() => {
     search();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [serverId, range.from, range.to, source, containerName, fileName]);
+  }, [serverId, range.from, range.to, source, containerName, fileNames.join(',')]);
 
   // ---- WebSocket com reconnect + exponential backoff ----
   // IMPORTANTE: este efeito só depende de `live`. Antes ele também
@@ -324,7 +331,7 @@ function LogsPageInner() {
       const qq = qRef.current;
       const src = sourceRef.current;
       const cn = containerNameRef.current;
-      const fn = fileNameRef.current;
+      const fns = fileNamesRef.current;
       const sid = serverIdRef.current;
       // Faltava filtrar por servidor aqui — o flush filtrava level/q/source/
       // container mas não serverId, então ao trocar de servidor as mensagens
@@ -347,7 +354,10 @@ function LogsPageInner() {
       }
       if (src === 'host') {
         filtered = filtered.filter((d) => (d.containerName ?? '').startsWith('host:'));
-        if (fn) filtered = filtered.filter((d) => d.containerName === `host:${fn}`);
+        if (fns.length) {
+          const wanted = new Set(fns.map((f) => `host:${f}`));
+          filtered = filtered.filter((d) => wanted.has(d.containerName ?? ''));
+        }
       } else if (src === 'container') {
         filtered = filtered.filter((d) => !(d.containerName ?? '').startsWith('host:'));
         if (cn) filtered = filtered.filter((d) => d.containerName === cn);
@@ -389,7 +399,7 @@ function LogsPageInner() {
   const [renderLimit, setRenderLimit] = useState(500);
   useEffect(() => {
     setRenderLimit(500);
-  }, [serverId, range.from, range.to, source, containerName, q, levels]);
+  }, [serverId, range.from, range.to, source, containerName, fileNames.join(','), q, levels]);
   const visibleHits = sortedHits.slice(0, renderLimit);
   // Exibe do mais ANTIGO (topo) pro mais RECENTE (base), igual `tail -f` no
   // servidor. sortedHits está em DESC (recente primeiro) só pro slice pegar os
@@ -514,27 +524,21 @@ function LogsPageInner() {
             )}
 
             {/* Filtro por arquivo de /var/log — análogo ao de container
-                acima, só que do lado host. Ajuda quando o servidor tem
-                vários arquivos sendo coletados (access.log, error.log,
-                etc.) e o usuário quer isolar um só pra investigar. */}
+                acima, só que do lado host. Multi-select: dá pra escolher 2+
+                arquivos ao mesmo tempo (ex.: access.log + error.log) e ver
+                as linhas dos dois juntos, na mesma timeline — útil pra
+                correlacionar componentes relacionados sem alternar filtro. */}
             {source === 'host' && (
               <>
                 <div className="h-5 w-px bg-border" />
                 {!serverId ? (
                   <span className="text-xs text-muted">selecione um servidor pra filtrar por arquivo</span>
                 ) : (
-                  <Select
-                    value={fileName}
-                    onChange={(e) => setFileName(e.target.value)}
-                    className="text-xs max-w-[260px] py-1"
-                  >
-                    <option value="">Todos os arquivos</option>
-                    {fileOptions.map((f) => (
-                      <option key={f.fileName} value={f.fileName}>
-                        {f.fileName}
-                      </option>
-                    ))}
-                  </Select>
+                  <FileMultiSelect
+                    options={fileOptions}
+                    selected={fileNames}
+                    onChange={setFileNames}
+                  />
                 )}
               </>
             )}
@@ -649,6 +653,95 @@ function LogsPageInner() {
         </Card>
       </div>
     </AppShell>
+  );
+}
+
+/**
+ * Multi-select do filtro de arquivo de host — checkbox list num dropdown,
+ * com filtro de texto (servidores com dezenas de arquivos coletados ficam
+ * difíceis de navegar num <select> comum). `selected=[]` equivale a "todos
+ * os arquivos", igual o comportamento antigo do single-select vazio.
+ */
+function FileMultiSelect({
+  options,
+  selected,
+  onChange,
+}: {
+  options: { fileName: string }[];
+  selected: string[];
+  onChange: (next: string[]) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [filter, setFilter] = useState('');
+
+  const filteredOptions = filter.trim()
+    ? options.filter((f) => f.fileName.toLowerCase().includes(filter.trim().toLowerCase()))
+    : options;
+
+  function toggle(fn: string) {
+    onChange(selected.includes(fn) ? selected.filter((x) => x !== fn) : [...selected, fn]);
+  }
+
+  const label =
+    selected.length === 0
+      ? 'Todos os arquivos'
+      : selected.length === 1
+        ? selected[0]
+        : `${selected.length} arquivos selecionados`;
+
+  return (
+    <div className="relative">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="flex items-center justify-between gap-2 text-xs w-[260px] px-2 py-1 rounded-md bg-panel2 border border-border hover:border-accent"
+      >
+        <span className="truncate">{label}</span>
+        <ChevronDown size={12} className="text-muted shrink-0" />
+      </button>
+      {open && (
+        <>
+          {/* backdrop pra fechar ao clicar fora, mesmo padrão do TimeRangePicker */}
+          <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
+          <div className="absolute left-0 top-full mt-1 z-20 w-[300px] max-h-80 flex flex-col rounded-md bg-panel border border-border shadow-xl">
+            <div className="p-2 border-b border-border shrink-0">
+              <input
+                autoFocus
+                value={filter}
+                onChange={(e) => setFilter(e.target.value)}
+                placeholder="filtrar arquivos..."
+                className="w-full text-xs bg-panel2 border border-border rounded px-2 py-1"
+              />
+            </div>
+            {selected.length > 0 && (
+              <button
+                onClick={() => onChange([])}
+                className="text-[11px] text-left px-2 py-1.5 text-accent hover:underline border-b border-border shrink-0"
+              >
+                Limpar seleção ({selected.length})
+              </button>
+            )}
+            <div className="overflow-auto flex-1">
+              {filteredOptions.length === 0 && (
+                <div className="p-2 text-xs text-muted">nenhum arquivo encontrado</div>
+              )}
+              {filteredOptions.map((f) => (
+                <label
+                  key={f.fileName}
+                  className="flex items-center gap-2 px-2 py-1.5 text-xs hover:bg-panel2 cursor-pointer"
+                >
+                  <input
+                    type="checkbox"
+                    checked={selected.includes(f.fileName)}
+                    onChange={() => toggle(f.fileName)}
+                  />
+                  <span className="truncate">{f.fileName}</span>
+                </label>
+              ))}
+            </div>
+          </div>
+        </>
+      )}
+    </div>
   );
 }
 

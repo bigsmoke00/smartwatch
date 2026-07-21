@@ -92,6 +92,8 @@ export class LogsController {
   query(
     @Query('serverId') serverId?: string,
     @Query('containerName') containerName?: string,
+    // CSV, mesmo padrão de `level` — permite selecionar mais de um arquivo
+    // de host ao mesmo tempo (ex.: fileName=access.log,error.log).
     @Query('fileName') fileName?: string,
     @Query('source') source?: 'all' | 'host' | 'container',
     @Query('q') q?: string,
@@ -105,7 +107,7 @@ export class LogsController {
     return this.logs.query({
       serverId,
       containerName,
-      fileName,
+      fileNames: fileName ? fileName.split(',') : undefined,
       source,
       q,
       level: level ? level.split(',') : undefined,

@@ -28,12 +28,15 @@ export interface LogQuery {
   serverId?: string;
   containerName?: string;
   /**
-   * Filtro por arquivo de /var/log (só faz sentido com source 'host' ou
-   * 'all'). Vem do frontend SEM o prefixo 'host:' — aqui recolocamos o
-   * prefixo antes de comparar, porque é assim que a coluna container_name
-   * guarda esses valores (ver distinctFiles()).
+   * Filtro por arquivo(s) de /var/log (só faz sentido com source 'host' ou
+   * 'all') — array pra permitir selecionar mais de um arquivo ao mesmo
+   * tempo (ex.: access.log + error.log lado a lado na mesma timeline, útil
+   * pra correlacionar). Vem do frontend SEM o prefixo 'host:' — aqui
+   * recolocamos o prefixo antes de comparar, porque é assim que a coluna
+   * container_name guarda esses valores (ver distinctFiles()). Mesmo padrão
+   * já usado por `level` logo abaixo (= ANY($i::text[])).
    */
-  fileName?: string;
+  fileNames?: string[];
   /**
    * 'host' = linhas de /var/log do agent (container_name = 'host:<arquivo>');
    * 'container' = linhas de containers docker; 'all'/undefined = sem filtro.
@@ -153,9 +156,9 @@ export class LogsRepository {
       where.push(`container_name = $${i++}`);
       params.push(filters.containerName);
     }
-    if (filters.fileName) {
-      where.push(`container_name = $${i++}`);
-      params.push(`host:${filters.fileName}`);
+    if (filters.fileNames && filters.fileNames.length) {
+      where.push(`container_name = ANY($${i++}::text[])`);
+      params.push(filters.fileNames.map((f) => `host:${f}`));
     }
     if (filters.source === 'host') {
       where.push(`container_name LIKE 'host:%'`);
