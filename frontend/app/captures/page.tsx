@@ -387,7 +387,7 @@ export default function CapturesPage() {
 
   return (
     <AppShell>
-      <div className="p-6 space-y-3">
+      <div className="p-[22px] space-y-4">
         <PageHeader
           title="Captura de rede / SIP (Zero Trust)"
           description="sngrep-like para SIP/RTP, tcpdump genérico e diagnóstico (ping/mtr). Tempo real + .pcap salvo por 7 dias pra rever e baixar."
@@ -430,7 +430,15 @@ export default function CapturesPage() {
                       <label className="text-xs text-muted">
                         Filtro BPF {kind === 'sip' ? '(opcional — default cobre porta 5060/5061 + faixa RTP 10000-60000)' : '(obrigatório)'}
                       </label>
-                      <Input value={filterExpr} onChange={(e) => setFilterExpr(e.target.value)} placeholder='ex: "port 5061", "5061" (atalho), ou "host 10.0.0.5 and port 443"' />
+                      <div className="mt-1 flex items-center gap-2">
+                        <span className="shrink-0 rounded-md border border-border bg-panel2 px-2 py-2 font-mono text-2xs uppercase tracking-wide text-mutedFaint">BPF</span>
+                        <Input
+                          value={filterExpr}
+                          onChange={(e) => setFilterExpr(e.target.value)}
+                          placeholder='ex: "port 5061", "5061" (atalho), ou "host 10.0.0.5 and port 443"'
+                          className="font-mono text-accentSoft placeholder:font-sans placeholder:text-mutedFaint"
+                        />
+                      </div>
                       <p className="text-[10px] text-muted mt-0.5">
                         número de porta sozinho (ex.: "5061" ou "5060,5061") é aceito direto; pra qualquer coisa mais específica, use sintaxe BPF completa (ex.: "host 10.0.0.5 and port 443").
                       </p>
@@ -515,7 +523,11 @@ export default function CapturesPage() {
                     <td className="px-3 py-1.5 text-xs">{s.server_name}</td>
                     <td className="px-3 py-1.5 text-xs">
                       {KIND_LABEL[s.kind]}
-                      {s.kind !== 'ping' && <div className="text-[10px] text-muted">{s.iface} · {s.filter_expr || '(filtro padrão)'}</div>}
+                      {s.kind !== 'ping' && (
+                        <div className="text-[10px] text-muted">
+                          {s.iface} · <span className="font-mono text-accentSoft">{s.filter_expr || '(filtro padrão)'}</span>
+                        </div>
+                      )}
                       {s.kind === 'ping' && <div className="text-[10px] text-muted">{s.target_host}</div>}
                     </td>
                     <td className="px-3 py-1.5 text-xs">{s.requested_by_email}</td>
@@ -524,8 +536,18 @@ export default function CapturesPage() {
                       <Badge tone={STATUS_TONE[s.status] ?? 'default'}>{s.status}</Badge>
 
                       {s.status === 'running' && w && !w.done && (
-                        <div className="text-[10px] text-accent mt-0.5">
-                          {w.connected ? `assistindo ao vivo — ${fmtBytes(w.bytesReceived)} recebidos` : 'conectando ao stream...'}
+                        <div className="mt-1 flex flex-wrap items-center gap-2">
+                          {w.connected ? (
+                            <>
+                              <Badge tone="danger">
+                                <span className="w-1.5 h-1.5 rounded-full bg-current animate-pulseSoft shrink-0" />
+                                capturando
+                              </Badge>
+                              <span className="text-[10px] text-accent">assistindo ao vivo — {fmtBytes(w.bytesReceived)} recebidos</span>
+                            </>
+                          ) : (
+                            <span className="text-[10px] text-muted">conectando ao stream...</span>
+                          )}
                         </div>
                       )}
                       {s.status === 'running' && !w && (

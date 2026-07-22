@@ -7,6 +7,7 @@ import { Input } from '@/components/ui/Input';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { PageHeader } from '@/components/ui/PageHeader';
+import { DataTable, THeadRow, Th, Tr, Td } from '@/components/ui/Table';
 import { apiFetch } from '@/lib/api';
 import { fmtTime, safeArray } from '@/lib/utils';
 import { History } from 'lucide-react';
@@ -21,6 +22,15 @@ interface AuditRow {
   targetId: string;
   metadata: any;
   result: 'ok' | 'denied' | 'error';
+}
+
+// Cor da ação inferida do próprio texto (apenas apresentação, sem lógica):
+// âmbar para ações de solicitação, verde para aprovação, neutro no resto.
+function actionColor(action: string): string {
+  const a = (action || '').toLowerCase();
+  if (a.includes('request') || a.includes('solicit')) return 'text-warn';
+  if (a.includes('approve') || a.includes('aprov') || a.includes('grant')) return 'text-success';
+  return 'text-text';
 }
 
 export default function AuditPage() {
@@ -45,57 +55,62 @@ export default function AuditPage() {
 
   return (
     <AppShell>
-      <div className="p-6 space-y-4">
-        <PageHeader title="Audit log" description="Trilha de auditoria de ações na plataforma." icon={<History size={16} />} />
+      <div className="p-[22px] space-y-4">
+        <PageHeader
+          title="Audit log"
+          description="Registro imutável de toda ação sensível."
+          icon={<History size={16} />}
+        />
 
         <Card className="p-3 flex gap-2 items-end">
           <div className="flex-1">
-            <label className="text-xs text-muted">Action contém</label>
-            <Input value={action} onChange={(e) => setAction(e.target.value)} placeholder="user.create" />
+            <label className="text-2xs uppercase tracking-wider text-mutedFaint">Action contém</label>
+            <Input
+              className="mt-1"
+              value={action}
+              onChange={(e) => setAction(e.target.value)}
+              placeholder="user.create"
+            />
           </div>
           <div className="flex-1">
-            <label className="text-xs text-muted">Actor ID</label>
-            <Input value={actorId} onChange={(e) => setActorId(e.target.value)} />
+            <label className="text-2xs uppercase tracking-wider text-mutedFaint">Actor ID</label>
+            <Input className="mt-1" value={actorId} onChange={(e) => setActorId(e.target.value)} />
           </div>
           <Button onClick={load}>Buscar</Button>
         </Card>
 
-        <Card className="p-0">
-          <table className="w-full text-sm">
-            <thead className="bg-panel2 text-muted text-xs uppercase tracking-wide">
-              <tr>
-                <th className="text-left px-3 py-2">Quando</th>
-                <th className="text-left px-3 py-2">Quem</th>
-                <th className="text-left px-3 py-2">IP</th>
-                <th className="text-left px-3 py-2">Ação</th>
-                <th className="text-left px-3 py-2">Alvo</th>
-                <th className="text-left px-3 py-2">Resultado</th>
-              </tr>
-            </thead>
-            <tbody>
-              {safeArray<AuditRow>(rows).map((r) => (
-                <tr key={r.id} className="border-t border-border align-top">
-                  <td className="px-3 py-2 text-muted text-xs">{fmtTime(r.ts)}</td>
-                  <td className="px-3 py-2">{r.actorEmail || '—'}</td>
-                  <td className="px-3 py-2 text-muted">{r.ip || '—'}</td>
-                  <td className="px-3 py-2 font-mono text-xs">{r.action}</td>
-                  <td className="px-3 py-2 text-muted text-xs">
-                    {r.targetType}/{r.targetId}
-                  </td>
-                  <td className="px-3 py-2">
-                    {r.result === 'ok' ? (
-                      <Badge tone="success">ok</Badge>
-                    ) : r.result === 'denied' ? (
-                      <Badge tone="warn">denied</Badge>
-                    ) : (
-                      <Badge tone="danger">error</Badge>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </Card>
+        <DataTable>
+          <THeadRow>
+            <Th>Hora</Th>
+            <Th>Ator</Th>
+            <Th>IP</Th>
+            <Th>Ação</Th>
+            <Th>Recurso</Th>
+            <Th>Resultado</Th>
+          </THeadRow>
+          <tbody>
+            {safeArray<AuditRow>(rows).map((r) => (
+              <Tr key={r.id}>
+                <Td className="font-mono text-mutedFaint whitespace-nowrap">{fmtTime(r.ts)}</Td>
+                <Td className="text-accentSoft">{r.actorEmail || '—'}</Td>
+                <Td className="font-mono text-muted">{r.ip || '—'}</Td>
+                <Td className={`font-mono font-medium ${actionColor(r.action)}`}>{r.action}</Td>
+                <Td className="font-mono text-muted">
+                  {r.targetType}/{r.targetId}
+                </Td>
+                <Td>
+                  {r.result === 'ok' ? (
+                    <Badge tone="success">ok</Badge>
+                  ) : r.result === 'denied' ? (
+                    <Badge tone="warn">denied</Badge>
+                  ) : (
+                    <Badge tone="danger">error</Badge>
+                  )}
+                </Td>
+              </Tr>
+            ))}
+          </tbody>
+        </DataTable>
       </div>
     </AppShell>
   );

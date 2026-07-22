@@ -1,15 +1,24 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { Fragment, useEffect, useState } from 'react';
 import { AppShell } from '@/components/AppShell';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Badge } from '@/components/ui/Badge';
 import { PageHeader } from '@/components/ui/PageHeader';
+import { DataTable, THeadRow, Th, Tr, Td } from '@/components/ui/Table';
 import { apiFetch } from '@/lib/api';
 import { safeArray } from '@/lib/utils';
 import { Mail, Save, ShieldCheck, Trash2, X, Lock, Unlock, KeyRound, Users as UsersIcon } from 'lucide-react';
+
+// Iniciais para o avatar da coluna Usuário — só apresentação, sem lógica.
+function initials(value: string): string {
+  const base = (value || '').split('@')[0] || value || '';
+  const parts = base.split(/[.\-_\s]+/).filter(Boolean);
+  const chars = parts.length >= 2 ? parts[0][0] + parts[1][0] : base.slice(0, 2);
+  return (chars || '?').toUpperCase();
+}
 
 interface AssignedRole {
   id: string;
@@ -220,12 +229,27 @@ export default function UsersPage() {
 
   return (
     <AppShell>
-      <div className="p-6 space-y-4 max-w-5xl">
-        <PageHeader title="Usuários" description="Contas da plataforma, perfis atribuídos e exigência de 2FA." icon={<UsersIcon size={16} />} />
+      <div className="p-[22px] space-y-4">
+        <PageHeader
+          title="Usuários"
+          description="Contas, perfis e status de 2FA."
+          icon={<UsersIcon size={16} />}
+          actions={
+            <Button
+              type="submit"
+              form="create-user-form"
+              variant="primary"
+              disabled={!selectedRoleIds.length}
+            >
+              <Mail size={14} /> Criar
+            </Button>
+          }
+        />
 
         <Card className="p-4">
           <h2 className="text-sm font-medium mb-3">Criar usuário</h2>
           <form
+            id="create-user-form"
             onSubmit={create}
             className="grid grid-cols-1 md:grid-cols-3 gap-3 items-start"
           >
@@ -309,113 +333,141 @@ export default function UsersPage() {
               </label>
             </div>
             <div className="md:col-span-3">
-              {error && <div className="text-sm text-danger mb-2">{error}</div>}
-              {info && <div className="text-sm text-success mb-2">{info}</div>}
-              <Button type="submit" disabled={!selectedRoleIds.length}>
-                Criar
-              </Button>
+              {error && <div className="text-sm text-danger">{error}</div>}
+              {info && <div className="text-sm text-success">{info}</div>}
             </div>
           </form>
         </Card>
 
-        <Card className="p-0 divide-y divide-border">
-          {safeArray<UserRow>(users).map((user) => {
-            const editing = editingUserId === user.id;
-            return (
-              <div key={user.id} className="px-4 py-3">
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                  <div className="min-w-0">
-                    <div className="text-sm truncate flex items-center gap-2">
-                      {user.email}
-                      {user.mustChangePassword && (
-                        <Badge tone="warn">convite pendente</Badge>
-                      )}
-                      {user.mfaRequired && (
-                        <Badge tone={user.mfaEnabled ? 'success' : 'warn'}>
-                          2FA {user.mfaEnabled ? 'ativo' : 'obrigatório (pendente)'}
-                        </Badge>
-                      )}
-                    </div>
-                    <div className="text-xs text-muted">
-                      desde {new Date(user.createdAt).toLocaleDateString()}
-                    </div>
-                  </div>
-                  <div className="flex flex-wrap items-center gap-2">
-                    {safeArray<AssignedRole>(user.roles).map((item) => (
-                      <Badge key={item.id} tone="accent">
-                        {item.name}
+        <DataTable>
+          <THeadRow>
+            <Th>Usuário</Th>
+            <Th>Perfil</Th>
+            <Th>2FA</Th>
+            <Th>Último acesso</Th>
+            <Th className="text-right">Ações</Th>
+          </THeadRow>
+          <tbody>
+            {safeArray<UserRow>(users).map((user) => {
+              const editing = editingUserId === user.id;
+              return (
+                <Fragment key={user.id}>
+                  <Tr>
+                    <Td>
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <span className="w-[26px] h-[26px] rounded-full bg-panel3 border border-border flex items-center justify-center text-[11px] font-semibold text-muted shrink-0">
+                          {initials(user.email)}
+                        </span>
+                        <span className="flex items-center gap-2 min-w-0">
+                          <span className="truncate">{user.email}</span>
+                          {user.mustChangePassword && (
+                            <Badge tone="warn">convite pendente</Badge>
+                          )}
+                        </span>
+                      </div>
+                    </Td>
+                    <Td>
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        {safeArray<AssignedRole>(user.roles).map((item) => (
+                          <Badge key={item.id} tone="accent">
+                            {item.name}
+                          </Badge>
+                        ))}
+                      </div>
+                    </Td>
+                    <Td>
+                      <Badge tone={user.mfaEnabled ? 'success' : 'warn'}>
+                        {user.mfaEnabled ? 'ativo' : 'pendente'}
                       </Badge>
-                    ))}
-                    <button
-                      onClick={() => toggleMfaRequired(user)}
-                      className="text-muted hover:text-text flex items-center gap-1 text-xs"
-                      title={user.mfaRequired ? 'Tornar 2FA opcional' : 'Exigir 2FA'}
-                    >
-                      {user.mfaRequired ? <Unlock size={13} /> : <Lock size={13} />}
-                      {user.mfaRequired ? 'Tornar 2FA opcional' : 'Exigir 2FA'}
-                    </button>
-                    {user.mustChangePassword ? (
-                      <Button
-                        type="button"
-                        variant="secondary"
-                        onClick={() => resendInvite(user)}
-                      >
-                        <Mail size={14} /> Reenviar convite
-                      </Button>
-                    ) : (
-                      <Button
-                        type="button"
-                        variant="secondary"
-                        onClick={() => sendPasswordReset(user)}
-                        title="Envia um link por email para o colaborador definir uma nova senha"
-                      >
-                        <KeyRound size={14} /> Resetar senha
-                      </Button>
-                    )}
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      onClick={() => startEditing(user)}
-                    >
-                      <ShieldCheck size={14} /> Perfis
-                    </Button>
-                    <button
-                      onClick={() => remove(user.id)}
-                      className="text-danger hover:underline flex items-center gap-1 text-sm"
-                    >
-                      <Trash2 size={14} /> remover
-                    </button>
-                  </div>
-                </div>
+                    </Td>
+                    <Td className="font-mono text-mutedFaint whitespace-nowrap">
+                      {new Date(user.createdAt).toLocaleDateString()}
+                    </Td>
+                    <Td className="text-right">
+                      <div className="flex flex-wrap items-center justify-end gap-1.5">
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => toggleMfaRequired(user)}
+                          title={user.mfaRequired ? 'Tornar 2FA opcional' : 'Exigir 2FA'}
+                        >
+                          {user.mfaRequired ? <Unlock size={13} /> : <Lock size={13} />}
+                          {user.mfaRequired ? 'Tornar 2FA opcional' : 'Exigir 2FA'}
+                        </Button>
+                        {user.mustChangePassword ? (
+                          <Button
+                            size="sm"
+                            type="button"
+                            variant="secondary"
+                            onClick={() => resendInvite(user)}
+                          >
+                            <Mail size={14} /> Reenviar convite
+                          </Button>
+                        ) : (
+                          <Button
+                            size="sm"
+                            type="button"
+                            variant="secondary"
+                            onClick={() => sendPasswordReset(user)}
+                            title="Envia um link por email para o colaborador definir uma nova senha"
+                          >
+                            <KeyRound size={14} /> Resetar senha
+                          </Button>
+                        )}
+                        <Button
+                          size="sm"
+                          type="button"
+                          variant="secondary"
+                          onClick={() => startEditing(user)}
+                        >
+                          <ShieldCheck size={14} /> Perfis
+                        </Button>
+                        <Button
+                          size="sm"
+                          type="button"
+                          variant="ghost"
+                          onClick={() => remove(user.id)}
+                          className="text-danger hover:text-danger"
+                        >
+                          <Trash2 size={14} /> remover
+                        </Button>
+                      </div>
+                    </Td>
+                  </Tr>
 
-                {editing && (
-                  <div className="mt-3 border-t border-border pt-3">
-                    <RoleSelector
-                      selected={editingRoleIds}
-                      onChange={setEditingRoleIds}
-                    />
-                    <div className="flex justify-end gap-2 mt-3">
-                      <Button
-                        type="button"
-                        variant="secondary"
-                        onClick={() => setEditingUserId(null)}
-                      >
-                        <X size={14} /> Cancelar
-                      </Button>
-                      <Button
-                        type="button"
-                        onClick={() => saveRoles(user.id)}
-                        disabled={!editingRoleIds.length}
-                      >
-                        <Save size={14} /> Salvar perfis
-                      </Button>
-                    </div>
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </Card>
+                  {editing && (
+                    <Tr>
+                      <Td colSpan={5} className="bg-panel2/30">
+                        <RoleSelector
+                          selected={editingRoleIds}
+                          onChange={setEditingRoleIds}
+                        />
+                        <div className="flex justify-end gap-2 mt-3">
+                          <Button
+                            size="sm"
+                            type="button"
+                            variant="secondary"
+                            onClick={() => setEditingUserId(null)}
+                          >
+                            <X size={14} /> Cancelar
+                          </Button>
+                          <Button
+                            size="sm"
+                            type="button"
+                            onClick={() => saveRoles(user.id)}
+                            disabled={!editingRoleIds.length}
+                          >
+                            <Save size={14} /> Salvar perfis
+                          </Button>
+                        </div>
+                      </Td>
+                    </Tr>
+                  )}
+                </Fragment>
+              );
+            })}
+          </tbody>
+        </DataTable>
       </div>
     </AppShell>
   );

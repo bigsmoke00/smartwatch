@@ -13,7 +13,7 @@ import { useServers } from '@/lib/useServers';
 import { apiFetch, Auth } from '@/lib/api';
 import { fmtTime, safeArray } from '@/lib/utils';
 import dynamic from 'next/dynamic';
-import { TerminalSquare } from 'lucide-react';
+import { ShieldCheck, TerminalSquare } from 'lucide-react';
 
 const TerminalView = dynamic(() => import('@/components/TerminalView'), { ssr: false });
 
@@ -177,16 +177,49 @@ export default function TerminalPage() {
 
   return (
     <AppShell>
-      <div className="p-6 space-y-3">
+      <div className="p-[22px] space-y-4">
         <PageHeader
-          title="Terminal Web (Zero Trust)"
-          description="Acesso a shell de host ou container com aprovação, gravação e expiração automática."
-          icon={<TerminalSquare size={16} />}
+          title="Terminal web · Zero Trust"
+          description="Toda sessão passa por pedido → aprovação humana, com I/O gravado e expiração automática."
+          icon={<ShieldCheck size={16} />}
         />
 
         {!activeSession ? (
           <>
-            <Card className="p-4 grid md:grid-cols-4 gap-2 items-end">
+            {/* Fluxo Zero Trust: Pedido → Aprovação → Sessão */}
+            <Card className="p-4">
+              <div className="flex items-center">
+                <div className="flex items-center gap-2.5">
+                  <span className="w-7 h-7 shrink-0 rounded-full border border-accent/40 bg-accent/10 text-accentSoft flex items-center justify-center text-xs font-mono font-semibold">1</span>
+                  <div className="leading-tight">
+                    <div className="text-[13px] font-medium text-text">Pedido</div>
+                    <div className="text-2xs text-muted">motivo auditável</div>
+                  </div>
+                </div>
+                <div className="mx-3 h-px flex-1 bg-border" />
+                <div className="flex items-center gap-2.5">
+                  <span className="w-7 h-7 shrink-0 rounded-full border border-accent/40 bg-accent/10 text-accentSoft flex items-center justify-center text-xs font-mono font-semibold">2</span>
+                  <div className="leading-tight">
+                    <div className="text-[13px] font-medium text-text">Aprovação</div>
+                    <div className="text-2xs text-muted">humana</div>
+                  </div>
+                </div>
+                <div className="mx-3 h-px flex-1 bg-border" />
+                <div className="flex items-center gap-2.5">
+                  <span className="w-7 h-7 shrink-0 rounded-full border border-accent/40 bg-accent/10 text-accentSoft flex items-center justify-center text-xs font-mono font-semibold">3</span>
+                  <div className="leading-tight">
+                    <div className="text-[13px] font-medium text-text">Sessão</div>
+                    <div className="text-2xs text-muted">gravada · TTL</div>
+                  </div>
+                </div>
+              </div>
+            </Card>
+
+            <Card className="p-4 grid md:grid-cols-4 gap-3 items-end">
+              <div className="md:col-span-4 flex items-center gap-2">
+                <TerminalSquare size={15} className="text-accentSoft" />
+                <h2 className="text-sm font-semibold text-text">Novo pedido de acesso</h2>
+              </div>
               <div>
                 <label className="text-xs text-muted">Servidor</label>
                 <ServerPicker value={serverId} onChange={setServerId} placeholder="—" />
@@ -349,103 +382,180 @@ export default function TerminalPage() {
               </Card>
             )}
 
-            <Card className="p-0">
-              <table className="w-full text-sm">
-                <thead className="bg-panel2 text-xs uppercase text-muted">
-                  <tr>
-                    <th className="text-left px-3 py-2">Quando</th>
-                    <th className="text-left px-3 py-2">Servidor</th>
-                    <th className="text-left px-3 py-2">Solicitante</th>
-                    <th className="text-left px-3 py-2">Usuário (SO)</th>
-                    <th className="text-left px-3 py-2">Modo</th>
-                    <th className="text-left px-3 py-2">Motivo</th>
-                    <th className="text-left px-3 py-2">Status</th>
-                    <th className="text-left px-3 py-2">Expira</th>
-                    <th />
-                  </tr>
-                </thead>
-                <tbody>
-                  {safeArray<Session>(sessions).map((s) => (
-                    <tr key={s.id} className="border-t border-border align-top">
-                      <td className="px-3 py-1.5 text-xs text-muted">{fmtTime(s.createdAt)}</td>
-                      <td className="px-3 py-1.5">{s.serverName}</td>
-                      <td className="px-3 py-1.5 text-xs">{s.requestedByEmail}</td>
-                      <td className="px-3 py-1.5 text-xs font-mono">{s.targetUser ?? '—'}</td>
-                      <td className="px-3 py-1.5 text-xs">
-                        {s.mode === 'readonly' ? 'leitura' : 'leitura/escrita'}
-                        {s.sudoGranted && <span className="text-warn"> · sudo</span>}
-                        {s.sudoRequested && !s.sudoGranted && <span className="text-muted"> · sudo negado</span>}
-                      </td>
-                      <td className="px-3 py-1.5 text-xs text-muted">{s.reason}</td>
-                      <td className="px-3 py-1.5">
-                        <Badge tone={STATUS_TONE[s.status] ?? 'default'}>{s.status}</Badge>
-                        {s.closedReason && <div className="text-[10px] text-muted mt-0.5">{s.closedReason}</div>}
-                      </td>
-                      <td className="px-3 py-1.5 text-xs">{s.expiresAt ? fmtTime(s.expiresAt) : '—'}</td>
-                      <td className="px-3 py-1.5 text-right space-x-2 whitespace-nowrap">
-                        {s.status === 'pending' && (
-                          <>
-                            <button onClick={() => approve(s.id)} className="text-success hover:underline text-xs">aprovar</button>
-                            <button onClick={() => reject(s.id)} className="text-danger hover:underline text-xs">rejeitar</button>
-                          </>
-                        )}
-                        {s.status === 'approved' && (
-                          <button onClick={() => open(s)} className="text-accent hover:underline text-xs">abrir</button>
-                        )}
-                        {s.status === 'active' && (
-                          <>
-                            <button onClick={() => open(s)} className="text-accent hover:underline text-xs">abrir</button>
-                            <button onClick={() => closeNow(s.id)} className="text-danger hover:underline text-xs">fechar</button>
-                          </>
-                        )}
-                        {s.status !== 'pending' && (
-                          <>
-                            <button onClick={() => viewCommands(s)} className="text-muted hover:underline text-xs">comandos</button>
-                            <button onClick={() => downloadLog(s)} className="text-muted hover:underline text-xs">baixar log</button>
-                          </>
-                        )}
-                      </td>
-                    </tr>
+            {!sessions.length && (
+              <Card className="p-8 text-center">
+                <div className="text-xs text-muted">nenhuma sessão ainda</div>
+              </Card>
+            )}
+
+            {/* Aguardando aprovação — pedidos pendentes (aprovar/rejeitar) */}
+            {safeArray<Session>(sessions).some((s) => s.status === 'pending') && (
+              <Card className="p-4 border-warn/40 bg-warn/[0.06] space-y-3">
+                <div className="flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full bg-warn animate-pulseSoft shrink-0" />
+                  <h2 className="text-sm font-semibold text-warn">Aguardando aprovação</h2>
+                  <span className="text-2xs text-muted">
+                    ({safeArray<Session>(sessions).filter((s) => s.status === 'pending').length})
+                  </span>
+                </div>
+                <div className="space-y-2">
+                  {safeArray<Session>(sessions).filter((s) => s.status === 'pending').map((s) => (
+                    <div key={s.id} className="flex flex-wrap items-start justify-between gap-3 rounded-lg border border-warn/25 bg-panel/60 p-3">
+                      <div className="min-w-0 space-y-1">
+                        <div className="flex items-center gap-2 text-sm">
+                          <span className="font-medium text-text">{s.serverName}</span>
+                          <Badge tone="default">{s.target === 'container' ? 'container' : 'host'}</Badge>
+                        </div>
+                        <div className="text-xs text-muted">
+                          solicitante <span className="text-text">{s.requestedByEmail}</span>
+                          {' · '}como <span className="font-mono text-accentSoft">{s.targetUser ?? '—'}</span>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted">
+                          <span>{s.mode === 'readonly' ? 'somente leitura' : 'leitura/escrita'}</span>
+                          {s.sudoRequested && <span className="text-warn">· sudo solicitado</span>}
+                          <span className="text-mutedFaint">· {fmtTime(s.createdAt)}</span>
+                        </div>
+                        {s.reason && <div className="text-xs italic text-muted">{s.reason}</div>}
+                      </div>
+                      <div className="flex shrink-0 items-center gap-2">
+                        <Button size="sm" onClick={() => approve(s.id)}>aprovar</Button>
+                        <Button size="sm" variant="outline" className="border-danger/50 text-danger hover:bg-danger/10" onClick={() => reject(s.id)}>rejeitar</Button>
+                      </div>
+                    </div>
                   ))}
-                  {!sessions.length && (
-                    <tr><td colSpan={9} className="px-3 py-4 text-center text-muted text-xs">nenhuma sessão ainda</td></tr>
-                  )}
-                </tbody>
-              </table>
-            </Card>
+                </div>
+              </Card>
+            )}
+
+            {/* Sessões ativas / aprovadas — abrir, encerrar, auditar */}
+            {safeArray<Session>(sessions).some((s) => s.status === 'active' || s.status === 'approved') && (
+              <Card className="p-4 space-y-3">
+                <h2 className="text-sm font-semibold text-text">Sessões ativas</h2>
+                <div className="space-y-2">
+                  {safeArray<Session>(sessions).filter((s) => s.status === 'active' || s.status === 'approved').map((s) => (
+                    <div key={s.id} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-panel2/60 p-3">
+                      <div className="flex min-w-0 items-center gap-3">
+                        <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${s.status === 'active' ? 'bg-success animate-pulseSoft' : 'bg-accent'}`} />
+                        <div className="min-w-0 space-y-0.5">
+                          <div className="flex items-center gap-2 text-sm">
+                            <span className="font-medium text-text">{s.serverName}</span>
+                            <span className="font-mono text-2xs text-muted">{s.id.slice(0, 8)}</span>
+                            <Badge tone={STATUS_TONE[s.status] ?? 'default'}>{s.status}</Badge>
+                          </div>
+                          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted">
+                            <span className="font-mono text-accentSoft">{s.targetUser ?? '—'}</span>
+                            <span>· {s.mode === 'readonly' ? 'leitura' : 'leitura/escrita'}</span>
+                            {s.sudoGranted && <span className="text-warn">· sudo</span>}
+                            {s.expiresAt && <span className="text-mutedFaint">· expira {fmtTime(s.expiresAt)}</span>}
+                          </div>
+                        </div>
+                      </div>
+                      <div className="flex shrink-0 items-center gap-3">
+                        <Button size="sm" variant="secondary" onClick={() => open(s)}>abrir</Button>
+                        {s.status === 'active' && (
+                          <button onClick={() => closeNow(s.id)} className="text-xs text-danger hover:underline">fechar</button>
+                        )}
+                        <button onClick={() => viewCommands(s)} className="text-xs text-muted hover:underline">comandos</button>
+                        <button onClick={() => downloadLog(s)} className="text-xs text-muted hover:underline">baixar log</button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </Card>
+            )}
+
+            {/* Histórico — sessões encerradas, rejeitadas ou expiradas */}
+            {safeArray<Session>(sessions).some((s) => !['pending', 'active', 'approved'].includes(s.status)) && (
+              <Card className="p-0 overflow-hidden">
+                <div className="border-b border-border px-4 py-2.5">
+                  <h2 className="text-sm font-semibold text-text">Histórico de sessões</h2>
+                </div>
+                <table className="w-full text-sm">
+                  <thead className="bg-panel2 text-2xs uppercase tracking-wide text-muted">
+                    <tr>
+                      <th className="text-left px-3 py-2">Quando</th>
+                      <th className="text-left px-3 py-2">Servidor</th>
+                      <th className="text-left px-3 py-2">Solicitante</th>
+                      <th className="text-left px-3 py-2">Usuário (SO)</th>
+                      <th className="text-left px-3 py-2">Modo</th>
+                      <th className="text-left px-3 py-2">Motivo</th>
+                      <th className="text-left px-3 py-2">Status</th>
+                      <th className="text-left px-3 py-2">Expira</th>
+                      <th />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {safeArray<Session>(sessions).filter((s) => !['pending', 'active', 'approved'].includes(s.status)).map((s) => (
+                      <tr key={s.id} className="border-t border-border align-top hover:bg-panel2/40">
+                        <td className="px-3 py-1.5 text-xs text-muted">{fmtTime(s.createdAt)}</td>
+                        <td className="px-3 py-1.5">{s.serverName}</td>
+                        <td className="px-3 py-1.5 text-xs">{s.requestedByEmail}</td>
+                        <td className="px-3 py-1.5 text-xs font-mono">{s.targetUser ?? '—'}</td>
+                        <td className="px-3 py-1.5 text-xs">
+                          {s.mode === 'readonly' ? 'leitura' : 'leitura/escrita'}
+                          {s.sudoGranted && <span className="text-warn"> · sudo</span>}
+                          {s.sudoRequested && !s.sudoGranted && <span className="text-muted"> · sudo negado</span>}
+                        </td>
+                        <td className="px-3 py-1.5 text-xs text-muted">{s.reason}</td>
+                        <td className="px-3 py-1.5">
+                          <Badge tone={STATUS_TONE[s.status] ?? 'default'}>{s.status}</Badge>
+                          {s.closedReason && <div className="text-[10px] text-muted mt-0.5">{s.closedReason}</div>}
+                        </td>
+                        <td className="px-3 py-1.5 text-xs">{s.expiresAt ? fmtTime(s.expiresAt) : '—'}</td>
+                        <td className="px-3 py-1.5 text-right space-x-2 whitespace-nowrap">
+                          <button onClick={() => viewCommands(s)} className="text-muted hover:underline text-xs">comandos</button>
+                          <button onClick={() => downloadLog(s)} className="text-muted hover:underline text-xs">baixar log</button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </Card>
+            )}
 
             {viewing && (
-              <Card className="p-3">
-                <div className="flex justify-between items-center mb-2">
-                  <span className="text-sm font-mono">comandos · sessão {viewing.id.slice(0, 8)}</span>
+              <Card className="p-0 overflow-hidden">
+                <div className="flex items-center justify-between border-b border-border bg-panel2 px-4 py-2.5">
+                  <span className="flex items-center gap-2 text-sm font-mono text-text">
+                    <TerminalSquare size={14} className="text-accentSoft" />
+                    comandos · sessão {viewing.id.slice(0, 8)}
+                  </span>
                   <button onClick={() => setViewing(null)} className="text-xs text-muted hover:underline">fechar</button>
                 </div>
-                {!viewing.commands.length ? (
-                  <div className="text-xs text-muted">nenhum comando capturado (ainda) nessa sessão</div>
-                ) : (
-                  <ul className="text-xs font-mono space-y-0.5 max-h-64 overflow-auto">
-                    {viewing.commands.map((c: any, i: number) => (
-                      <li key={i}><span className="text-muted">{fmtTime(c.ts)}</span>{'  '}{c.command}</li>
-                    ))}
-                  </ul>
-                )}
+                <div className="p-4">
+                  {!viewing.commands.length ? (
+                    <div className="text-xs text-muted">nenhum comando capturado (ainda) nessa sessão</div>
+                  ) : (
+                    <ul className="max-h-64 space-y-0.5 overflow-auto text-xs font-mono">
+                      {viewing.commands.map((c: any, i: number) => (
+                        <li key={i}><span className="text-mutedFaint">{fmtTime(c.ts)}</span>{'  '}{c.command}</li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
               </Card>
             )}
           </>
         ) : (
-          <Card className="p-2">
-            <div className="flex justify-between items-center mb-2 px-2">
-              <span className="text-sm font-mono">
-                {activeSession.sessionId.slice(0, 8)} · {activeSession.target === 'host' ? 'Host Linux' : activeSession.containerId?.slice(0, 12)}
+          <Card className="p-0 overflow-hidden">
+            <div className="flex items-center justify-between gap-3 border-b border-border bg-panel2 px-3 py-2">
+              <span className="flex min-w-0 items-center gap-2 text-sm font-mono text-text">
+                <TerminalSquare size={14} className="shrink-0 text-accentSoft" />
+                <span className="h-2 w-2 shrink-0 rounded-full bg-success animate-pulseSoft" />
+                <span className="truncate">
+                  {activeSession.sessionId.slice(0, 8)} · {activeSession.target === 'host' ? 'Host Linux' : activeSession.containerId?.slice(0, 12)}
+                </span>
               </span>
-              <Button variant="secondary" onClick={() => setActiveSession(null)}>Fechar</Button>
+              <Button variant="secondary" size="sm" onClick={() => setActiveSession(null)}>Fechar</Button>
             </div>
-            <TerminalView
-              token={Auth.token() ?? ''}
-              sessionId={activeSession.sessionId}
-              target={activeSession.target}
-              containerId={activeSession.containerId}
-            />
+            <div className="p-2">
+              <TerminalView
+                token={Auth.token() ?? ''}
+                sessionId={activeSession.sessionId}
+                target={activeSession.target}
+                containerId={activeSession.containerId}
+              />
+            </div>
           </Card>
         )}
       </div>

@@ -104,10 +104,10 @@ export default function RolesPage() {
 
   return (
     <AppShell>
-      <div className="p-6 space-y-4">
+      <div className="p-[22px] space-y-4">
         <PageHeader
           title="Perfis e permissões"
-          description="Defina perfis de acesso e suas permissões granulares por categoria."
+          description="RBAC granular por tabela — não é mais um enum fixo de 3 papéis."
           icon={<ShieldCheck size={16} />}
           actions={
             <Button onClick={startCreate}>
@@ -118,7 +118,9 @@ export default function RolesPage() {
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
           <Card className="p-0 lg:col-span-1 overflow-hidden">
-            <div className="px-3 py-2 text-xs uppercase text-muted bg-panel2">Perfis</div>
+            <div className="px-[18px] py-2.5 text-2xs font-medium uppercase tracking-wider text-mutedFaint bg-panel2 border-b border-border">
+              Perfis
+            </div>
             <div className="divide-y divide-border">
               {safeArray<Role>(roles).map((r) => (
                 <button
@@ -212,11 +214,11 @@ function CoverageBar({
           <div
             key={cat}
             title={`${info.label}: ${have}/${list.length}`}
-            className="h-1.5 flex-1 rounded-full bg-border overflow-hidden"
+            className="h-1.5 flex-1 rounded-full bg-panel3 overflow-hidden"
           >
             <div
               className={`h-full ${
-                frac === 0 ? '' : frac < 1 ? 'bg-amber-500' : 'bg-emerald-500'
+                frac === 0 ? '' : frac < 1 ? 'bg-warn' : 'bg-success'
               }`}
               style={{ width: `${frac * 100}%` }}
             />
@@ -356,10 +358,10 @@ function RoleEditor({
                       type="checkbox"
                       checked={selected.has(p.key)}
                       onChange={() => toggle(p.key)}
-                      className="mt-0.5"
+                      className="mt-0.5 accent-accent"
                     />
                     <div>
-                      <code className="text-accent text-xs">{p.key}</code>
+                      <code className="text-accentSoft text-xs">{p.key}</code>
                       <div className="text-xs text-muted">{p.description}</div>
                     </div>
                   </label>

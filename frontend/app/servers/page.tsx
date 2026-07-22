@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { Fragment, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { AppShell } from '@/components/AppShell';
 import { Card } from '@/components/ui/Card';
@@ -8,10 +8,12 @@ import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Badge } from '@/components/ui/Badge';
 import { PageHeader } from '@/components/ui/PageHeader';
+import { StatCard } from '@/components/ui/StatCard';
+import { DataTable, THeadRow, Th, Tr, Td } from '@/components/ui/Table';
 import { Select } from '@/components/ui/Select';
 import { apiFetch, Auth } from '@/lib/api';
 import { invalidateServersCache } from '@/lib/useServers';
-import { Plus, ChevronRight, Trash2, Pencil, Server as ServerIcon } from 'lucide-react';
+import { Plus, Trash2, Pencil, Server as ServerIcon } from 'lucide-react';
 import { fmtTime, safeArray } from '@/lib/utils';
 
 interface ServerRow {
@@ -141,9 +143,19 @@ export default function ServersPage() {
     invalidateServersCache(); // servidor novo precisa aparecer nos ServerPicker de outras telas
   }
 
+  // Resumo derivado apenas dos servidores já carregados — sem novos fetches.
+  // "Ativo" segue a mesma janela de 5min usada por linha (lastSeenAt recente).
+  const list = safeArray<ServerRow>(servers);
+  const total = list.length;
+  const online = list.filter(
+    (s) => s.lastSeenAt && Date.now() - new Date(s.lastSeenAt).getTime() < 5 * 60_000,
+  ).length;
+  const offline = total - online;
+  const semAgent = list.filter((s) => !s.agentVersion).length;
+
   return (
     <AppShell>
-      <div className="p-6 space-y-4">
+      <div className="p-[22px] space-y-4">
         <PageHeader
           title="Servidores"
           description="Frota de servidores monitorados, agentes e retenção de logs."
@@ -156,6 +168,13 @@ export default function ServersPage() {
             )
           }
         />
+
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <StatCard label="Servidores" value={total} tone="accent" />
+          <StatCard label="Ativos" value={online} tone="success" />
+          <StatCard label="Offline" value={offline} tone={offline > 0 ? 'warn' : 'default'} />
+          <StatCard label="Sem agent" value={semAgent} tone={semAgent > 0 ? 'warn' : 'default'} />
+        </div>
 
         <div className="flex gap-2 items-end">
           <div>
@@ -250,163 +269,216 @@ export default function ServersPage() {
           </Card>
         )}
 
-        <div className="grid gap-2">
-          {servers.length === 0 && (
-            <Card className="p-6 text-sm text-muted">Nenhum servidor para os filtros atuais.</Card>
-          )}
-          {safeArray<ServerRow>(servers).map((s) => {
-            const onDelete = async (e: React.MouseEvent) => {
-              e.preventDefault(); e.stopPropagation();
-              if (!confirm(`Deseja excluir o servidor "${s.name}"?`)) return;
-              const hard = confirm(
-                `Exclusão permanente?\n\n` +
-                `OK = remove permanentemente (métricas, logs, sessões).\n` +
-                `Cancel = soft delete (preserva histórico, oculta da listagem).`,
-              );
-              const url = hard
-                ? `/servers/${s.id}`
-                : `/servers/${s.id}?soft=true`;
-              try {
-                await apiFetch(url, { method: 'DELETE' });
-                load();
-                invalidateServersCache();
-              } catch (err: any) {
-                alert(`Falha ao excluir: ${err?.payload?.message || err.message}`);
-              }
-            };
-            const recent =
-              s.lastSeenAt &&
-              Date.now() - new Date(s.lastSeenAt).getTime() < 5 * 60_000;
-            return (
-              <Link key={s.id} href={`/servers/${s.id}`}>
-                <Card className="p-4 hover:border-accent transition">
-                  <div className="flex items-center justify-between">
-                    <div className="space-y-1">
-                      <div className="font-medium flex items-center gap-2">
-                        {s.name}
-                        {s.cloud && <Badge tone="info">{s.cloud}</Badge>}
-                        {s.cloudRegion && <Badge>{s.cloudRegion}</Badge>}
-                        <Badge title="Retenção de logs">
-                          {s.retentionDays ?? 14}d retenção
-                        </Badge>
-                        {s.logRateLimitPerMinute && (
-                          <Badge title="Limite de linhas de log armazenadas por minuto (override deste servidor)">
-                            {s.logRateLimitPerMinute.toLocaleString()} linhas/min
+        <DataTable>
+          <THeadRow>
+            <Th>Servidor</Th>
+            <Th>Cloud · Região</Th>
+            <Th>Agent</Th>
+            <Th>Última vez</Th>
+            <Th>Status</Th>
+            <Th className="text-right w-24">Ações</Th>
+          </THeadRow>
+          <tbody>
+            {list.length === 0 && (
+              <Tr>
+                <Td colSpan={6} className="text-center text-muted py-8">
+                  Nenhum servidor para os filtros atuais.
+                </Td>
+              </Tr>
+            )}
+            {list.map((s) => {
+              const onDelete = async (e: React.MouseEvent) => {
+                e.preventDefault(); e.stopPropagation();
+                if (!confirm(`Deseja excluir o servidor "${s.name}"?`)) return;
+                const hard = confirm(
+                  `Exclusão permanente?\n\n` +
+                  `OK = remove permanentemente (métricas, logs, sessões).\n` +
+                  `Cancel = soft delete (preserva histórico, oculta da listagem).`,
+                );
+                const url = hard
+                  ? `/servers/${s.id}`
+                  : `/servers/${s.id}?soft=true`;
+                try {
+                  await apiFetch(url, { method: 'DELETE' });
+                  load();
+                  invalidateServersCache();
+                } catch (err: any) {
+                  alert(`Falha ao excluir: ${err?.payload?.message || err.message}`);
+                }
+              };
+              const recent =
+                s.lastSeenAt &&
+                Date.now() - new Date(s.lastSeenAt).getTime() < 5 * 60_000;
+              return (
+                <Fragment key={s.id}>
+                  <Tr>
+                    <Td>
+                      <div className="space-y-1">
+                        <Link
+                          href={`/servers/${s.id}`}
+                          className="font-semibold text-text hover:text-accentSoft transition-colors"
+                        >
+                          {s.name}
+                        </Link>
+                        <div className="text-2xs text-mutedFaint font-mono">
+                          {s.hostname || '—'} · {s.os || '—'}
+                        </div>
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          {safeArray<string>(s.tags).map((t) => (
+                            <Badge key={t}>{t}</Badge>
+                          ))}
+                          <Badge title="Retenção de logs">
+                            {s.retentionDays ?? 14}d retenção
                           </Badge>
+                          {s.logRateLimitPerMinute && (
+                            <Badge title="Limite de linhas de log armazenadas por minuto (override deste servidor)">
+                              {s.logRateLimitPerMinute.toLocaleString()} linhas/min
+                            </Badge>
+                          )}
+                        </div>
+                      </div>
+                    </Td>
+                    <Td>
+                      <div className="flex items-center gap-2">
+                        {s.cloud ? (
+                          <Badge tone="info">{s.cloud}</Badge>
+                        ) : (
+                          <span className="text-mutedFaint">—</span>
                         )}
+                        {s.cloudRegion && (
+                          <span className="font-mono text-xs text-muted">{s.cloudRegion}</span>
+                        )}
+                      </div>
+                    </Td>
+                    <Td>
+                      {s.agentVersion ? (
+                        <span className="font-mono text-xs">v{s.agentVersion}</span>
+                      ) : (
+                        <span className="text-xs text-mutedFaint">sem agent</span>
+                      )}
+                    </Td>
+                    <Td>
+                      {s.lastSeenAt ? (
+                        <span className="font-mono text-xs text-muted">{fmtTime(s.lastSeenAt)}</span>
+                      ) : (
+                        <span className="text-xs text-mutedFaint">nunca conectou</span>
+                      )}
+                    </Td>
+                    <Td>
+                      {recent ? (
+                        <Badge tone="success" dot>Ativo</Badge>
+                      ) : s.lastSeenAt ? (
+                        <Badge>Offline</Badge>
+                      ) : (
+                        <Badge>Nunca</Badge>
+                      )}
+                    </Td>
+                    <Td className="text-right">
+                      <div className="flex items-center justify-end gap-1">
                         {(role === 'admin' || role === 'operator') && (
-                          <button
+                          <Button
+                            variant="ghost"
+                            size="icon"
                             title="Editar servidor"
+                            className="text-muted hover:text-accent"
                             onClick={(e) => {
                               e.preventDefault();
                               e.stopPropagation();
                               editingId === s.id ? setEditingId(null) : openEdit(s);
                             }}
-                            className="text-muted hover:text-accent"
                           >
-                            <Pencil size={12} />
-                          </button>
+                            <Pencil size={14} />
+                          </Button>
+                        )}
+                        {role === 'admin' && (
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            title="Excluir servidor"
+                            className="text-muted hover:text-danger"
+                            onClick={onDelete}
+                          >
+                            <Trash2 size={14} />
+                          </Button>
                         )}
                       </div>
-                      <div className="text-xs text-muted">
-                        {s.hostname || '—'} · {s.os || '—'} ·{' '}
-                        {s.agentVersion ? `agent v${s.agentVersion}` : 'sem agent'}
-                      </div>
-                      <div className="flex items-center gap-2">
-                        {safeArray<string>(s.tags).map((t) => (
-                          <Badge key={t}>{t}</Badge>
-                        ))}
-                        <span className={recent ? 'text-success text-xs' : 'text-muted text-xs'}>
-                          {recent ? '● ativo · ' : '● offline · '}
-                          {s.lastSeenAt ? fmtTime(s.lastSeenAt) : 'nunca conectou'}
-                        </span>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      {role === 'admin' && (
-                        <button
-                          onClick={onDelete}
-                          title="Excluir servidor"
-                          className="text-muted hover:text-danger p-1"
-                        >
-                          <Trash2 size={16} />
-                        </button>
-                      )}
-                      <ChevronRight size={18} className="text-muted" />
-                    </div>
-                  </div>
+                    </Td>
+                  </Tr>
 
                   {editingId === s.id && (
                     // Popover inline único com TODOS os campos editáveis do
                     // servidor — substitui os 2 lápis antigos (retenção +
                     // limite de linhas/min), cada um com seu próprio par
-                    // input/check/x. onClick com stopPropagation aqui porque
-                    // o card inteiro está dentro de um <Link> (navegação pro
-                    // detalhe do servidor) — sem isto, clicar em qualquer
-                    // campo do formulário navegaria pra /servers/[id].
-                    <div
-                      onClick={(e) => { e.preventDefault(); e.stopPropagation(); }}
-                      className="mt-3 pt-3 border-t border-border grid sm:grid-cols-2 gap-3"
-                    >
-                      <div>
-                        <label className="text-xs text-muted">Retenção de logs (dias)</label>
-                        <Input
-                          type="number"
-                          min={1}
-                          max={365}
-                          autoFocus
-                          value={editForm.retentionDays}
-                          onChange={(e) => setEditForm({ ...editForm, retentionDays: e.target.value })}
-                        />
-                      </div>
-                      <div>
-                        <label className="text-xs text-muted">Limite de linhas de log/minuto</label>
-                        <Input
-                          type="number"
-                          min={100}
-                          max={500000}
-                          placeholder="vazio = default global"
-                          value={editForm.logRateLimitPerMinute}
-                          onChange={(e) => setEditForm({ ...editForm, logRateLimitPerMinute: e.target.value })}
-                        />
-                      </div>
-                      <div>
-                        <label className="text-xs text-muted">Cloud</label>
-                        <Select
-                          value={editForm.cloud}
-                          onChange={(e) => setEditForm({ ...editForm, cloud: e.target.value })}
+                    // input/check/x. onClick com stopPropagation preservado
+                    // (o nome do servidor continua sendo um <Link> pra
+                    // /servers/[id]).
+                    <Tr>
+                      <Td colSpan={6} className="bg-panel2/30">
+                        <div
+                          onClick={(e) => { e.preventDefault(); e.stopPropagation(); }}
+                          className="grid sm:grid-cols-2 gap-3"
                         >
-                          <option value="onprem">on-prem</option>
-                          <option value="aws">aws</option>
-                          <option value="oci">oci</option>
-                          <option value="gcp">gcp</option>
-                          <option value="azure">azure</option>
-                          <option value="other">other</option>
-                        </Select>
-                      </div>
-                      <div>
-                        <label className="text-xs text-muted">Região</label>
-                        <Input
-                          value={editForm.cloudRegion}
-                          onChange={(e) => setEditForm({ ...editForm, cloudRegion: e.target.value })}
-                          placeholder="us-east-1 / sa-east-1"
-                        />
-                      </div>
-                      <div className="sm:col-span-2 flex gap-2">
-                        <Button size="sm" onClick={() => saveEdit(s.id)} loading={editSaving}>
-                          Salvar
-                        </Button>
-                        <Button size="sm" variant="secondary" onClick={() => setEditingId(null)}>
-                          Cancelar
-                        </Button>
-                      </div>
-                    </div>
+                          <div>
+                            <label className="text-xs text-muted">Retenção de logs (dias)</label>
+                            <Input
+                              type="number"
+                              min={1}
+                              max={365}
+                              autoFocus
+                              value={editForm.retentionDays}
+                              onChange={(e) => setEditForm({ ...editForm, retentionDays: e.target.value })}
+                            />
+                          </div>
+                          <div>
+                            <label className="text-xs text-muted">Limite de linhas de log/minuto</label>
+                            <Input
+                              type="number"
+                              min={100}
+                              max={500000}
+                              placeholder="vazio = default global"
+                              value={editForm.logRateLimitPerMinute}
+                              onChange={(e) => setEditForm({ ...editForm, logRateLimitPerMinute: e.target.value })}
+                            />
+                          </div>
+                          <div>
+                            <label className="text-xs text-muted">Cloud</label>
+                            <Select
+                              value={editForm.cloud}
+                              onChange={(e) => setEditForm({ ...editForm, cloud: e.target.value })}
+                            >
+                              <option value="onprem">on-prem</option>
+                              <option value="aws">aws</option>
+                              <option value="oci">oci</option>
+                              <option value="gcp">gcp</option>
+                              <option value="azure">azure</option>
+                              <option value="other">other</option>
+                            </Select>
+                          </div>
+                          <div>
+                            <label className="text-xs text-muted">Região</label>
+                            <Input
+                              value={editForm.cloudRegion}
+                              onChange={(e) => setEditForm({ ...editForm, cloudRegion: e.target.value })}
+                              placeholder="us-east-1 / sa-east-1"
+                            />
+                          </div>
+                          <div className="sm:col-span-2 flex gap-2">
+                            <Button size="sm" onClick={() => saveEdit(s.id)} loading={editSaving}>
+                              Salvar
+                            </Button>
+                            <Button size="sm" variant="secondary" onClick={() => setEditingId(null)}>
+                              Cancelar
+                            </Button>
+                          </div>
+                        </div>
+                      </Td>
+                    </Tr>
                   )}
-                </Card>
-              </Link>
-            );
-          })}
-        </div>
+                </Fragment>
+              );
+            })}
+          </tbody>
+        </DataTable>
       </div>
     </AppShell>
   );

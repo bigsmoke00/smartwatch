@@ -9,6 +9,7 @@ import { Input } from '@/components/ui/Input';
 import { Badge } from '@/components/ui/Badge';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Select } from '@/components/ui/Select';
+import { DataTable, THeadRow, Th, Tr, Td } from '@/components/ui/Table';
 import { apiFetch, ApiError } from '@/lib/api';
 import { loadMyPermissions, hasPerm } from '@/lib/perms';
 import { fmtTime, safeArray } from '@/lib/utils';
@@ -211,17 +212,21 @@ export default function DbAccessPage() {
 
   return (
     <AppShell>
-      <div className="p-6 space-y-3">
+      <div className="p-[22px] space-y-4">
         <PageHeader
           title="Acesso a banco (Zero Trust)"
           description="Leitura é direta. Qualquer UPDATE/INSERT/DELETE precisa de pedido aprovado — quem aprova é quem executa, em sessão auditada."
           icon={<TerminalSquare size={16} />}
         />
 
-        <Card className="p-4 grid md:grid-cols-4 gap-2 items-end">
+        <div className="text-info bg-info/[0.08] border border-info/30 rounded-lg px-3 py-2 text-[13px]">
+          SELECT/WITH roda direto (com cap de linhas e timeout). Qualquer escrita (UPDATE/INSERT/DELETE) exige aprovação de outra pessoa — quem aprova é quem executa.
+        </div>
+
+        <Card className="p-4 grid md:grid-cols-4 gap-3 items-end">
           <div>
-            <label className="text-xs text-muted">Cluster</label>
-            <Select value={clusterId} onChange={(e) => setClusterId(e.target.value)}>
+            <label className="text-2xs uppercase tracking-wider text-mutedFaint">Cluster</label>
+            <Select className="mt-1" value={clusterId} onChange={(e) => setClusterId(e.target.value)}>
               <option value="">—</option>
               {safeArray<Cluster>(clusters).map((c) => (
                 <option key={c.id} value={c.id}>{c.name}</option>
@@ -229,8 +234,9 @@ export default function DbAccessPage() {
             </Select>
           </div>
           <div>
-            <label className="text-xs text-muted">Database</label>
+            <label className="text-2xs uppercase tracking-wider text-mutedFaint">Database</label>
             <Select
+              className="mt-1"
               value={database}
               onChange={(e) => setDatabase(e.target.value)}
               disabled={!clusterId || loadingDatabases}
@@ -250,136 +256,150 @@ export default function DbAccessPage() {
         </Card>
 
         {canQuery && (
-          <Card className="p-4 space-y-2">
-            <div className="flex items-center justify-between">
-              <label className="text-xs text-muted">SELECT / WITH (leitura — sem aprovação)</label>
-              <span className="text-2xs text-mutedFaint">
-                várias instruções separadas por <code>;</code> — o cursor escolhe qual roda (ou selecione um trecho) · Ctrl+Enter executa
-              </span>
-            </div>
-            <div className="rounded-md border border-border overflow-hidden" style={{ height: 220 }}>
-              <Editor
-                language="sql"
-                theme="vs-dark"
-                value={sql}
-                onChange={(v) => setSql(v ?? '')}
-                onMount={handleEditorMount}
-                options={{
-                  fontSize: 13, minimap: { enabled: false }, automaticLayout: true,
-                  scrollBeyondLastLine: false, renderWhitespace: 'selection', lineNumbers: 'on',
-                }}
-              />
-            </div>
-            {activeStatement && (
-              <div className="text-2xs text-muted truncate">
-                vai executar: <span className="font-mono text-text">{activeStatement}</span>
+          <>
+            <Card className="p-0 overflow-hidden">
+              <div className="flex items-center justify-between gap-3 px-4 py-3 border-b border-border">
+                <div className="min-w-0">
+                  <div className="font-mono text-[13px] text-text truncate">
+                    {clusters.find((c) => c.id === clusterId)?.name ?? 'selecione um cluster'}
+                    {database ? ` / ${database}` : ''}
+                  </div>
+                  <div className="text-2xs uppercase tracking-wider text-mutedFaint mt-0.5">
+                    SELECT / WITH (leitura — sem aprovação)
+                  </div>
+                </div>
+                <Button onClick={runQuery} disabled={running}>{running ? 'Executando…' : 'Executar'}</Button>
               </div>
-            )}
-            <div className="flex gap-2">
-              <Button onClick={runQuery} disabled={running}>{running ? 'Executando…' : 'Executar'}</Button>
-              {canWriteRequest && (
-                <Button variant="secondary" onClick={() => setShowWriteForm((v) => !v)}>
-                  {showWriteForm ? 'cancelar pedido de escrita' : 'preciso de um UPDATE/INSERT/DELETE…'}
-                </Button>
-              )}
-            </div>
-            {queryError && <div className="text-xs text-danger">{queryError}</div>}
+              <div className="p-4 space-y-2">
+                <div className="text-2xs text-mutedFaint">
+                  várias instruções separadas por <code className="font-mono text-muted">;</code> — o cursor escolhe qual roda (ou selecione um trecho) · Ctrl+Enter executa
+                </div>
+                <div className="rounded-md border border-border overflow-hidden" style={{ height: 220 }}>
+                  <Editor
+                    language="sql"
+                    theme="vs-dark"
+                    value={sql}
+                    onChange={(v) => setSql(v ?? '')}
+                    onMount={handleEditorMount}
+                    options={{
+                      fontSize: 13, minimap: { enabled: false }, automaticLayout: true,
+                      scrollBeyondLastLine: false, renderWhitespace: 'selection', lineNumbers: 'on',
+                    }}
+                  />
+                </div>
+                {activeStatement && (
+                  <div className="text-2xs text-muted truncate">
+                    vai executar: <span className="font-mono text-text">{activeStatement}</span>
+                  </div>
+                )}
+                {canWriteRequest && (
+                  <div className="flex gap-2">
+                    <Button variant="secondary" onClick={() => setShowWriteForm((v) => !v)}>
+                      {showWriteForm ? 'cancelar pedido de escrita' : 'preciso de um UPDATE/INSERT/DELETE…'}
+                    </Button>
+                  </div>
+                )}
+                {queryError && <div className="text-xs text-danger">{queryError}</div>}
+              </div>
+            </Card>
+
             {result && (
-              <div className="text-xs text-muted">
-                {result.rowCount} linha(s) · {result.tookMs}ms {result.truncated && '· (amostra limitada a 500 linhas)'}
-              </div>
-            )}
-            {result && result.rows.length > 0 && (
-              <div className="overflow-auto max-h-96 border border-border rounded-md">
-                <table className="w-full text-xs">
-                  <thead className="bg-panel2 sticky top-0">
-                    <tr>
-                      {Object.keys(result.rows[0]).map((k) => (
-                        <th key={k} className="text-left px-2 py-1 font-mono">{k}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {result.rows.map((row, i) => (
-                      <tr key={i} className="border-t border-border">
+              <Card className="p-0 overflow-hidden">
+                <div className="px-[18px] py-2.5 border-b border-border text-2xs uppercase tracking-wider text-mutedFaint font-mono">
+                  {result.rowCount} linha(s) · {result.tookMs}ms {result.truncated && '· (amostra limitada a 500 linhas)'}
+                </div>
+                {result.rows.length > 0 && (
+                  <div className="overflow-auto max-h-96">
+                    <DataTable className="!border-0 !rounded-none !bg-transparent !overflow-visible">
+                      <THeadRow>
                         {Object.keys(result.rows[0]).map((k) => (
-                          <td key={k} className="px-2 py-1 font-mono whitespace-nowrap">{String(row[k] ?? '')}</td>
+                          <Th key={k} className="normal-case font-mono">{k}</Th>
                         ))}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+                      </THeadRow>
+                      <tbody>
+                        {result.rows.map((row, i) => (
+                          <Tr key={i}>
+                            {Object.keys(result.rows[0]).map((k) => (
+                              <Td key={k} className="font-mono whitespace-nowrap">{String(row[k] ?? '')}</Td>
+                            ))}
+                          </Tr>
+                        ))}
+                      </tbody>
+                    </DataTable>
+                  </div>
+                )}
+              </Card>
             )}
-          </Card>
+          </>
         )}
 
         {showWriteForm && canWriteRequest && (
           <Card className="p-4 space-y-2 border-warn/40">
-            <div className="text-sm font-medium">Pedido de escrita (UPDATE/INSERT/DELETE)</div>
-            <label className="text-xs text-muted">SQL de escrita</label>
+            <div className="flex items-center gap-2">
+              <Badge tone="warn">escrita</Badge>
+              <span className="text-sm font-medium text-text">Pedido de escrita (UPDATE/INSERT/DELETE)</span>
+            </div>
+            <label className="text-2xs uppercase tracking-wider text-mutedFaint">SQL de escrita</label>
             <textarea
               value={writeSql} onChange={(e) => setWriteSql(e.target.value)}
               rows={3}
-              className="w-full rounded-md bg-panel2 border border-border px-3 py-2 text-sm font-mono"
+              className="w-full rounded-lg bg-panel2 border border-border px-3 py-2 text-sm font-mono text-text placeholder:text-mutedFaint transition-colors focus:outline-none focus:ring-2 focus:ring-accent/35 focus:border-accent/60"
               placeholder="UPDATE ... SET ... WHERE ..."
             />
-            <label className="text-xs text-muted">Motivo (vai pro aprovador, junto do SELECT acima como contexto)</label>
+            <label className="text-2xs uppercase tracking-wider text-mutedFaint">Motivo (vai pro aprovador, junto do SELECT acima como contexto)</label>
             <Input value={writeReason} onChange={(e) => setWriteReason(e.target.value)} placeholder="ex: corrigir status travado do pedido #1234" />
             <Button onClick={submitWriteRequest}>Enviar pedido para aprovação</Button>
           </Card>
         )}
 
-        <Card className="p-0">
-          <div className="flex items-center justify-between px-3 py-2 border-b border-border">
-            <span className="text-sm font-medium">Pedidos de escrita</span>
-            <label className="flex items-center gap-1 text-xs text-muted">
-              <input type="checkbox" checked={onlyPending} onChange={(e) => setOnlyPending(e.target.checked)} />
+        <Card className="p-0 overflow-hidden">
+          <div className="flex items-center justify-between px-[18px] py-3 border-b border-border">
+            <span className="text-sm font-medium text-text">Pedidos de escrita</span>
+            <label className="flex items-center gap-1.5 text-xs text-muted">
+              <input type="checkbox" checked={onlyPending} onChange={(e) => setOnlyPending(e.target.checked)} className="accent-accent" />
               só pendentes
             </label>
           </div>
-          <table className="w-full text-sm">
-            <thead className="bg-panel2 text-xs uppercase text-muted">
-              <tr>
-                <th className="text-left px-3 py-2">Quando</th>
-                <th className="text-left px-3 py-2">Cluster</th>
-                <th className="text-left px-3 py-2">Solicitante</th>
-                <th className="text-left px-3 py-2">SQL</th>
-                <th className="text-left px-3 py-2">Motivo</th>
-                <th className="text-left px-3 py-2">Status</th>
-                <th />
-              </tr>
-            </thead>
+          <DataTable className="!border-0 !rounded-none !bg-transparent">
+            <THeadRow>
+              <Th>Quando</Th>
+              <Th>Cluster</Th>
+              <Th>Solicitante</Th>
+              <Th>SQL</Th>
+              <Th>Motivo</Th>
+              <Th>Status</Th>
+              <Th />
+            </THeadRow>
             <tbody>
               {safeArray<ReqRow>(requests).filter((r) => r.kind === 'write').map((r) => (
-                <tr key={r.id} className="border-t border-border align-top">
-                  <td className="px-3 py-1.5 text-xs text-muted whitespace-nowrap">{fmtTime(r.created_at)}</td>
-                  <td className="px-3 py-1.5 text-xs">{r.cluster_name}{r.database ? ` / ${r.database}` : ''}</td>
-                  <td className="px-3 py-1.5 text-xs">{r.requested_by_email}</td>
-                  <td className="px-3 py-1.5 text-xs font-mono max-w-xs truncate" title={r.sql_text}>{r.sql_text}</td>
-                  <td className="px-3 py-1.5 text-xs text-muted max-w-xs truncate" title={r.reason}>{r.reason}</td>
-                  <td className="px-3 py-1.5">
+                <Tr key={r.id} className="align-top">
+                  <Td className="font-mono text-mutedFaint whitespace-nowrap">{fmtTime(r.created_at)}</Td>
+                  <Td>{r.cluster_name}{r.database ? ` / ${r.database}` : ''}</Td>
+                  <Td className="text-accentSoft">{r.requested_by_email}</Td>
+                  <Td className="font-mono max-w-xs truncate" title={r.sql_text}>{r.sql_text}</Td>
+                  <Td className="text-muted max-w-xs truncate" title={r.reason}>{r.reason}</Td>
+                  <Td>
                     <Badge tone={STATUS_TONE[r.status] ?? 'default'}>{r.status}</Badge>
                     {r.status === 'executed' && r.row_count != null && (
                       <div className="text-[10px] text-muted mt-0.5">{r.row_count} linha(s) afetada(s)</div>
                     )}
                     {r.error_text && <div className="text-[10px] text-danger mt-0.5">{r.error_text}</div>}
-                  </td>
-                  <td className="px-3 py-1.5 text-right whitespace-nowrap space-x-2">
+                  </Td>
+                  <Td className="text-right whitespace-nowrap space-x-3">
                     {r.status === 'pending' && canApprove && (
                       <>
-                        <button onClick={() => approve(r.id)} className="text-success hover:underline text-xs">aprovar e executar</button>
-                        <button onClick={() => reject(r.id)} className="text-danger hover:underline text-xs">rejeitar</button>
+                        <button onClick={() => approve(r.id)} className="text-success hover:underline text-xs font-medium">aprovar e executar</button>
+                        <button onClick={() => reject(r.id)} className="text-danger hover:underline text-xs font-medium">rejeitar</button>
                       </>
                     )}
-                  </td>
-                </tr>
+                  </Td>
+                </Tr>
               ))}
               {!requests.filter((r) => r.kind === 'write').length && (
-                <tr><td colSpan={7} className="px-3 py-4 text-center text-muted text-xs">nenhum pedido de escrita ainda</td></tr>
+                <Tr><Td colSpan={7} className="py-6 text-center text-muted text-xs">nenhum pedido de escrita ainda</Td></Tr>
               )}
             </tbody>
-          </table>
+          </DataTable>
         </Card>
       </div>
     </AppShell>

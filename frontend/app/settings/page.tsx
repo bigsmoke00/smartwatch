@@ -7,9 +7,9 @@ import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Badge } from '@/components/ui/Badge';
 import { PageHeader } from '@/components/ui/PageHeader';
-import { apiFetch, Auth } from '@/lib/api';
+import { apiFetch } from '@/lib/api';
 import { fmtTime, safeArray } from '@/lib/utils';
-import { Settings as SettingsIcon } from 'lucide-react';
+import { Settings as SettingsIcon, ShieldCheck } from 'lucide-react';
 
 interface Session {
   id: string;
@@ -74,86 +74,110 @@ export default function SettingsPage() {
 
   return (
     <AppShell>
-      <div className="p-6 space-y-4 max-w-3xl">
-        <PageHeader title="Ajustes" description="Segurança da conta, autenticação de dois fatores e sessões ativas." icon={<SettingsIcon size={16} />} />
+      <div className="p-[22px]">
+        <div className="max-w-[720px] space-y-4">
+          <PageHeader
+            title="Ajustes / 2FA"
+            description="Perfil, segurança e autenticação de dois fatores."
+            icon={<SettingsIcon size={16} />}
+          />
 
-        <Card className="p-4">
-          <h2 className="text-sm font-medium mb-3">Autenticação de dois fatores (TOTP)</h2>
-          {me?.mfaSetupRequired && (
-            <div className="mb-3 text-sm rounded-md border border-warn bg-warn/10 text-warn px-3 py-2">
-              O administrador exige 2FA para esta conta. Configure abaixo para continuar
-              usando a plataforma.
+          <Card className="p-4">
+            <h2 className="text-sm font-medium text-text mb-3">Perfil</h2>
+            <div className="grid grid-cols-[120px_1fr] gap-x-4 gap-y-3 text-sm">
+              <div className="text-muted">E-mail</div>
+              <div className="text-text break-all">{me?.email || '—'}</div>
+              <div className="text-muted">Perfil</div>
+              <div className="text-accentSoft">{me?.role || '—'}</div>
             </div>
-          )}
-          {me?.mfaEnabled ? (
-            <div className="flex items-center justify-between">
-              <div className="text-sm">
-                <Badge tone="success">Ativo</Badge>
-                <span className="ml-2 text-muted">
-                  Use seu app autenticador (Google Authenticator, 1Password, Authy) ao logar.
-                </span>
-              </div>
-              <Button variant="danger" onClick={disableMfa}>Desabilitar</Button>
-            </div>
-          ) : setup ? (
-            <div className="grid md:grid-cols-2 gap-4">
-              <div>
-                <p className="text-sm text-muted mb-2">
-                  Escaneie o QR no seu app autenticador, depois informe o código de 6 dígitos.
-                </p>
-                <img src={setup.qr} alt="QR" className="bg-white p-2 rounded" />
-                <p className="text-xs text-muted mt-2 break-all">
-                  Secret manual: <code className="text-text">{setup.secret}</code>
-                </p>
-              </div>
-              <div className="space-y-2">
-                <label className="text-xs text-muted">Código (6 dígitos)</label>
-                <Input
-                  value={code}
-                  onChange={(e) => setCode(e.target.value)}
-                  inputMode="numeric"
-                  maxLength={6}
-                />
-                {error && <div className="text-sm text-danger">{error}</div>}
-                <div className="flex gap-2">
-                  <Button onClick={confirmMfa}>Confirmar</Button>
-                  <Button variant="secondary" onClick={() => setSetup(null)}>Cancelar</Button>
+          </Card>
+
+          <Card className="p-4">
+            <div className="flex items-center justify-between gap-3 mb-3">
+              <h2 className="text-sm font-medium text-text">Autenticação em duas etapas</h2>
+              {me?.mfaEnabled && (
+                <div className="flex items-center gap-2">
+                  <ShieldCheck size={16} className="text-success" />
+                  <Badge tone="success">Ativo</Badge>
                 </div>
-              </div>
+              )}
             </div>
-          ) : (
-            <Button onClick={startMfa}>Habilitar 2FA</Button>
-          )}
-          {success && <div className="mt-3 text-sm text-success">{success}</div>}
-        </Card>
 
-        <Card className="p-4">
-          <h2 className="text-sm font-medium mb-3">Sessões ativas</h2>
-          <div className="divide-y divide-border">
-            {safeArray<Session>(sessions).map((s) => (
-              <div key={s.id} className="py-2 flex items-center justify-between text-sm">
+            {me?.mfaSetupRequired && (
+              <div className="mb-3 text-sm rounded-lg border border-warn/40 bg-warn/10 text-warn px-3 py-2">
+                O administrador exige 2FA para esta conta. Configure abaixo para continuar
+                usando a plataforma.
+              </div>
+            )}
+
+            {me?.mfaEnabled ? (
+              <div className="flex items-center justify-between gap-4">
+                <p className="text-sm text-muted">
+                  Use seu app autenticador (Google Authenticator, 1Password, Authy) ao logar.
+                </p>
+                <Button variant="danger" onClick={disableMfa}>Desabilitar</Button>
+              </div>
+            ) : setup ? (
+              <div className="grid md:grid-cols-2 gap-4">
                 <div>
-                  <div className="text-text">{s.userAgent || '—'}</div>
-                  <div className="text-muted text-xs">
-                    {s.ip || '—'} · criada {fmtTime(s.createdAt)} · expira {fmtTime(s.expiresAt)}
+                  <p className="text-sm text-muted mb-2">
+                    Escaneie o QR no seu app autenticador, depois informe o código de 6 dígitos.
+                  </p>
+                  <img src={setup.qr} alt="QR" className="bg-white p-2 rounded-lg" />
+                  <p className="text-xs text-mutedFaint mt-2 break-all">
+                    Secret manual: <code className="text-text">{setup.secret}</code>
+                  </p>
+                </div>
+                <div className="space-y-2">
+                  <label className="text-xs text-muted">Código (6 dígitos)</label>
+                  <Input
+                    value={code}
+                    onChange={(e) => setCode(e.target.value)}
+                    inputMode="numeric"
+                    maxLength={6}
+                    error={!!error}
+                  />
+                  {error && <div className="text-sm text-danger">{error}</div>}
+                  <div className="flex gap-2">
+                    <Button onClick={confirmMfa}>Confirmar</Button>
+                    <Button variant="secondary" onClick={() => setSetup(null)}>Cancelar</Button>
                   </div>
                 </div>
-                <div className="flex items-center gap-2">
-                  {s.revokedAt ? (
-                    <Badge tone="default">revogada</Badge>
-                  ) : (
-                    <button
-                      onClick={() => revokeSession(s.id)}
-                      className="text-danger hover:underline text-xs"
-                    >
-                      revogar
-                    </button>
-                  )}
-                </div>
               </div>
-            ))}
-          </div>
-        </Card>
+            ) : (
+              <Button onClick={startMfa}>Habilitar 2FA</Button>
+            )}
+            {success && <div className="mt-3 text-sm text-success">{success}</div>}
+          </Card>
+
+          <Card className="p-4">
+            <h2 className="text-sm font-medium text-text mb-3">Sessões ativas</h2>
+            <div className="divide-y divide-border">
+              {safeArray<Session>(sessions).map((s) => (
+                <div key={s.id} className="py-2 flex items-center justify-between gap-3 text-sm">
+                  <div className="min-w-0">
+                    <div className="text-text truncate">{s.userAgent || '—'}</div>
+                    <div className="text-mutedFaint text-xs">
+                      {s.ip || '—'} · criada {fmtTime(s.createdAt)} · expira {fmtTime(s.expiresAt)}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    {s.revokedAt ? (
+                      <Badge tone="default">revogada</Badge>
+                    ) : (
+                      <button
+                        onClick={() => revokeSession(s.id)}
+                        className="text-danger hover:underline text-xs"
+                      >
+                        revogar
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </Card>
+        </div>
       </div>
     </AppShell>
   );

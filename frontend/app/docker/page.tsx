@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Badge } from '@/components/ui/Badge';
 import { PageHeader } from '@/components/ui/PageHeader';
+import { DataTable, THeadRow, Th, Tr, Td } from '@/components/ui/Table';
 import { Select } from '@/components/ui/Select';
 import { ServerPicker } from '@/components/ServerPicker';
 import { apiFetch } from '@/lib/api';
@@ -57,7 +58,7 @@ export default function DockerPage() {
 
   return (
     <AppShell>
-      <div className="p-6 space-y-4">
+      <div className="p-[22px] space-y-4">
         <PageHeader
           title="Docker manager"
           description="Containers, imagens, volumes e deploy remoto via agent."
@@ -80,17 +81,17 @@ export default function DockerPage() {
           }
         />
 
-        <div className="flex gap-1 border-b border-border">
+        <div className="border border-border rounded-lg p-0.5 flex gap-0.5 w-fit">
           {(['containers', 'images', 'volumes', 'deploy'] as Tab[])
             .filter((t) => t !== 'deploy' || canDeploy)
             .map((t) => (
             <button
               key={t}
               onClick={() => setTab(t)}
-              className={`px-4 py-2 text-sm border-b-2 capitalize ${
+              className={`px-4 py-1.5 text-sm capitalize rounded-md transition-colors ${
                 tab === t
-                  ? 'border-accent text-accent'
-                  : 'border-transparent text-muted hover:text-text'
+                  ? 'bg-accent text-white'
+                  : 'text-muted hover:text-text'
               }`}
             >
               {t}
@@ -183,77 +184,83 @@ function ContainersTab({ serverId, canControl, canDestroy }: { serverId: string;
           <RefreshCw size={14} /> {loading ? 'Atualizando…' : 'Atualizar'}
         </Button>
       </div>
-      <Card className="p-0 overflow-hidden">
-        <table className="w-full text-sm">
-          <thead className="bg-panel2 text-xs uppercase text-muted">
-            <tr>
-              <th className="text-left px-3 py-2">Nome</th>
-              <th className="text-left px-3 py-2">Imagem</th>
-              <th className="text-left px-3 py-2">Estado</th>
-              <th className="text-left px-3 py-2">Status</th>
-              <th className="text-left px-3 py-2">Ports</th>
-              <th />
-            </tr>
-          </thead>
-          <tbody>
-            {safeArray<any>(items).map((c: any) => {
-              const name = (c.Names?.[0] ?? c.Id?.slice(0, 12)).replace(/^\//, '');
-              return (
-                <tr key={c.Id} className="border-t border-border">
-                  <td className="px-3 py-2 font-medium">{name}</td>
-                  <td className="px-3 py-2 text-xs text-muted">{c.Image}</td>
-                  <td className="px-3 py-2">
-                    <Badge tone={c.State === 'running' ? 'success' : 'default'}>
-                      {c.State}
-                    </Badge>
-                  </td>
-                  <td className="px-3 py-2 text-xs text-muted">{c.Status}</td>
-                  <td className="px-3 py-2 text-xs text-muted">
-                    {(c.Ports ?? [])
-                      .filter((p: any) => p.PublicPort)
-                      .map((p: any) => `${p.PublicPort}→${p.PrivatePort}/${p.Type}`)
-                      .join(', ')}
-                  </td>
-                  <td className="px-3 py-2 text-right space-x-1 whitespace-nowrap">
-                    <button title="Logs" onClick={() => showLogs(c.Id, name)} className="text-muted hover:text-accent">
+      <DataTable>
+        <THeadRow>
+          <Th>Nome</Th>
+          <Th>Imagem</Th>
+          <Th>Estado</Th>
+          <Th>Status</Th>
+          <Th>Ports</Th>
+          <Th className="text-right">Ações</Th>
+        </THeadRow>
+        <tbody>
+          {safeArray<any>(items).map((c: any) => {
+            const name = (c.Names?.[0] ?? c.Id?.slice(0, 12)).replace(/^\//, '');
+            const status = c.Status ?? '';
+            const stateTone =
+              c.State === 'running' ? 'success'
+              : c.State === 'restarting' ? 'warn'
+              : c.State === 'exited' || c.State === 'dead' ? 'danger'
+              : 'default';
+            const rowTone =
+              c.State === 'restarting' || /unhealthy/i.test(status) ? 'warn'
+              : c.State === 'exited' || c.State === 'dead' ? 'danger'
+              : 'default';
+            return (
+              <Tr key={c.Id} tone={rowTone}>
+                <Td className="font-medium text-text">{name}</Td>
+                <Td className="font-mono text-xs text-muted">{c.Image}</Td>
+                <Td>
+                  <Badge tone={stateTone}>{c.State}</Badge>
+                </Td>
+                <Td className="text-xs text-muted">{c.Status}</Td>
+                <Td className="text-xs text-muted">
+                  {(c.Ports ?? [])
+                    .filter((p: any) => p.PublicPort)
+                    .map((p: any) => `${p.PublicPort}→${p.PrivatePort}/${p.Type}`)
+                    .join(', ')}
+                </Td>
+                <Td className="text-right">
+                  <div className="flex justify-end gap-1 whitespace-nowrap">
+                    <Button size="sm" variant="ghost" title="Logs" onClick={() => showLogs(c.Id, name)}>
                       <FileText size={14} />
-                    </button>
-                    <button title="Inspect" onClick={() => showInspect(c.Id, name)} className="text-muted hover:text-accent">
+                    </Button>
+                    <Button size="sm" variant="ghost" title="Inspect" onClick={() => showInspect(c.Id, name)}>
                       <Info size={14} />
-                    </button>
+                    </Button>
                     {/* Start (subir parado) e Restart = operar (docker:control).
                         Stop e Remove = destrutivo, só admin master (docker:destroy). */}
                     {c.State !== 'running'
                       ? canControl && (
-                          <button title="Start" onClick={() => action(c.Id, 'start')} className="text-success hover:text-accent">
+                          <Button size="sm" variant="ghost" title="Start" className="text-success" onClick={() => action(c.Id, 'start')}>
                             <Play size={14} />
-                          </button>
+                          </Button>
                         )
                       : canDestroy && (
-                          <button title="Stop" onClick={() => action(c.Id, 'stop')} className="text-warn hover:text-accent">
+                          <Button size="sm" variant="ghost" title="Stop" className="text-warn" onClick={() => action(c.Id, 'stop')}>
                             <Square size={14} />
-                          </button>
+                          </Button>
                         )}
                     {canControl && (
-                      <button title="Restart" onClick={() => action(c.Id, 'restart')} className="text-info hover:text-accent">
+                      <Button size="sm" variant="ghost" title="Restart" className="text-info" onClick={() => action(c.Id, 'restart')}>
                         <RotateCw size={14} />
-                      </button>
+                      </Button>
                     )}
                     {canDestroy && (
-                      <button title="Remove" onClick={() => remove(c.Id)} className="text-danger hover:text-accent">
+                      <Button size="sm" variant="ghost" title="Remove" className="text-danger" onClick={() => remove(c.Id)}>
                         <Trash2 size={14} />
-                      </button>
+                      </Button>
                     )}
-                  </td>
-                </tr>
-              );
-            })}
-            {items.length === 0 && (
-              <tr><td colSpan={6} className="py-4 px-3 text-center text-muted">Nenhum container.</td></tr>
-            )}
-          </tbody>
-        </table>
-      </Card>
+                  </div>
+                </Td>
+              </Tr>
+            );
+          })}
+          {items.length === 0 && (
+            <Tr><Td colSpan={6} className="text-center text-muted">Nenhum container.</Td></Tr>
+          )}
+        </tbody>
+      </DataTable>
 
       {logs && (
         <Card className="p-3" ref={logsRef}>
@@ -324,40 +331,39 @@ function ImagesTab({ serverId, canDeploy, canDestroy }: { serverId: string; canD
           </Button>
         </Card>
       )}
-      <Card className="p-0 overflow-hidden">
-        <table className="w-full text-sm">
-          <thead className="bg-panel2 text-xs uppercase text-muted">
-            <tr>
-              <th className="text-left px-3 py-2">Repository:Tag</th>
-              <th className="text-left px-3 py-2">ID</th>
-              <th className="text-right px-3 py-2">Tamanho</th>
-              <th />
-            </tr>
-          </thead>
-          <tbody>
-            {safeArray<any>(items).map((img: any) => (
-              <tr key={img.Id} className="border-t border-border">
-                <td className="px-3 py-2 font-mono text-xs">
-                  {(img.RepoTags ?? ['<none>']).join(', ')}
-                </td>
-                <td className="px-3 py-2 font-mono text-xs text-muted">
-                  {(img.Id ?? '').replace('sha256:', '').slice(0, 12)}
-                </td>
-                <td className="px-3 py-2 text-right tabular-nums text-xs">
-                  {fmtBytes(img.Size)}
-                </td>
-                <td className="px-3 py-2 text-right">
-                  {canDestroy && (
-                    <button onClick={() => remove(img.Id)} className="text-danger hover:underline text-xs">
-                      <Trash2 size={12} className="inline" /> remover
-                    </button>
-                  )}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </Card>
+      <DataTable>
+        <THeadRow>
+          <Th>Repository:Tag</Th>
+          <Th>ID</Th>
+          <Th className="text-right">Tamanho</Th>
+          <Th className="text-right">Ações</Th>
+        </THeadRow>
+        <tbody>
+          {safeArray<any>(items).map((img: any) => (
+            <Tr key={img.Id}>
+              <Td className="font-mono text-xs text-text">
+                {(img.RepoTags ?? ['<none>']).join(', ')}
+              </Td>
+              <Td className="font-mono text-xs text-muted">
+                {(img.Id ?? '').replace('sha256:', '').slice(0, 12)}
+              </Td>
+              <Td className="text-right tabular-nums font-mono text-xs">
+                {fmtBytes(img.Size)}
+              </Td>
+              <Td className="text-right">
+                {canDestroy && (
+                  <Button size="sm" variant="ghost" className="text-danger" onClick={() => remove(img.Id)}>
+                    <Trash2 size={12} /> remover
+                  </Button>
+                )}
+              </Td>
+            </Tr>
+          ))}
+          {items.length === 0 && (
+            <Tr><Td colSpan={4} className="text-center text-muted">Nenhuma imagem.</Td></Tr>
+          )}
+        </tbody>
+      </DataTable>
     </>
   );
 }
@@ -397,34 +403,33 @@ function VolumesTab({ serverId, canDeploy, canDestroy }: { serverId: string; can
           <Button onClick={create}><Plus size={14} /> Criar</Button>
         </Card>
       )}
-      <Card className="p-0 overflow-hidden">
-        <table className="w-full text-sm">
-          <thead className="bg-panel2 text-xs uppercase text-muted">
-            <tr>
-              <th className="text-left px-3 py-2">Nome</th>
-              <th className="text-left px-3 py-2">Driver</th>
-              <th className="text-left px-3 py-2">Mountpoint</th>
-              <th />
-            </tr>
-          </thead>
-          <tbody>
-            {safeArray<any>(items).map((v: any) => (
-              <tr key={v.Name} className="border-t border-border">
-                <td className="px-3 py-2 font-mono text-xs">{v.Name}</td>
-                <td className="px-3 py-2 text-xs text-muted">{v.Driver}</td>
-                <td className="px-3 py-2 text-xs text-muted">{v.Mountpoint}</td>
-                <td className="px-3 py-2 text-right">
-                  {canDestroy && (
-                    <button onClick={() => remove(v.Name)} className="text-danger hover:underline text-xs">
-                      <Trash2 size={12} className="inline" /> remover
-                    </button>
-                  )}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </Card>
+      <DataTable>
+        <THeadRow>
+          <Th>Nome</Th>
+          <Th>Driver</Th>
+          <Th>Mountpoint</Th>
+          <Th className="text-right">Ações</Th>
+        </THeadRow>
+        <tbody>
+          {safeArray<any>(items).map((v: any) => (
+            <Tr key={v.Name}>
+              <Td className="font-mono text-xs text-text">{v.Name}</Td>
+              <Td className="text-xs text-muted">{v.Driver}</Td>
+              <Td className="font-mono text-xs text-muted">{v.Mountpoint}</Td>
+              <Td className="text-right">
+                {canDestroy && (
+                  <Button size="sm" variant="ghost" className="text-danger" onClick={() => remove(v.Name)}>
+                    <Trash2 size={12} /> remover
+                  </Button>
+                )}
+              </Td>
+            </Tr>
+          ))}
+          {items.length === 0 && (
+            <Tr><Td colSpan={4} className="text-center text-muted">Nenhum volume.</Td></Tr>
+          )}
+        </tbody>
+      </DataTable>
     </>
   );
 }

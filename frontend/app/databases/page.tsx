@@ -1,12 +1,14 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { AppShell } from '@/components/AppShell';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Badge } from '@/components/ui/Badge';
 import { PageHeader } from '@/components/ui/PageHeader';
+import { StatCard } from '@/components/ui/StatCard';
+import { DataTable, THeadRow, Th, Tr, Td } from '@/components/ui/Table';
 import { apiFetch } from '@/lib/api';
 import { fmtTime, safeArray } from '@/lib/utils';
 import { Database as DbIcon } from 'lucide-react';
@@ -59,10 +61,10 @@ export default function DatabasesPage() {
 
   return (
     <AppShell>
-      <div className="p-6 space-y-3">
+      <div className="p-[22px] space-y-4">
         <PageHeader
-          title="PostgreSQL"
-          description="Clusters monitorados, queries ativas, locks e saúde das tabelas."
+          title="PostgreSQL Monitor"
+          description="Queries ativas, locks, top queries e sugestão de índices — multi-database por cluster."
           icon={<DbIcon size={16} />}
           actions={<Button onClick={() => setShowNew(!showNew)}><Plus size={14}/> Novo cluster</Button>}
         />
@@ -179,11 +181,19 @@ function OverviewTab({ cluster }: { cluster: Cluster }) {
   return (
     <>
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <Stat title="Conexões" value={last?.conn_total ?? '—'} sub={`max ${last?.max_connections ?? '—'}`} />
-        <Stat title="TPS" value={last?.tps != null ? Number(last.tps).toFixed(1) : '—'} />
-        <Stat title="Cache hit" value={last?.cache_hit_pct != null ? `${Number(last.cache_hit_pct).toFixed(2)}%` : '—'}
-          tone={last?.cache_hit_pct < 95 ? 'warn' : undefined} />
-        <Stat title="Tamanho DB" value={fmtBytes(last?.db_size_bytes)} />
+        <StatCard
+          label="Conexões"
+          value={last?.conn_total ?? '—'}
+          hint={`max ${last?.max_connections ?? '—'}`}
+          tone="accent"
+        />
+        <StatCard label="TPS" value={last?.tps != null ? Number(last.tps).toFixed(1) : '—'} />
+        <StatCard
+          label="Cache hit"
+          value={last?.cache_hit_pct != null ? `${Number(last.cache_hit_pct).toFixed(2)}%` : '—'}
+          tone={last?.cache_hit_pct == null ? 'default' : last.cache_hit_pct < 95 ? 'warn' : 'success'}
+        />
+        <StatCard label="Tamanho DB" value={fmtBytes(last?.db_size_bytes)} />
       </div>
       <Card className="p-4">
         <div className="text-sm font-medium mb-2">Conexões e TPS (1h)</div>
@@ -237,58 +247,59 @@ function ActiveTab({ cluster }: { cluster: Cluster }) {
   }
 
   return (
-    <Card className="p-0 overflow-hidden">
-      <div className="px-3 py-2 bg-panel2 flex justify-end">
-        <Button variant="ghost" onClick={load}><RefreshCw size={14}/></Button>
+    <div className="space-y-3">
+      <div className="flex justify-end">
+        <Button variant="secondary" size="icon" title="Atualizar" onClick={load}><RefreshCw size={14}/></Button>
       </div>
-      <table className="w-full text-sm">
-        <thead className="bg-panel2 text-xs uppercase text-muted">
-          <tr>
-            <th className="text-left px-3 py-2">PID</th>
-            <th className="text-left px-3 py-2">User/DB</th>
-            <th className="text-left px-3 py-2">Estado</th>
-            <th className="text-left px-3 py-2">Wait</th>
-            <th className="text-left px-3 py-2">Cliente</th>
-            <th className="text-right px-3 py-2" title="Há quanto tempo a query/estado atual começou">Duração</th>
-            <th className="text-right px-3 py-2" title="Idade da conexão (desde que o backend foi aberto), não da query atual">Conectado há</th>
-            <th className="text-left px-3 py-2">Query</th>
-            <th />
-          </tr>
-        </thead>
+      <DataTable>
+        <THeadRow>
+          <Th>PID</Th>
+          <Th>User/DB</Th>
+          <Th>Estado</Th>
+          <Th>Wait</Th>
+          <Th>Cliente</Th>
+          <Th className="text-right" title="Há quanto tempo a query/estado atual começou">Duração</Th>
+          <Th className="text-right" title="Idade da conexão (desde que o backend foi aberto), não da query atual">Conectado há</Th>
+          <Th>Query</Th>
+          <Th />
+        </THeadRow>
         <tbody>
-          {safeArray<any>(items).map((r) => (
-            <tr key={r.pid} className="border-t border-border">
-              <td className="px-3 py-1.5 font-mono text-xs">{r.pid}</td>
-              <td className="px-3 py-1.5 text-xs">{r.usename}@{r.datname}</td>
-              <td className="px-3 py-1.5">
-                <Badge tone={r.state === 'active' ? 'warn' : 'default'}>{r.state}</Badge>
-              </td>
-              <td className="px-3 py-1.5 text-xs text-muted">
-                {r.wait_event_type ? `${r.wait_event_type}/${r.wait_event}` : '—'}
-              </td>
-              <td className="px-3 py-1.5 text-xs text-muted">{r.client_addr ?? '—'}</td>
-              <td className="px-3 py-1.5 text-right tabular-nums text-xs">
-                {fmtDur(r.dur_sec)}
-              </td>
-              <td className="px-3 py-1.5 text-right tabular-nums text-xs text-muted">
-                {fmtDur(r.conn_age_sec)}
-              </td>
-              <td className="px-3 py-1.5 font-mono text-xs max-w-md truncate">{r.query}</td>
-              <td className="px-3 py-1.5 text-right">
-                {r.state === 'active' && (
-                  <button onClick={() => kill(r.pid)} className="text-danger hover:underline text-xs flex items-center gap-1">
-                    <Skull size={11}/> matar
-                  </button>
-                )}
-              </td>
-            </tr>
-          ))}
+          {safeArray<any>(items).map((r) => {
+            const running = r.state === 'active' || r.state === 'running';
+            return (
+              <Tr key={r.pid} tone={running ? 'warn' : undefined}>
+                <Td className="font-mono text-xs">{r.pid}</Td>
+                <Td className="text-xs">{r.usename}@{r.datname}</Td>
+                <Td>
+                  <Badge tone={r.state === 'active' ? 'warn' : 'default'}>{r.state}</Badge>
+                </Td>
+                <Td className="text-xs text-muted">
+                  {r.wait_event_type ? `${r.wait_event_type}/${r.wait_event}` : '—'}
+                </Td>
+                <Td className="text-xs text-muted font-mono">{r.client_addr ?? '—'}</Td>
+                <Td className="text-right font-mono text-xs">
+                  {fmtDur(r.dur_sec)}
+                </Td>
+                <Td className="text-right font-mono text-xs text-muted">
+                  {fmtDur(r.conn_age_sec)}
+                </Td>
+                <Td className="font-mono text-xs max-w-md truncate">{r.query}</Td>
+                <Td className="text-right">
+                  {r.state === 'active' && (
+                    <button onClick={() => kill(r.pid)} className="text-danger hover:underline text-xs inline-flex items-center gap-1">
+                      <Skull size={11}/> matar
+                    </button>
+                  )}
+                </Td>
+              </Tr>
+            );
+          })}
           {items.length === 0 && !loading && (
-            <tr><td colSpan={9} className="py-3 px-3 text-center text-muted text-sm">Nenhuma query ativa.</td></tr>
+            <Tr><Td colSpan={9} className="py-8 text-center text-muted">Nenhuma query ativa.</Td></Tr>
           )}
         </tbody>
-      </table>
-    </Card>
+      </DataTable>
+    </div>
   );
 }
 
@@ -305,40 +316,36 @@ function LocksTab({ cluster }: { cluster: Cluster }) {
   }
 
   return (
-    <Card className="p-3">
-      {items.length === 0 ? (
-        <div className="text-sm text-muted">Nenhum lock detectado.</div>
-      ) : (
-        <table className="w-full text-sm">
-          <thead className="text-xs uppercase text-muted">
-            <tr>
-              <th className="text-left py-1">PID</th>
-              <th className="text-left py-1">Bloqueado por</th>
-              <th className="text-left py-1">Estado</th>
-              <th className="text-left py-1">Query</th>
-              <th />
-            </tr>
-          </thead>
-          <tbody>
-            {safeArray<any>(items).map((r) => (
-              <tr key={r.pid} className="border-t border-border">
-                <td className="py-1 font-mono text-xs">{r.pid}</td>
-                <td className="py-1 font-mono text-xs text-warn">
-                  {Array.isArray(r.blocking) && r.blocking.length ? r.blocking.join(', ') : '— (raiz)'}
-                </td>
-                <td className="py-1"><Badge>{r.state}</Badge></td>
-                <td className="py-1 font-mono text-xs max-w-md truncate">{r.query}</td>
-                <td className="py-1 text-right">
-                  <button onClick={() => kill(r.pid)} className="text-danger hover:underline text-xs">
-                    <Skull size={11} className="inline"/> matar
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
-    </Card>
+    items.length === 0 ? (
+      <Card className="p-6 text-sm text-muted">Nenhum lock detectado.</Card>
+    ) : (
+      <DataTable>
+        <THeadRow>
+          <Th>PID</Th>
+          <Th>Bloqueado por</Th>
+          <Th>Estado</Th>
+          <Th>Query</Th>
+          <Th />
+        </THeadRow>
+        <tbody>
+          {safeArray<any>(items).map((r) => (
+            <Tr key={r.pid} tone="danger">
+              <Td className="font-mono text-xs">{r.pid}</Td>
+              <Td className="font-mono text-xs text-warn">
+                {Array.isArray(r.blocking) && r.blocking.length ? r.blocking.join(', ') : '— (raiz)'}
+              </Td>
+              <Td><Badge>{r.state}</Badge></Td>
+              <Td className="font-mono text-xs max-w-md truncate">{r.query}</Td>
+              <Td className="text-right">
+                <button onClick={() => kill(r.pid)} className="text-danger hover:underline text-xs inline-flex items-center gap-1">
+                  <Skull size={11}/> matar
+                </button>
+              </Td>
+            </Tr>
+          ))}
+        </tbody>
+      </DataTable>
+    )
   );
 }
 
@@ -409,7 +416,7 @@ function TopTab({ cluster }: { cluster: Cluster }) {
           <div className="font-medium text-warn">pg_stat_statements não está habilitado</div>
           <div className="text-muted text-xs mt-1">
             Para popular esta aba, habilite a extensão no cluster:
-            <pre className="mt-2 bg-bg p-2 rounded text-xs">
+            <pre className="mt-2 bg-bg border border-border rounded-lg p-3 font-mono text-xs whitespace-pre-wrap">
 {`# postgresql.conf:
 shared_preload_libraries = 'pg_stat_statements'
 pg_stat_statements.track = all
@@ -422,45 +429,47 @@ CREATE EXTENSION pg_stat_statements;`}
           </div>
         </Card>
       )}
-      <Card className="p-0 overflow-hidden">
-        <table className="w-full text-sm">
-          <thead className="bg-panel2 text-xs uppercase text-muted">
-            <tr>
-              <th className="text-left px-3 py-2">Banco</th>
-              <th className="text-left px-3 py-2">Query</th>
-              <th className="text-right px-3 py-2">Calls</th>
-              <th className="text-right px-3 py-2">Total ms</th>
-              <th className="text-right px-3 py-2">Médio ms</th>
-              <th />
-            </tr>
-          </thead>
+      <div>
+        <div className="text-xs uppercase tracking-wider text-mutedFaint mb-2">Top queries por tempo total</div>
+        <DataTable>
+          <THeadRow>
+            <Th>Banco</Th>
+            <Th>Query</Th>
+            <Th className="text-right">Calls</Th>
+            <Th className="text-right">Total ms</Th>
+            <Th className="text-right">Médio ms</Th>
+            <Th />
+          </THeadRow>
           <tbody>
-            {safeArray<any>(items).map((q) => (
-              <tr key={`${q.datname}.${q.queryid}`} className="border-t border-border align-top">
-                <td className="px-3 py-1.5 text-xs text-muted whitespace-nowrap">{q.datname ?? '—'}</td>
-                <td
-                  className="px-3 py-1.5 font-mono text-xs max-w-2xl truncate cursor-pointer hover:text-accent"
-                  title="Clique para ver a query completa"
-                  onClick={() => openQuery(q)}
-                >
-                  {q.query_text}
-                </td>
-                <td className="px-3 py-1.5 text-right tabular-nums">{Number(q.calls).toLocaleString()}</td>
-                <td className="px-3 py-1.5 text-right tabular-nums">{Number(q.total_ms).toFixed(0)}</td>
-                <td className="px-3 py-1.5 text-right tabular-nums">{Number(q.mean_ms).toFixed(2)}</td>
-                <td className="px-3 py-1.5 text-right">
-                  <button onClick={() => openQuery(q)} className="text-accent hover:underline text-xs">Ver / EXPLAIN</button>
-                </td>
-              </tr>
-            ))}
+            {safeArray<any>(items).map((q) => {
+              const slow = Number(q.mean_ms) >= 100;
+              return (
+                <Tr key={`${q.datname}.${q.queryid}`} tone={slow ? 'warn' : undefined}>
+                  <Td className="text-xs text-muted whitespace-nowrap font-mono">{q.datname ?? '—'}</Td>
+                  <Td
+                    className="font-mono text-xs max-w-2xl truncate cursor-pointer hover:text-accent"
+                    title="Clique para ver a query completa"
+                    onClick={() => openQuery(q)}
+                  >
+                    {q.query_text}
+                  </Td>
+                  <Td className="text-right font-mono">{Number(q.calls).toLocaleString()}</Td>
+                  <Td className="text-right font-mono">{Number(q.total_ms).toFixed(0)}</Td>
+                  <Td className={`text-right font-mono ${slow ? 'text-warn' : ''}`}>{Number(q.mean_ms).toFixed(2)}</Td>
+                  <Td className="text-right">
+                    <button onClick={() => openQuery(q)} className="text-accent hover:underline text-xs">Ver / EXPLAIN</button>
+                  </Td>
+                </Tr>
+              );
+            })}
             {items.length === 0 && !noStatStatements && (
-              <tr><td colSpan={6} className="py-4 px-3 text-center text-muted">
+              <Tr><Td colSpan={6} className="py-8 text-center text-muted">
                 Sem dados ainda — aguarde 1-2 ciclos de coleta.
-              </td></tr>
+              </Td></Tr>
             )}
           </tbody>
-        </table>
-      </Card>
+        </DataTable>
+      </div>
 
       {panel && (() => {
         const n = placeholderCount(panel.q.query_text);
@@ -492,7 +501,7 @@ CREATE EXTENSION pg_stat_statements;`}
                 </button>
               )}
             </div>
-            <pre className="text-xs bg-bg p-2 rounded border border-border max-h-60 overflow-auto whitespace-pre-wrap">
+            <pre className="bg-bg border border-border rounded-lg p-3 font-mono text-xs max-h-60 overflow-auto whitespace-pre-wrap">
 {displayText}
             </pre>
 
@@ -517,16 +526,16 @@ CREATE EXTENSION pg_stat_statements;`}
             )}
 
             <div className="mt-3 flex gap-2">
-              <button onClick={() => runExplain(false)} className="text-xs px-3 py-1.5 rounded bg-accent text-white">
+              <Button size="sm" onClick={() => runExplain(false)}>
                 EXPLAIN
-              </button>
-              <button onClick={() => runExplain(true)} className="text-xs px-3 py-1.5 rounded border border-border">
+              </Button>
+              <Button size="sm" variant="secondary" onClick={() => runExplain(true)}>
                 EXPLAIN ANALYZE
-              </button>
+              </Button>
             </div>
 
             {panel.plan && (
-              <pre className="text-xs bg-bg p-2 rounded border border-border max-h-96 overflow-auto whitespace-pre-wrap mt-3">
+              <pre className="bg-bg border border-border rounded-lg p-3 font-mono text-xs max-h-96 overflow-auto whitespace-pre-wrap mt-3">
 {typeof panel.plan === 'string' ? panel.plan : JSON.stringify(panel.plan, null, 2)}
               </pre>
             )}
@@ -548,73 +557,72 @@ function HealthTab({ cluster }: { cluster: Cluster }) {
 
   return (
     <>
-      <Card className="p-0 overflow-hidden">
-        <div className="px-3 py-2 bg-panel2 text-xs uppercase text-muted">Tabelas com mais bloat</div>
-        <table className="w-full text-sm">
-          <thead className="text-xs uppercase text-muted">
-            <tr>
-              <th className="text-left px-3 py-1">Banco</th>
-              <th className="text-left px-3 py-1">Tabela</th>
-              <th className="text-right px-3 py-1">Live</th>
-              <th className="text-right px-3 py-1">Dead</th>
-              <th className="text-right px-3 py-1">Dead %</th>
-              <th className="text-right px-3 py-1">Tamanho</th>
-              <th className="text-left px-3 py-1">Última autovacuum</th>
-            </tr>
-          </thead>
+      <div>
+        <div className="text-xs uppercase tracking-wider text-mutedFaint mb-2">Tabelas com mais bloat</div>
+        <DataTable>
+          <THeadRow>
+            <Th>Banco</Th>
+            <Th>Tabela</Th>
+            <Th className="text-right">Live</Th>
+            <Th className="text-right">Dead</Th>
+            <Th className="text-right">Dead %</Th>
+            <Th className="text-right">Tamanho</Th>
+            <Th>Última autovacuum</Th>
+          </THeadRow>
           <tbody>
             {safeArray<any>(tables)
               .slice()
               .sort((a, b) => (b.dead_pct ?? 0) - (a.dead_pct ?? 0))
               .slice(0, 30)
-              .map((t) => (
-                <tr key={`${t.datname}.${t.schema_name}.${t.relname}`} className="border-t border-border">
-                  <td className="px-3 py-1 text-xs text-muted whitespace-nowrap">{t.datname ?? '—'}</td>
-                  <td className="px-3 py-1 font-mono text-xs">{t.schema_name}.{t.relname}</td>
-                  <td className="px-3 py-1 text-right tabular-nums">{Number(t.n_live_tup).toLocaleString()}</td>
-                  <td className="px-3 py-1 text-right tabular-nums">{Number(t.n_dead_tup).toLocaleString()}</td>
-                  <td className={`px-3 py-1 text-right tabular-nums ${
-                    t.dead_pct > 20 ? 'text-danger' : t.dead_pct > 10 ? 'text-warn' : ''
-                  }`}>{Number(t.dead_pct ?? 0).toFixed(1)}%</td>
-                  <td className="px-3 py-1 text-right tabular-nums">{fmtBytes(t.total_size_bytes)}</td>
-                  <td className="px-3 py-1 text-xs text-muted">
-                    {t.last_autovacuum ? fmtTime(t.last_autovacuum) : '—'}
-                  </td>
-                </tr>
-              ))}
+              .map((t) => {
+                const dead = t.dead_pct ?? 0;
+                return (
+                  <Tr key={`${t.datname}.${t.schema_name}.${t.relname}`} tone={dead > 20 ? 'danger' : dead > 10 ? 'warn' : undefined}>
+                    <Td className="text-xs text-muted whitespace-nowrap font-mono">{t.datname ?? '—'}</Td>
+                    <Td className="font-mono text-xs">{t.schema_name}.{t.relname}</Td>
+                    <Td className="text-right font-mono">{Number(t.n_live_tup).toLocaleString()}</Td>
+                    <Td className="text-right font-mono">{Number(t.n_dead_tup).toLocaleString()}</Td>
+                    <Td className={`text-right font-mono ${
+                      dead > 20 ? 'text-danger' : dead > 10 ? 'text-warn' : ''
+                    }`}>{Number(dead).toFixed(1)}%</Td>
+                    <Td className="text-right font-mono">{fmtBytes(t.total_size_bytes)}</Td>
+                    <Td className="text-xs text-muted">
+                      {t.last_autovacuum ? fmtTime(t.last_autovacuum) : '—'}
+                    </Td>
+                  </Tr>
+                );
+              })}
           </tbody>
-        </table>
-      </Card>
+        </DataTable>
+      </div>
 
-      <Card className="p-3 mt-3">
-        <div className="text-xs uppercase tracking-wider text-muted mb-2">Sugestões de índice (seq_scan elevado)</div>
+      <div>
+        <div className="text-xs uppercase tracking-wider text-mutedFaint mb-2">Sugestões de índice (seq_scan elevado)</div>
         {hints.length === 0 ? (
-          <div className="text-sm text-muted">Sem sugestões no momento.</div>
+          <Card className="p-6 text-sm text-muted">Sem sugestões no momento.</Card>
         ) : (
-          <table className="w-full text-sm">
-            <thead className="text-xs uppercase text-muted">
-              <tr>
-                <th className="text-left py-1">Banco</th>
-                <th className="text-left py-1">Tabela</th>
-                <th className="text-right py-1">Seq scans</th>
-                <th className="text-right py-1">Idx scans</th>
-                <th className="text-left py-1">Hint</th>
-              </tr>
-            </thead>
+          <DataTable>
+            <THeadRow>
+              <Th>Banco</Th>
+              <Th>Tabela</Th>
+              <Th className="text-right">Seq scans</Th>
+              <Th className="text-right">Idx scans</Th>
+              <Th>Hint</Th>
+            </THeadRow>
             <tbody>
               {safeArray<any>(hints).map((h, i) => (
-                <tr key={i} className="border-t border-border">
-                  <td className="py-1 text-xs text-muted whitespace-nowrap">{h.datname ?? '—'}</td>
-                  <td className="py-1 font-mono text-xs">{h.schema}.{h.table}</td>
-                  <td className="py-1 text-right tabular-nums">{Number(h.seq_scan).toLocaleString()}</td>
-                  <td className="py-1 text-right tabular-nums">{Number(h.idx_scan ?? 0).toLocaleString()}</td>
-                  <td className="py-1 text-xs text-muted">{h.hint}</td>
-                </tr>
+                <Tr key={i} tone="warn">
+                  <Td className="text-xs text-muted whitespace-nowrap font-mono">{h.datname ?? '—'}</Td>
+                  <Td className="font-mono text-xs">{h.schema}.{h.table}</Td>
+                  <Td className="text-right font-mono">{Number(h.seq_scan).toLocaleString()}</Td>
+                  <Td className="text-right font-mono">{Number(h.idx_scan ?? 0).toLocaleString()}</Td>
+                  <Td className="text-xs text-muted font-mono">{h.hint}</Td>
+                </Tr>
               ))}
             </tbody>
-          </table>
+          </DataTable>
         )}
-      </Card>
+      </div>
     </>
   );
 }
@@ -830,15 +838,6 @@ function EditClusterForm({
   );
 }
 
-function Stat({ title, value, sub, tone }: { title: string; value: any; sub?: string; tone?: 'warn' }) {
-  return (
-    <Card className="p-3">
-      <div className="text-xs text-muted">{title}</div>
-      <div className={`text-xl font-semibold mt-0.5 ${tone === 'warn' ? 'text-warn' : ''}`}>{value}</div>
-      {sub && <div className="text-xs text-muted">{sub}</div>}
-    </Card>
-  );
-}
 function fmtBytes(b?: number) {
   if (b == null) return '—';
   const u = ['B','KB','MB','GB','TB']; let v = Number(b); let i = 0;

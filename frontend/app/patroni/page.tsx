@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Badge } from '@/components/ui/Badge';
 import { PageHeader } from '@/components/ui/PageHeader';
+import { DataTable, THeadRow, Th, Tr, Td } from '@/components/ui/Table';
 import { apiFetch, Auth } from '@/lib/api';
 import { safeArray } from '@/lib/utils';
 import { Plus, Trash2, X, Layers } from 'lucide-react';
@@ -112,10 +113,10 @@ export default function PatroniPage() {
 
   return (
     <AppShell>
-      <div className="p-6 space-y-4">
+      <div className="p-[22px] space-y-4">
         <PageHeader
           title="Cluster Patroni"
-          description="Topologia, papéis e histórico de switchover dos clusters PostgreSQL/Patroni."
+          description="Topologia leader/replica, lag e timeline — somente leitura via API REST do Patroni."
           icon={<Layers size={16} />}
           actions={
             canManage && (
@@ -238,55 +239,103 @@ export default function PatroniPage() {
             ) : (
               <>
                 <div className="text-sm text-muted">
-                  Scope: <span className="text-text">{status.scope}</span> · via{' '}
-                  <span className="text-text">{status.via}</span>
+                  Scope: <span className="text-text font-mono">{status.scope}</span> · via{' '}
+                  <span className="text-text font-mono">{status.via}</span>
                 </div>
-                <Card className="p-0 overflow-hidden">
-                  <table className="w-full text-sm">
-                    <thead className="bg-panel2 text-muted text-xs uppercase tracking-wide">
-                      <tr>
-                        <th className="text-left px-3 py-2">Membro</th>
-                        <th className="text-left px-3 py-2">Papel</th>
-                        <th className="text-left px-3 py-2">Estado</th>
-                        <th className="text-left px-3 py-2">Host</th>
-                        <th className="text-right px-3 py-2">Lag</th>
-                        <th className="text-right px-3 py-2">Timeline</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {safeArray<any>(status?.members).map((m: any) => (
-                        <tr key={m.name} className="border-t border-border">
-                          <td className="px-3 py-2">{m.name}</td>
-                          <td className="px-3 py-2">
-                            {m.role === 'leader' ? (
-                              <Badge tone="accent">leader</Badge>
+
+                <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
+                  {safeArray<any>(status?.members)
+                    .slice()
+                    .sort(
+                      (a: any, b: any) =>
+                        (b.role === 'leader' ? 1 : 0) - (a.role === 'leader' ? 1 : 0),
+                    )
+                    .map((m: any) => {
+                      const isLeader = m.role === 'leader';
+                      const stateOk = m.state === 'running' || m.state === 'streaming';
+                      return (
+                        <Card
+                          key={m.name}
+                          className={
+                            isLeader
+                              ? 'border-accent bg-accent/[0.08] p-4'
+                              : 'bg-panel border-border p-4'
+                          }
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            {isLeader ? (
+                              <Badge tone="accent">LEADER</Badge>
                             ) : (
-                              <Badge>{m.role}</Badge>
+                              <Badge>REPLICA</Badge>
                             )}
-                          </td>
-                          <td className="px-3 py-2">
                             <span
-                              className={
-                                m.state === 'running' ? 'text-success' : 'text-warn'
-                              }
+                              className={`inline-flex items-center gap-1.5 text-2xs uppercase tracking-wide ${
+                                stateOk ? 'text-success' : 'text-warn'
+                              }`}
                             >
                               ● {m.state}
                             </span>
-                          </td>
-                          <td className="px-3 py-2 text-muted">
+                          </div>
+                          <div className="mt-3 text-sm font-medium text-text truncate">
+                            {m.name}
+                          </div>
+                          <div className="mt-1 text-xs text-muted font-mono truncate">
                             {m.host}:{m.port}
-                          </td>
-                          <td className="px-3 py-2 text-right tabular-nums">
-                            {m.lag != null ? m.lag : '—'}
-                          </td>
-                          <td className="px-3 py-2 text-right tabular-nums">
-                            {m.timeline ?? '—'}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </Card>
+                          </div>
+                          <div className="mt-3 flex items-center justify-between text-xs">
+                            {isLeader ? (
+                              <>
+                                <span className="text-muted">Timeline</span>
+                                <span className="font-mono text-text">TL {m.timeline ?? '—'}</span>
+                              </>
+                            ) : (
+                              <>
+                                <span className="text-muted">Replicação</span>
+                                <span className="font-mono text-text">
+                                  lag {m.lag != null ? m.lag : '—'}
+                                </span>
+                              </>
+                            )}
+                          </div>
+                        </Card>
+                      );
+                    })}
+                </div>
+
+                <DataTable>
+                  <THeadRow>
+                    <Th>Membro</Th>
+                    <Th>Papel</Th>
+                    <Th>Estado</Th>
+                    <Th>Host</Th>
+                    <Th className="text-right">Lag</Th>
+                    <Th className="text-right">Timeline</Th>
+                  </THeadRow>
+                  <tbody>
+                    {safeArray<any>(status?.members).map((m: any) => (
+                      <Tr key={m.name}>
+                        <Td className="text-text">{m.name}</Td>
+                        <Td>
+                          {m.role === 'leader' ? (
+                            <Badge tone="accent">leader</Badge>
+                          ) : (
+                            <Badge>{m.role}</Badge>
+                          )}
+                        </Td>
+                        <Td>
+                          <span className={m.state === 'running' ? 'text-success' : 'text-warn'}>
+                            ● {m.state}
+                          </span>
+                        </Td>
+                        <Td className="text-muted font-mono">
+                          {m.host}:{m.port}
+                        </Td>
+                        <Td className="text-right font-mono">{m.lag != null ? m.lag : '—'}</Td>
+                        <Td className="text-right font-mono">{m.timeline ?? '—'}</Td>
+                      </Tr>
+                    ))}
+                  </tbody>
+                </DataTable>
               </>
             )}
 

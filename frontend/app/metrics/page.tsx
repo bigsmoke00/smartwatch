@@ -3,8 +3,8 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { AppShell } from '@/components/AppShell';
-import { Card } from '@/components/ui/Card';
 import { PageHeader } from '@/components/ui/PageHeader';
+import { DataTable, THeadRow, Th, Tr, Td } from '@/components/ui/Table';
 import { apiFetch } from '@/lib/api';
 import { fmtTime, safeArray } from '@/lib/utils';
 import { Activity } from 'lucide-react';
@@ -48,65 +48,64 @@ export default function MetricsPage() {
 
   return (
     <AppShell>
-      <div className="p-6 space-y-4">
+      <div className="p-[22px] space-y-4">
         <PageHeader title="Métricas da frota" description="CPU, memória e load médio em tempo real por servidor." icon={<Activity size={16} />} />
-        <Card className="p-0 overflow-hidden">
-          <table className="w-full text-sm">
-            <thead className="bg-panel2 text-muted text-xs uppercase tracking-wide">
-              <tr>
-                <th className="text-left px-3 py-2">Servidor</th>
-                <th className="text-left px-3 py-2">Cloud</th>
-                <th className="text-left px-3 py-2 w-40">CPU</th>
-                <th className="text-left px-3 py-2 w-40">Memória</th>
-                <th className="text-left px-3 py-2">Load 1m</th>
-                <th className="text-left px-3 py-2">Última amostra</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.length === 0 && (
-                <tr>
-                  <td colSpan={6} className="px-3 py-6 text-center text-muted">
-                    Nenhuma métrica recebida ainda.
-                  </td>
-                </tr>
-              )}
-              {safeArray<FleetRow>(rows).map((r) => (
-                <tr key={r.serverId} className="border-t border-border">
-                  <td className="px-3 py-2">
-                    <Link href={`/metrics/${r.serverId}`} className="hover:text-accent">
+        <DataTable>
+          <THeadRow>
+            <Th>Servidor</Th>
+            <Th>Cloud · região</Th>
+            <Th className="w-44">CPU</Th>
+            <Th className="w-44">Memória</Th>
+            <Th>Load 1m</Th>
+            <Th>Última amostra</Th>
+          </THeadRow>
+          <tbody>
+            {rows.length === 0 && (
+              <Tr className="hover:bg-transparent">
+                <Td colSpan={6} className="text-center text-muted py-8">
+                  Nenhuma métrica recebida ainda.
+                </Td>
+              </Tr>
+            )}
+            {safeArray<FleetRow>(rows).map((r) => {
+              const cpu = r.cpu ?? 0;
+              return (
+                <Tr key={r.serverId} tone={cpu > 90 ? 'danger' : cpu > 75 ? 'warn' : 'default'}>
+                  <Td>
+                    <Link href={`/metrics/${r.serverId}`} className="hover:text-accentSoft font-medium">
                       {r.serverName}
                     </Link>
-                  </td>
-                  <td className="px-3 py-2 text-muted">
+                  </Td>
+                  <Td className="text-muted">
                     {r.cloud ? `${r.cloud} · ${r.cloudRegion ?? ''}` : '—'}
-                  </td>
-                  <td className="px-3 py-2">
+                  </Td>
+                  <Td>
                     <div className="flex items-center gap-2">
-                      <span className="w-12 tabular-nums">
+                      <span className="w-11 font-mono tabular-nums text-xs">
                         {r.cpu != null ? `${r.cpu.toFixed(0)}%` : '—'}
                       </span>
                       {bar(r.cpu)}
                     </div>
-                  </td>
-                  <td className="px-3 py-2">
+                  </Td>
+                  <Td>
                     <div className="flex items-center gap-2">
-                      <span className="w-12 tabular-nums">
+                      <span className="w-11 font-mono tabular-nums text-xs">
                         {r.memPct != null ? `${r.memPct.toFixed(0)}%` : '—'}
                       </span>
                       {bar(r.memPct)}
                     </div>
-                  </td>
-                  <td className="px-3 py-2 tabular-nums">
+                  </Td>
+                  <Td className="font-mono tabular-nums">
                     {r.load1 != null ? r.load1.toFixed(2) : '—'}
-                  </td>
-                  <td className="px-3 py-2 text-muted text-xs">
+                  </Td>
+                  <Td className="text-muted font-mono text-xs">
                     {r.ts ? fmtTime(r.ts) : '—'}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </Card>
+                  </Td>
+                </Tr>
+              );
+            })}
+          </tbody>
+        </DataTable>
       </div>
     </AppShell>
   );

@@ -7,10 +7,11 @@ import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Badge } from '@/components/ui/Badge';
 import { PageHeader } from '@/components/ui/PageHeader';
+import { DataTable, THeadRow, Th, Tr, Td } from '@/components/ui/Table';
 import { Select } from '@/components/ui/Select';
 import { ServerPicker } from '@/components/ServerPicker';
 import { apiFetch, Auth, handleUnauthorized } from '@/lib/api';
-import { fmtTime, safeArray } from '@/lib/utils';
+import { cn, fmtTime, safeArray } from '@/lib/utils';
 import { Download, Package, Calendar, Trash2 } from 'lucide-react';
 
 interface Schedule {
@@ -65,72 +66,88 @@ export default function ExportsPage() {
 
   return (
     <AppShell>
-      <div className="p-6 space-y-4">
-        <PageHeader title="Log exports" description="Download manual e agendamentos recorrentes de exportação de logs." icon={<Download size={16} />} />
+      <div className="p-[22px] space-y-4">
+        <PageHeader
+          title="Log exports"
+          description="Download manual e agendamentos recorrentes de exportação de logs."
+          icon={<Download size={16} />}
+          actions={
+            <Button onClick={() => setShowSchedule(!showSchedule)}>
+              <Calendar size={14} /> Novo agendamento
+            </Button>
+          }
+        />
 
         <Card className="p-4">
           <h2 className="text-sm font-medium mb-3">Download por servidor</h2>
           <ServerExportList onExport={downloadExport} onBundle={downloadBundle} />
         </Card>
 
-        <div className="flex justify-between items-center">
-          <h2 className="text-lg font-semibold">Agendamentos</h2>
-          <Button onClick={() => setShowSchedule(!showSchedule)}>
-            <Calendar size={14} /> Novo agendamento
-          </Button>
-        </div>
-        {showSchedule && (
-          <NewScheduleForm onCreated={() => { setShowSchedule(false); loadSchedules(); }} />
-        )}
-        <Card className="p-0 overflow-hidden">
-          <table className="w-full text-sm">
-            <thead className="bg-panel2 text-xs uppercase text-muted">
-              <tr>
-                <th className="text-left px-3 py-2">Nome</th>
-                <th className="text-left px-3 py-2">Formato</th>
-                <th className="text-left px-3 py-2">Cron</th>
-                <th className="text-left px-3 py-2">Destino</th>
-                <th className="text-left px-3 py-2">Última</th>
-                <th />
-              </tr>
-            </thead>
+        <div className="space-y-3">
+          <h2 className="text-sm font-semibold text-text">Agendamentos</h2>
+          {showSchedule && (
+            <NewScheduleForm onCreated={() => { setShowSchedule(false); loadSchedules(); }} />
+          )}
+          <DataTable>
+            <THeadRow>
+              <Th>Nome</Th>
+              <Th>Destino</Th>
+              <Th>Agenda</Th>
+              <Th>Formato</Th>
+              <Th>Última run</Th>
+              <Th className="text-right">Ações</Th>
+            </THeadRow>
             <tbody>
               {safeArray<Schedule>(schedules).map((s) => (
-                <tr key={s.id} className="border-t border-border">
-                  <td className="px-3 py-1.5">{s.name}</td>
-                  <td className="px-3 py-1.5"><Badge>{s.format}</Badge></td>
-                  <td className="px-3 py-1.5 font-mono text-xs">{s.scheduleCron}</td>
-                  <td className="px-3 py-1.5 text-xs text-muted">
-                    {s.destination?.type}: {s.destination?.email ?? s.destination?.bucket ?? '—'}
-                  </td>
-                  <td className="px-3 py-1.5 text-xs">
-                    {s.lastRunAt ? fmtTime(s.lastRunAt) : '—'}{' '}
-                    {s.lastStatus && (
-                      <Badge tone={s.lastStatus === 'ok' ? 'success' : 'danger'}>
-                        {s.lastStatus}
-                      </Badge>
+                <Tr key={s.id}>
+                  <Td className="font-medium text-text">{s.name}</Td>
+                  <Td className="text-muted">
+                    <span className="text-mutedFaint">{s.destination?.type}:</span>{' '}
+                    {s.destination?.email ?? s.destination?.bucket ?? '—'}
+                  </Td>
+                  <Td className="font-mono text-xs text-muted">{s.scheduleCron}</Td>
+                  <Td><Badge>{s.format}</Badge></Td>
+                  <Td>
+                    {s.lastRunAt ? (
+                      <span
+                        className={cn(
+                          'font-mono text-xs',
+                          s.lastStatus === 'ok'
+                            ? 'text-success'
+                            : s.lastStatus
+                              ? 'text-danger'
+                              : 'text-muted',
+                        )}
+                      >
+                        {s.lastStatus ? `${s.lastStatus} · ` : ''}
+                        {fmtTime(s.lastRunAt)}
+                      </span>
+                    ) : (
+                      <span className="text-mutedFaint">—</span>
                     )}
-                  </td>
-                  <td className="px-3 py-1.5 text-right">
+                  </Td>
+                  <Td className="text-right">
                     <button
                       onClick={async () => {
                         if (!confirm('Remover?')) return;
                         await apiFetch(`/logs/schedules/${s.id}`, { method: 'DELETE' });
                         loadSchedules();
                       }}
-                      className="text-danger hover:underline text-xs"
+                      className="text-danger hover:underline text-xs inline-flex items-center gap-1"
                     >
-                      <Trash2 size={12} className="inline" /> remover
+                      <Trash2 size={12} /> remover
                     </button>
-                  </td>
-                </tr>
+                  </Td>
+                </Tr>
               ))}
               {schedules.length === 0 && (
-                <tr><td colSpan={6} className="py-3 px-3 text-center text-muted">Sem agendamentos.</td></tr>
+                <Tr>
+                  <Td colSpan={6} className="py-6 text-center text-muted">Sem agendamentos.</Td>
+                </Tr>
               )}
             </tbody>
-          </table>
-        </Card>
+          </DataTable>
+        </div>
       </div>
     </AppShell>
   );

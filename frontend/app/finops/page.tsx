@@ -9,22 +9,10 @@ import { Badge } from '@/components/ui/Badge';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { StatCard } from '@/components/ui/StatCard';
 import { Select } from '@/components/ui/Select';
+import { DataTable, THeadRow, Th, Tr, Td } from '@/components/ui/Table';
 import { apiFetch } from '@/lib/api';
 import { safeArray, sumBy } from '@/lib/utils';
 import { DollarSign } from 'lucide-react';
-import {
-  ResponsiveContainer,
-  AreaChart,
-  Area,
-  XAxis,
-  YAxis,
-  Tooltip,
-  CartesianGrid,
-  PieChart,
-  Pie,
-  Cell,
-  Legend,
-} from 'recharts';
 
 interface Summary {
   totals: { total: number; currency: string }[];
@@ -45,7 +33,10 @@ interface BudgetStatus {
   currency: string;
 }
 
-const COLORS = ['#7c5cff', '#22c55e', '#f59e0b', '#3b82f6', '#ef4444', '#06b6d4', '#ec4899'];
+// Cores de trilha das barras de custo por provedor, em tokens do tema.
+const PROVIDER_FILLS = ['bg-accent', 'bg-accentSoft', 'bg-mutedFaint'];
+
+const money = (n: number) => `$${n.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
 
 export default function FinopsPage() {
   const [summary, setSummary] = useState<Summary | null>(null);
@@ -83,9 +74,28 @@ export default function FinopsPage() {
 
   const total = sumBy<any>(summary?.totals, 'total');
 
+  const accounts = safeArray<Summary['byAccount'][number]>(summary?.byAccount);
+  const services = safeArray<Summary['byService'][number]>(summary?.byService);
+  const topServices = services.slice(0, 7);
+  const maxService = Math.max(1, ...topServices.map((s) => s.cost));
+
+  // Agrega o custo por provedor (cloud) a partir das contas retornadas.
+  const byProvider = Object.entries(
+    accounts.reduce<Record<string, number>>((acc, a) => {
+      acc[a.cloud] = (acc[a.cloud] ?? 0) + (a.cost ?? 0);
+      return acc;
+    }, {}),
+  )
+    .map(([cloud, cost]) => ({ cloud, cost }))
+    .sort((a, b) => b.cost - a.cost);
+  const maxProvider = Math.max(1, ...byProvider.map((p) => p.cost));
+
+  const budgetsList = safeArray<BudgetStatus>(budgets);
+  const budgetsAlert = budgetsList.filter((b) => (b.pct ?? 0) >= b.alertAtPct).length;
+
   return (
     <AppShell>
-      <div className="p-6 space-y-4">
+      <div className="p-[22px] space-y-4">
         <PageHeader
           title="FinOps"
           description="Custos de nuvem, budgets e sincronização multi-cloud."
@@ -124,122 +134,111 @@ export default function FinopsPage() {
           </div>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <StatCard label={`Custo total (${days}d)`} value={`$${total.toLocaleString(undefined, { maximumFractionDigits: 2 })}`} />
-          <StatCard label="Contas únicas" value={safeArray(summary?.byAccount).length} />
-          <StatCard label="Serviços ativos" value={safeArray(summary?.byService).length} />
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+          <StatCard label={`Custo total (${days}d)`} value={money(total)} tone="accent" />
+          <StatCard label="Contas únicas" value={accounts.length} />
+          <StatCard label="Serviços ativos" value={services.length} />
+          <StatCard
+            label="Budgets em alerta"
+            value={budgetsAlert}
+            tone={budgetsAlert > 0 ? 'warn' : 'success'}
+          />
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-          <Card className="p-4 lg:col-span-2">
-            <div className="text-sm font-medium mb-2">Custo diário</div>
-            <div className="h-72">
-              <ResponsiveContainer>
-                <AreaChart data={safeArray(summary?.series)}>
-                  <CartesianGrid stroke="#222632" strokeDasharray="3 3" />
-                  <XAxis dataKey="ts" stroke="#8a91a3" fontSize={11} />
-                  <YAxis stroke="#8a91a3" fontSize={11} />
-                  <Tooltip
-                    contentStyle={{ background: '#13161d', border: '1px solid #222632', fontSize: 12 }}
-                    formatter={(v: any) => `$${Number(v).toFixed(2)}`}
-                  />
-                  <Area
-                    type="monotone"
-                    dataKey="cost"
-                    stroke="#7c5cff"
-                    fill="#7c5cff33"
-                    name="Custo USD"
-                  />
-                </AreaChart>
-              </ResponsiveContainer>
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <Card className="p-4">
+            <div className="text-sm font-medium text-text mb-3">Custo por provedor</div>
+            <div className="space-y-3">
+              {byProvider.length === 0 && (
+                <div className="text-sm text-muted">Sem dados de custo no período.</div>
+              )}
+              {byProvider.map((p, i) => (
+                <div key={p.cloud}>
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-[13px] uppercase tracking-wide text-text">{p.cloud}</span>
+                    <span className="font-mono text-[13px] text-muted">{money(p.cost)}</span>
+                  </div>
+                  <div className="h-2 rounded bg-panel3">
+                    <div
+                      className={`h-2 rounded ${PROVIDER_FILLS[i % PROVIDER_FILLS.length]}`}
+                      style={{ width: `${(p.cost / maxProvider) * 100}%` }}
+                    />
+                  </div>
+                </div>
+              ))}
             </div>
           </Card>
 
           <Card className="p-4">
-            <div className="text-sm font-medium mb-2">Top serviços</div>
-            <div className="h-72">
-              <ResponsiveContainer>
-                <PieChart>
-                  <Pie
-                    data={safeArray(summary?.byService).slice(0, 7)}
-                    dataKey="cost"
-                    nameKey="service"
-                    cx="50%"
-                    cy="50%"
-                    outerRadius={80}
-                  >
-                    {safeArray(summary?.byService).slice(0, 7).map((_, i) => (
-                      <Cell key={i} fill={COLORS[i % COLORS.length]} />
-                    ))}
-                  </Pie>
-                  <Legend
-                    layout="horizontal"
-                    align="center"
-                    verticalAlign="bottom"
-                    wrapperStyle={{ fontSize: 11 }}
-                  />
-                  <Tooltip
-                    formatter={(v: any) => `$${Number(v).toFixed(2)}`}
-                    contentStyle={{ background: '#13161d', border: '1px solid #222632', fontSize: 12 }}
-                  />
-                </PieChart>
-              </ResponsiveContainer>
+            <div className="text-sm font-medium text-text mb-3">Top serviços</div>
+            <div className="space-y-3">
+              {topServices.length === 0 && (
+                <div className="text-sm text-muted">Sem serviços no período.</div>
+              )}
+              {topServices.map((s) => (
+                <div key={s.service}>
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-[13px] text-text">{s.service}</span>
+                    <span className="font-mono text-[13px] text-muted">{money(s.cost)}</span>
+                  </div>
+                  <div className="h-2 rounded bg-panel3">
+                    <div
+                      className="h-2 rounded bg-accentSoft"
+                      style={{ width: `${(s.cost / maxService) * 100}%` }}
+                    />
+                  </div>
+                </div>
+              ))}
             </div>
           </Card>
         </div>
 
-        <Card className="p-4">
-          <div className="flex items-center justify-between mb-3">
-            <h2 className="text-sm font-medium">Budgets mensais</h2>
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <h2 className="text-sm font-medium text-text">Budgets mensais</h2>
             <Button onClick={() => setShowNewBudget(!showNewBudget)}>Novo budget</Button>
           </div>
           {showNewBudget && <NewBudgetForm onCreated={() => { setShowNewBudget(false); load(); }} />}
-          <table className="w-full text-sm">
-            <thead className="text-xs uppercase text-muted">
-              <tr>
-                <th className="text-left py-1">Cloud</th>
-                <th className="text-left py-1">Conta</th>
-                <th className="text-left py-1">Serviço</th>
-                <th className="text-right py-1">Limite</th>
-                <th className="text-right py-1">Gasto</th>
-                <th className="text-left py-1 w-48">Uso</th>
-              </tr>
-            </thead>
+          <DataTable>
+            <THeadRow>
+              <Th>Cloud</Th>
+              <Th>Conta</Th>
+              <Th>Serviço</Th>
+              <Th className="text-right">Limite</Th>
+              <Th className="text-right">Gasto</Th>
+              <Th className="w-48">Uso</Th>
+            </THeadRow>
             <tbody>
-              {safeArray<BudgetStatus>(budgets).map((b) => {
+              {budgetsList.map((b) => {
                 const pct = Math.min(100, b.pct ?? 0);
                 const tone =
                   pct >= 100 ? 'bg-danger' :
                   pct >= b.alertAtPct ? 'bg-warn' :
                   'bg-success';
                 return (
-                  <tr key={b.id} className="border-t border-border">
-                    <td className="py-1"><Badge>{b.cloud}</Badge></td>
-                    <td className="py-1 text-muted">{b.account}</td>
-                    <td className="py-1 text-muted">{b.service || '—'}</td>
-                    <td className="py-1 text-right tabular-nums">
-                      ${Number(b.monthlyLimit).toFixed(2)}
-                    </td>
-                    <td className="py-1 text-right tabular-nums">
-                      ${Number(b.spent).toFixed(2)}
-                    </td>
-                    <td className="py-1">
+                  <Tr key={b.id}>
+                    <Td><Badge>{b.cloud}</Badge></Td>
+                    <Td className="text-muted">{b.account}</Td>
+                    <Td className="text-muted">{b.service || '—'}</Td>
+                    <Td className="text-right font-mono">${Number(b.monthlyLimit).toFixed(2)}</Td>
+                    <Td className="text-right font-mono">${Number(b.spent).toFixed(2)}</Td>
+                    <Td>
                       <div className="flex items-center gap-2">
-                        <span className="w-12 tabular-nums text-xs">{pct.toFixed(0)}%</span>
-                        <div className="flex-1 h-1.5 bg-panel2 rounded">
-                          <div className={`h-1.5 rounded ${tone}`} style={{ width: `${pct}%` }} />
+                        <span className="w-10 font-mono text-2xs text-muted">{pct.toFixed(0)}%</span>
+                        <div className="flex-1 h-2 rounded bg-panel3">
+                          <div className={`h-2 rounded ${tone}`} style={{ width: `${pct}%` }} />
                         </div>
                       </div>
-                    </td>
-                  </tr>
+                    </Td>
+                  </Tr>
                 );
               })}
-              {budgets.length === 0 && (
-                <tr><td colSpan={6} className="py-4 text-center text-muted">Sem budgets cadastrados.</td></tr>
+              {budgetsList.length === 0 && (
+                <Tr><Td colSpan={6} className="text-center text-muted">Sem budgets cadastrados.</Td></Tr>
               )}
             </tbody>
-          </table>
-        </Card>
+          </DataTable>
+        </div>
       </div>
     </AppShell>
   );
@@ -262,7 +261,7 @@ function NewBudgetForm({ onCreated }: { onCreated: () => void }) {
     onCreated();
   }
   return (
-    <div className="bg-panel2 rounded p-3 mb-3 grid grid-cols-2 md:grid-cols-5 gap-2 items-end">
+    <div className="bg-panel2 border border-border rounded-lg p-3 grid grid-cols-2 md:grid-cols-5 gap-2 items-end">
       <div>
         <label className="text-xs text-muted">Cloud</label>
         <select value={cloud} onChange={(e) => setCloud(e.target.value)} className="w-full rounded bg-panel border border-border px-2 py-1 text-sm">

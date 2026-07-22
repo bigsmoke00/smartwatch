@@ -170,10 +170,10 @@ export default function ScriptsPage() {
 
   return (
     <AppShell>
-      <div className="p-6 space-y-3">
+      <div className="p-[22px] space-y-4">
         <PageHeader
           title="Script Manager"
-          description="Editor remoto de scripts, versionamento e execução auditada."
+          description="Edição, versionamento e execução de scripts no host — produção exige aprovação."
           icon={<Code2 size={16} />}
           actions={
             <div className="flex items-center gap-2">
@@ -194,7 +194,7 @@ export default function ScriptsPage() {
         />
 
         {readOnly && (
-          <div className="rounded-lg border-2 border-warn/60 bg-warn/10 px-4 py-3 flex items-center gap-3">
+          <div className="rounded-xl border border-warn/50 bg-warn/10 px-4 py-3 flex items-center gap-3">
             <Lock size={22} className="text-warn shrink-0" />
             <div>
               <div className="text-warn font-semibold text-base">Modo somente leitura</div>
@@ -206,20 +206,23 @@ export default function ScriptsPage() {
           </div>
         )}
 
-        <div className="grid grid-cols-12 gap-3">
+        <div className="grid grid-cols-12 gap-4">
           {/* TREE */}
           <Card className="col-span-3 p-0 overflow-hidden">
-            <div className="px-3 py-2 bg-panel2 flex items-center gap-2">
-              <button onClick={() => loadDir(parent)} className="text-muted hover:text-text" title="parent">
+            <div className="px-3 pt-3 pb-2 flex items-center gap-2 text-2xs font-semibold uppercase tracking-wide text-muted">
+              <Folder size={13} className="text-accent" /> Scripts
+            </div>
+            <div className="px-3 pb-2.5 flex items-center gap-2 border-b border-border">
+              <button onClick={() => loadDir(parent)} className="text-muted hover:text-text transition-colors" title="parent">
                 <ArrowUp size={14} />
               </button>
               <Input
                 value={path}
                 onChange={(e) => setPath(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && loadDir(path)}
-                className="h-7 text-xs"
+                className="h-7 text-xs font-mono"
               />
-              <button onClick={() => loadDir(path)} className="text-muted hover:text-text" title="reload">
+              <button onClick={() => loadDir(path)} className="text-muted hover:text-text transition-colors" title="reload">
                 <RefreshCw size={14} />
               </button>
             </div>
@@ -229,22 +232,27 @@ export default function ScriptsPage() {
                 const editorLabel = it.lastEditor
                   ? `por ${it.lastEditor}${it.lastEditedAt ? ' em ' + fmtTime(it.lastEditedAt) : ''}`
                   : '';
+                const active = it.type !== 'dir' && file?.path === it.path;
                 return (
                   <button
                     key={it.path}
                     title={editorLabel || (it.mtime ? `mtime: ${fmtTime(it.mtime)}` : '')}
                     onClick={() => it.type === 'dir' ? loadDir(it.path) : openFile(it.path)}
-                    className="w-full text-left px-3 py-1.5 text-sm flex items-center gap-2 hover:bg-panel2"
+                    className={`w-full text-left px-3 py-2 text-sm flex items-center gap-2.5 border-l-2 transition-colors ${
+                      active ? 'border-accent bg-accent/[0.06]' : 'border-transparent hover:bg-panel2'
+                    }`}
                   >
-                    <Icon size={14} className={it.type === 'dir' ? 'text-accent' : 'text-muted'} />
-                    <span className="truncate flex-1">{it.name}</span>
-                    {it.lastEditor && (
-                      <span className="text-[10px] text-accent shrink-0 truncate max-w-[120px]" title={editorLabel}>
-                        ✎ {it.lastEditor.split('@')[0]}
-                      </span>
-                    )}
+                    <Icon size={14} className={it.type === 'dir' ? 'text-accent shrink-0' : active ? 'text-accentSoft shrink-0' : 'text-muted shrink-0'} />
+                    <span className="flex-1 min-w-0">
+                      <span className={`block truncate ${active ? 'text-text' : ''}`}>{it.name}</span>
+                      {it.lastEditor && (
+                        <span className="block text-2xs text-muted truncate" title={editorLabel}>
+                          {it.lastEditor.split('@')[0]}{it.lastEditedAt ? ' · ' + fmtTime(it.lastEditedAt) : ''}
+                        </span>
+                      )}
+                    </span>
                     {it.size != null && it.type !== 'dir' && (
-                      <span className="text-xs text-muted shrink-0">{fmtBytes(it.size)}</span>
+                      <span className="text-2xs text-mutedFaint font-mono shrink-0">{fmtBytes(it.size)}</span>
                     )}
                   </button>
                 );
@@ -257,27 +265,33 @@ export default function ScriptsPage() {
 
           {/* EDITOR */}
           <Card className="col-span-9 p-0 overflow-hidden">
-            <div className="px-3 py-2 bg-panel2 flex items-center justify-between gap-3">
-              <div className="text-sm font-mono truncate flex-1">
-                {file ? file.path : 'selecione um arquivo'}
-                {dirty && <span className="ml-2 text-warn" title="alterado, não salvo">●</span>}
-                {file?.lastEditor && (
-                  <div className="text-[11px] text-muted font-sans truncate">
-                    Última edição por <span className="text-accent">{file.lastEditor}</span>
-                    {file.lastEditedAt && <> em {fmtTime(file.lastEditedAt)}</>}
-                    {file.lastComment && <> — “{file.lastComment}”</>}
+            <div className="px-3 py-2 bg-panel2 border-b border-border flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2 min-w-0 flex-1">
+                <FileText size={14} className="text-muted shrink-0" />
+                <div className="min-w-0">
+                  <div className="text-sm font-mono truncate flex items-center gap-2">
+                    <span className="truncate">{file ? file.path : 'selecione um arquivo'}</span>
+                    {dirty && <span className="text-warn shrink-0" title="alterado, não salvo">●</span>}
+                    {file && env === 'production' && <Badge tone="warn">PROD</Badge>}
                   </div>
-                )}
+                  {file?.lastEditor && (
+                    <div className="text-[11px] text-muted font-sans truncate">
+                      Última edição por <span className="text-accent">{file.lastEditor}</span>
+                      {file.lastEditedAt && <> em {fmtTime(file.lastEditedAt)}</>}
+                      {file.lastComment && <> — “{file.lastComment}”</>}
+                    </div>
+                  )}
+                </div>
               </div>
               {file && (
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 shrink-0">
                   <input ref={fileInputRef} type="file" onChange={uploadFile} className="hidden" />
                   {canWrite && (
-                    <Button variant="ghost" onClick={() => fileInputRef.current?.click()} title="Upload (substitui editor)">
+                    <Button variant="ghost" size="icon" onClick={() => fileInputRef.current?.click()} title="Upload (substitui editor)">
                       <Upload size={14} />
                     </Button>
                   )}
-                  <Button variant="ghost" onClick={downloadCurrent} title="Download">
+                  <Button variant="ghost" size="icon" onClick={downloadCurrent} title="Download">
                     <Download size={14} />
                   </Button>
                   {canWrite && (
@@ -286,13 +300,18 @@ export default function ScriptsPage() {
                     </Button>
                   )}
                   {canDelete && (
-                    <Button variant="ghost" onClick={deleteFile} title="Apagar arquivo" className="text-danger">
+                    <Button variant="ghost" onClick={deleteFile} title="Apagar arquivo" className="text-danger hover:bg-danger/10">
                       <Trash2 size={14} /> Apagar
                     </Button>
                   )}
                   {canExecute && (
-                    <Button onClick={execute}>
-                      <Play size={14} /> Executar
+                    <Button
+                      onClick={execute}
+                      variant={env === 'production' ? 'secondary' : 'primary'}
+                      className={env === 'production' ? 'border-warn/40 bg-warn/10 text-warn hover:bg-warn/20' : undefined}
+                      title={env === 'production' ? 'Produção: cria execução pendente para aprovação' : 'Executar script'}
+                    >
+                      <Play size={14} /> {env === 'production' ? 'Pedir execução' : 'Executar'}
                     </Button>
                   )}
                 </div>
@@ -324,33 +343,33 @@ export default function ScriptsPage() {
         </div>
 
         {error && (
-          <div className="text-sm text-danger px-3 py-2 bg-danger/10 border border-danger/30 rounded">{error}</div>
+          <div className="text-sm text-danger px-3 py-2 bg-danger/10 border border-danger/30 rounded-lg">{error}</div>
         )}
 
         {/* HISTÓRICO + EXECUÇÕES */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-          <Card className="p-3">
-            <div className="text-sm font-medium mb-2 flex items-center gap-2">
-              <History size={14} /> Versões
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <Card className="p-4">
+            <div className="text-sm font-medium mb-3 flex items-center gap-2 text-text">
+              <History size={14} className="text-accent" /> Versões
             </div>
             <div className="text-xs space-y-1">
               {safeArray<Version>(versions).map((v) => (
-                <div key={v.id} className="flex justify-between border-b border-border py-1">
-                  <span>{fmtTime(v.ts)}</span>
-                  <span className="text-muted">{v.authorEmail ?? '—'}</span>
-                  <span className="font-mono text-muted">{v.sha256.slice(0, 8)}</span>
+                <div key={v.id} className="flex justify-between gap-3 border-b border-border/70 py-1.5">
+                  <span className="text-muted">{fmtTime(v.ts)}</span>
+                  <span className="text-muted truncate flex-1">{v.authorEmail ?? '—'}</span>
+                  <span className="font-mono text-mutedFaint">{v.sha256.slice(0, 8)}</span>
                 </div>
               ))}
               {versions.length === 0 && <div className="text-muted">Sem histórico.</div>}
             </div>
           </Card>
 
-          <Card className="p-3">
-            <div className="text-sm font-medium mb-2">Execuções recentes</div>
+          <Card className="p-4">
+            <div className="text-sm font-medium mb-3 text-text">Execuções recentes</div>
             <div className="text-xs space-y-1">
               {safeArray<any>(executions).map((e) => (
-                <div key={e.id} className="border-b border-border py-1 flex items-center gap-2">
-                  <span>{fmtTime(e.ts)}</span>
+                <div key={e.id} className="border-b border-border/70 py-1.5 flex items-center gap-2">
+                  <span className="text-muted">{fmtTime(e.ts)}</span>
                   <span className="font-mono text-muted truncate flex-1">{e.path}</span>
                   <Badge
                     tone={

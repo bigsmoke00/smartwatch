@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Badge } from '@/components/ui/Badge';
 import { PageHeader } from '@/components/ui/PageHeader';
+import { DataTable, THeadRow, Th, Tr, Td } from '@/components/ui/Table';
 import { Select } from '@/components/ui/Select';
 import { apiFetch, Auth } from '@/lib/api';
 import { fmtTime, safeArray } from '@/lib/utils';
@@ -55,9 +56,9 @@ export default function CredentialRotationsPage() {
 
   return (
     <AppShell>
-      <div className="p-6 space-y-4">
+      <div className="p-[22px] space-y-4">
         <PageHeader
-          title="Rotação de credenciais cloud"
+          title="Rotação de credenciais"
           description="Rotação automática de chaves IAM e segredos no vault."
           icon={<KeyRound size={16} />}
           actions={role === 'admin' && <Button onClick={() => setShowNew(!showNew)}>Nova rotação</Button>}
@@ -65,35 +66,59 @@ export default function CredentialRotationsPage() {
 
         {showNew && <NewForm onCreated={() => { setShowNew(false); load(); }} />}
 
-        <Card className="p-0 overflow-hidden">
-          <table className="w-full text-sm">
-            <thead className="bg-panel2 text-xs uppercase text-muted">
-              <tr>
-                <th className="text-left px-3 py-2">Cloud</th>
-                <th className="text-left px-3 py-2">Conta</th>
-                <th className="text-left px-3 py-2">Usuário IAM</th>
-                <th className="text-left px-3 py-2">Vault</th>
-                <th className="text-left px-3 py-2">Próxima rotação</th>
-                <th className="text-left px-3 py-2">Status</th>
-                <th />
-              </tr>
-            </thead>
-            <tbody>
-              {safeArray<Rot>(rows).map((r) => (
-                <tr key={r.id} className="border-t border-border">
-                  <td className="px-3 py-2"><Badge>{r.cloud}</Badge></td>
-                  <td className="px-3 py-2 text-muted">{r.account}</td>
-                  <td className="px-3 py-2 font-mono text-xs">{r.iamUser}</td>
-                  <td className="px-3 py-2 text-xs text-muted">{r.vaultSecret}</td>
-                  <td className="px-3 py-2 text-xs">
-                    {r.nextRotationAt ? fmtTime(r.nextRotationAt) : '—'}
-                    {r.lastRotatedAt && (
-                      <div className="text-[10px] text-muted">
-                        última: {fmtTime(r.lastRotatedAt)}
-                      </div>
-                    )}
-                  </td>
-                  <td className="px-3 py-2">
+        <DataTable>
+          <THeadRow>
+            <Th>Credencial</Th>
+            <Th>Tipo</Th>
+            <Th>Vault</Th>
+            <Th>Última rotação</Th>
+            <Th>Próxima</Th>
+            <Th>Status</Th>
+            <Th className="text-right">Ações</Th>
+          </THeadRow>
+          <tbody>
+            {rows.length === 0 && (
+              <Tr className="hover:bg-transparent">
+                <Td colSpan={7} className="text-center text-muted py-8">
+                  Nenhuma rotação configurada.
+                </Td>
+              </Tr>
+            )}
+            {safeArray<Rot>(rows).map((r) => {
+              const overdue =
+                r.enabled &&
+                !!r.nextRotationAt &&
+                new Date(r.nextRotationAt).getTime() < Date.now();
+              return (
+                <Tr key={r.id} tone={r.status === 'error' ? 'danger' : overdue ? 'warn' : 'default'}>
+                  <Td>
+                    <div className="font-medium text-text">{r.account}</div>
+                    <div className="text-2xs text-mutedFaint font-mono mt-0.5">{r.iamUser}</div>
+                  </Td>
+                  <Td>
+                    <Badge>{r.cloud}</Badge>
+                  </Td>
+                  <Td className="text-muted font-mono text-xs">{r.vaultSecret}</Td>
+                  <Td className="font-mono text-xs text-muted">
+                    {r.lastRotatedAt ? fmtTime(r.lastRotatedAt) : '—'}
+                  </Td>
+                  <Td>
+                    <div className="flex items-center gap-2">
+                      <span
+                        className={`font-mono text-xs ${
+                          !r.nextRotationAt
+                            ? 'text-mutedFaint'
+                            : overdue
+                              ? 'text-warn'
+                              : 'text-success'
+                        }`}
+                      >
+                        {r.nextRotationAt ? fmtTime(r.nextRotationAt) : '—'}
+                      </span>
+                      {overdue && <Badge tone="warn">vencida</Badge>}
+                    </div>
+                  </Td>
+                  <Td>
                     {r.enabled ? (
                       r.status === 'error' ? (
                         <Badge tone="danger" title={r.lastError}>error</Badge>
@@ -105,30 +130,32 @@ export default function CredentialRotationsPage() {
                     ) : (
                       <Badge>desativada</Badge>
                     )}
-                  </td>
-                  <td className="px-3 py-2 text-right space-x-2">
+                  </Td>
+                  <Td>
                     {role === 'admin' && (
-                      <>
-                        <button onClick={() => rotate(r.id)} className="text-xs text-accent hover:underline">
+                      <div className="flex items-center justify-end gap-1.5">
+                        <Button size="sm" variant="secondary" onClick={() => rotate(r.id)}>
                           Rotacionar agora
-                        </button>
-                        <button onClick={() => toggle(r.id, r.enabled)} className="text-xs text-muted hover:text-text">
+                        </Button>
+                        <Button size="sm" variant="ghost" onClick={() => toggle(r.id, r.enabled)}>
                           {r.enabled ? 'desativar' : 'ativar'}
-                        </button>
-                        <button onClick={() => remove(r.id)} className="text-xs text-danger hover:underline">
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="text-danger hover:text-danger hover:bg-danger/10"
+                          onClick={() => remove(r.id)}
+                        >
                           remover
-                        </button>
-                      </>
+                        </Button>
+                      </div>
                     )}
-                  </td>
-                </tr>
-              ))}
-              {rows.length === 0 && (
-                <tr><td colSpan={7} className="py-4 px-3 text-center text-muted">Nenhuma rotação configurada.</td></tr>
-              )}
-            </tbody>
-          </table>
-        </Card>
+                  </Td>
+                </Tr>
+              );
+            })}
+          </tbody>
+        </DataTable>
       </div>
     </AppShell>
   );
@@ -145,7 +172,7 @@ function NewForm({ onCreated }: { onCreated: () => void }) {
   return (
     <Card className="p-4 grid md:grid-cols-3 gap-2">
       <div>
-        <label className="text-xs text-muted">Cloud</label>
+        <label className="block mb-1 text-2xs uppercase tracking-wider text-muted font-medium">Cloud</label>
         <Select value={form.cloud} onChange={(e) => setForm({ ...form, cloud: e.target.value })}>
           <option>aws</option><option>oci</option>
         </Select>
@@ -157,7 +184,7 @@ function NewForm({ onCreated }: { onCreated: () => void }) {
         ['policyArn', 'Policy ARN (opcional)'],
       ].map(([k, label]) => (
         <div key={k}>
-          <label className="text-xs text-muted">{label}</label>
+          <label className="block mb-1 text-2xs uppercase tracking-wider text-muted font-medium">{label}</label>
           <Input
             value={(form as any)[k]}
             onChange={(e) => setForm({ ...form, [k]: e.target.value })}
@@ -165,7 +192,7 @@ function NewForm({ onCreated }: { onCreated: () => void }) {
         </div>
       ))}
       <div>
-        <label className="text-xs text-muted">Periodicidade (dias)</label>
+        <label className="block mb-1 text-2xs uppercase tracking-wider text-muted font-medium">Periodicidade (dias)</label>
         <Input
           type="number"
           value={form.rotationDays}
