@@ -28,6 +28,8 @@ import {
   ChevronsLeft,
   ChevronsRight,
   ChevronDown,
+  ChevronRight,
+  Search,
   User as UserIcon,
 } from 'lucide-react';
 import { Auth, apiFetch } from '@/lib/api';
@@ -125,6 +127,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const [mfaSetupRequired, setMfaSetupRequired] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   // a <nav> da sidebar é recriada do zero a cada navegação (cada page.tsx
   // monta seu próprio <AppShell>, não tem layout persistente no app router
@@ -190,6 +193,21 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     return () => document.removeEventListener('mousedown', onClickOutside);
   }, []);
 
+  // ⌘K / Ctrl+K abre/fecha o command palette; Esc fecha. Registrado uma vez.
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      const k = (e.key || '').toLowerCase();
+      if ((e.metaKey || e.ctrlKey) && k === 'k') {
+        e.preventDefault();
+        setPaletteOpen((v) => !v);
+      } else if (e.key === 'Escape') {
+        setPaletteOpen(false);
+      }
+    }
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, []);
+
   function toggleCollapsed() {
     setCollapsed((c) => {
       localStorage.setItem('lw_sidebar_collapsed', !c ? '1' : '0');
@@ -207,12 +225,14 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           collapsed ? 'w-[68px]' : 'w-64',
         )}
       >
-        <div className={cn('px-4 py-4 border-b border-border flex items-center gap-2.5', collapsed && 'justify-center px-2')}>
-          <img src="/logo.jpeg" alt="SmartWatch" className="w-7 h-7 rounded-lg shrink-0 shadow-[0_1px_0_0_rgba(255,255,255,0.15)_inset]" />
+        <div className={cn('h-14 px-4 border-b border-border flex items-center gap-2.5', collapsed && 'justify-center px-2')}>
+          <div className="w-[30px] h-[30px] rounded-[9px] bg-accent-gradient flex items-center justify-center font-extrabold text-[15px] text-white shrink-0 shadow-[0_1px_0_0_rgba(255,255,255,0.25)_inset]">
+            S
+          </div>
           {!collapsed && (
             <div className="min-w-0">
-              <div className="font-semibold text-[15px] tracking-tight leading-none">SmartWatch</div>
-              <div className="text-2xs text-mutedFaint mt-0.5">Plataforma de observabilidade</div>
+              <div className="font-bold text-[15px] tracking-tight leading-none">SmartWatch</div>
+              <div className="text-2xs text-mutedFaint mt-1">Observabilidade</div>
             </div>
           )}
         </div>
@@ -297,8 +317,26 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           vencer essa comparação sempre, e o dropdown some por completo de
           baixo de qualquer outro conteúdo da página.
         */}
-        <header className="relative z-30 h-14 border-b border-border bg-panel/60 backdrop-blur-sm flex items-center justify-between px-5 shrink-0">
-          <div className="text-sm font-medium text-text">{currentPageLabel(pathname)}</div>
+        <header className="relative z-30 h-14 border-b border-border bg-panel flex items-center gap-4 px-5 shrink-0">
+          <div className="text-sm font-medium text-text min-w-[120px]">{currentPageLabel(pathname)}</div>
+
+          <button
+            onClick={() => setPaletteOpen(true)}
+            className="flex-1 max-w-[440px] mx-auto flex items-center gap-2.5 rounded-[9px] border border-border bg-bg px-3 py-2 text-mutedFaint hover:border-borderStrong transition-colors"
+          >
+            <Search size={15} />
+            <span className="text-[13px]">Buscar telas, servidores, ações…</span>
+            <span className="ml-auto font-mono text-[11px] border border-border rounded px-1.5 py-px text-muted">
+              ⌘K
+            </span>
+          </button>
+
+          <div className="flex items-center gap-3 ml-auto">
+            {hasPerm(perms, 'alerts:read') && (
+              <Link href="/alerts" title="Alertas" className="relative text-muted hover:text-text transition-colors">
+                <Bell size={18} />
+              </Link>
+            )}
           <div className="relative" ref={menuRef}>
             <button
               onClick={() => setUserMenuOpen((v) => !v)}
@@ -336,6 +374,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               </div>
             )}
           </div>
+          </div>
         </header>
 
         {mfaSetupRequired && (
@@ -367,6 +406,129 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             return <AccessDenied />;
           })()}
         </main>
+      </div>
+
+      {paletteOpen && (
+        <CommandPalette
+          perms={perms}
+          onClose={() => setPaletteOpen(false)}
+          onNavigate={(href) => {
+            setPaletteOpen(false);
+            router.push(href);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * Command palette (⌘K). Reaproveita o NAV_GROUPS já filtrado por permissão —
+ * a mesma fonte de verdade da sidebar — pra listar/buscar telas. Setas ↑/↓
+ * navegam a lista, Enter abre o item destacado.
+ */
+function CommandPalette({
+  perms,
+  onClose,
+  onNavigate,
+}: {
+  perms: Set<string> | null;
+  onClose: () => void;
+  onNavigate: (href: string) => void;
+}) {
+  const [q, setQ] = useState('');
+  const [active, setActive] = useState(0);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const all = NAV_GROUPS.flatMap((g) =>
+    g.items
+      .filter((i) => !i.perms || i.perms.length === 0 || hasPerm(perms, ...i.perms))
+      .map((i) => ({ ...i, group: g.title })),
+  );
+  const query = q.trim().toLowerCase();
+  const results = query
+    ? all.filter(
+        (i) =>
+          i.label.toLowerCase().includes(query) ||
+          i.group.toLowerCase().includes(query),
+      )
+    : all;
+
+  useEffect(() => {
+    inputRef.current?.focus();
+  }, []);
+  useEffect(() => {
+    setActive(0);
+  }, [query]);
+
+  function onKeyDown(e: React.KeyboardEvent) {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      setActive((a) => Math.min(a + 1, results.length - 1));
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setActive((a) => Math.max(a - 1, 0));
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      const hit = results[active];
+      if (hit) onNavigate(hit.href);
+    }
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-[100] flex items-start justify-center bg-black/60 pt-[12vh] px-4"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div className="w-full max-w-[600px] rounded-xl border border-borderStrong bg-panel shadow-elevate overflow-hidden animate-fadeIn">
+        <div className="flex items-center gap-2.5 px-4 py-3.5 border-b border-border">
+          <Search size={16} className="text-accentSoft shrink-0" />
+          <input
+            ref={inputRef}
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            onKeyDown={onKeyDown}
+            placeholder="Ir para tela, servidor ou ação…"
+            className="flex-1 bg-transparent border-none outline-none text-[15px] text-text placeholder:text-mutedFaint"
+          />
+          <span className="font-mono text-[10.5px] text-mutedFaint border border-border rounded px-1.5 py-0.5">
+            ESC
+          </span>
+        </div>
+        <div className="max-h-[52vh] overflow-auto p-2">
+          <div className="px-2.5 py-1.5 text-2xs uppercase tracking-wider text-mutedFaint">
+            Navegação
+          </div>
+          {results.length === 0 ? (
+            <div className="py-6 text-center text-sm text-mutedFaint">Nada encontrado.</div>
+          ) : (
+            results.map((r, idx) => {
+              const Icon = r.icon;
+              return (
+                <button
+                  key={r.href}
+                  onMouseEnter={() => setActive(idx)}
+                  onClick={() => onNavigate(r.href)}
+                  className={cn(
+                    'w-full flex items-center gap-3 px-2.5 py-2 rounded-lg text-left transition-colors',
+                    idx === active ? 'bg-panel3' : 'hover:bg-panel2',
+                  )}
+                >
+                  <span className="w-7 h-7 rounded-lg bg-panel3 border border-border flex items-center justify-center text-accentSoft shrink-0">
+                    <Icon size={15} />
+                  </span>
+                  <span className="flex-1 min-w-0">
+                    <span className="block text-sm text-text truncate">{r.label}</span>
+                    <span className="block text-xs text-mutedFaint">{r.group}</span>
+                  </span>
+                  <ChevronRight size={14} className="text-mutedFaint shrink-0" />
+                </button>
+              );
+            })
+          )}
+        </div>
       </div>
     </div>
   );
