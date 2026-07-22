@@ -368,6 +368,10 @@ function previewWithValues(text: string, values: string[]): string {
 function TopTab({ cluster }: { cluster: Cluster }) {
   const [items, setItems] = useState<any[]>([]);
   const [features, setFeatures] = useState<any>(null);
+  // Ordenação da tabela (cabeçalhos clicáveis) — refeita no servidor pra
+  // trazer o top-N por esse critério, não só reordenar as linhas carregadas.
+  const [sort, setSort] = useState<'total_ms' | 'calls' | 'mean_ms'>('total_ms');
+  const [dir, setDir] = useState<'asc' | 'desc'>('desc');
   // Painel da query selecionada: texto completo, inputs de parâmetro,
   // modo de visualização (com ou sem placeholders) e o plano do EXPLAIN.
   const [panel, setPanel] = useState<{
@@ -376,9 +380,23 @@ function TopTab({ cluster }: { cluster: Cluster }) {
   // Referência do painel pra rolar a tela até ele assim que abre.
   const panelRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
-    apiFetch(`/pg/clusters/${cluster.id}/top-queries`).then((r) => setItems(safeArray<any>(r))).catch(() => setItems([]));
+    apiFetch(`/pg/clusters/${cluster.id}/top-queries?sort=${sort}&dir=${dir}`)
+      .then((r) => setItems(safeArray<any>(r)))
+      .catch(() => setItems([]));
+  }, [cluster.id, sort, dir]);
+
+  useEffect(() => {
     apiFetch(`/pg/clusters/${cluster.id}/features`).then(setFeatures).catch(() => setFeatures(null));
   }, [cluster.id]);
+
+  function toggleSort(col: 'total_ms' | 'calls' | 'mean_ms') {
+    if (sort === col) setDir((d) => (d === 'desc' ? 'asc' : 'desc'));
+    else {
+      setSort(col);
+      setDir('desc');
+    }
+  }
+  const sortArrow = (col: string) => (sort === col ? (dir === 'desc' ? ' ↓' : ' ↑') : '');
 
   // Rola até o painel sempre que ele aparecer (ou troca de query selecionada).
   useEffect(() => {
@@ -435,9 +453,27 @@ CREATE EXTENSION pg_stat_statements;`}
           <THeadRow>
             <Th>Banco</Th>
             <Th>Query</Th>
-            <Th className="text-right">Calls</Th>
-            <Th className="text-right">Total ms</Th>
-            <Th className="text-right">Médio ms</Th>
+            <Th
+              className={`text-right cursor-pointer select-none hover:text-text ${sort === 'calls' ? 'text-accentSoft' : ''}`}
+              onClick={() => toggleSort('calls')}
+              title="Ordenar por nº de chamadas"
+            >
+              Calls{sortArrow('calls')}
+            </Th>
+            <Th
+              className={`text-right cursor-pointer select-none hover:text-text ${sort === 'total_ms' ? 'text-accentSoft' : ''}`}
+              onClick={() => toggleSort('total_ms')}
+              title="Ordenar por tempo total"
+            >
+              Total ms{sortArrow('total_ms')}
+            </Th>
+            <Th
+              className={`text-right cursor-pointer select-none hover:text-text ${sort === 'mean_ms' ? 'text-accentSoft' : ''}`}
+              onClick={() => toggleSort('mean_ms')}
+              title="Ordenar por tempo médio"
+            >
+              Médio ms{sortArrow('mean_ms')}
+            </Th>
             <Th />
           </THeadRow>
           <tbody>

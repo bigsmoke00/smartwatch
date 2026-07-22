@@ -106,7 +106,13 @@ class PgMonitorController {
 
   @RequirePermission('pg:read')
   @Get('clusters/:id/top-queries')
-  top(@Param('id') id: string) { return this.svc.topQueries(id); }
+  top(
+    @Param('id') id: string,
+    @Query('sort') sort?: string,
+    @Query('dir') dir?: string,
+  ) {
+    return this.svc.topQueries(id, 30, sort, dir);
+  }
 
   @RequirePermission('pg:read')
   @Get('clusters/:id/health')

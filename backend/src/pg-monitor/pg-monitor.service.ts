@@ -665,7 +665,18 @@ export class PgMonitorService implements OnModuleInit {
     });
   }
 
-  async topQueries(clusterId: string, limit = 30) {
+  async topQueries(clusterId: string, limit = 30, sort?: string, dir?: string) {
+    // Ordenação vinda da tela (cabeçalhos clicáveis). Whitelist obrigatória:
+    // `sort` e `dir` entram direto no ORDER BY, então SÓ valores conhecidos
+    // podem passar (nunca interpolar entrada crua num ORDER BY).
+    const SORTABLE: Record<string, string> = {
+      total_ms: 'total_ms',
+      calls: 'calls',
+      mean_ms: 'mean_ms',
+      rows: 'rows',
+    };
+    const col = SORTABLE[sort ?? ''] ?? 'total_ms';
+    const direction = (dir ?? '').toLowerCase() === 'asc' ? 'ASC' : 'DESC';
     // Agrupa por datname também — o mesmo queryid pode existir em mais de
     // uma database do servidor (textos parecidos, planos diferentes), e o
     // EXPLAIN precisa saber em qual database rodar.
@@ -675,7 +686,7 @@ export class PgMonitorService implements OnModuleInit {
        FROM pg_top_queries
        WHERE cluster_id=$1 AND ts >= now() - interval '1 hour'
        GROUP BY queryid, datname, query_text
-       ORDER BY total_ms DESC
+       ORDER BY ${col} ${direction} NULLS LAST
        LIMIT $2`,
       [clusterId, limit],
     );
