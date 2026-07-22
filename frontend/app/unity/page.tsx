@@ -334,10 +334,13 @@ export default function UnityPage() {
     }
   }
 
-  useEffect(() => {
+  // Buscar manual: escaneia a janela atual (empilhando no log principal) e, de
+  // quebra, atualiza o painel de "Chamadas recentes" da mesma janela. É a
+  // única forma de iniciar um scan — nada roda ao só escolher servidor/janela.
+  function runSearch() {
+    search(undefined, { append: true });
     loadRecentCalls();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [serverId, fromIso, toIso]);
+  }
 
   function watchSearchSession(sessionId: string) {
     searchSessionRef.current = sessionId;
@@ -410,14 +413,24 @@ export default function UnityPage() {
     }
   }
 
-  // Re-escaneia automaticamente ao trocar ambiente/servidor/janela/status —
-  // igual o painel de chamadas recentes já fazia. Texto digitado (UUID/
-  // número) fica de fora de propósito (senão escanearia a cada tecla); pra
-  // isso o usuário aperta Enter ou clica Buscar.
+  // A busca do painel principal NÃO dispara sozinha: o usuário escolhe
+  // ambiente → servidor → janela e só então clica "Buscar" (ou Enter no campo,
+  // ou clica numa chamada recente). Ao TROCAR de servidor a gente só limpa a
+  // tela e aborta um scan em andamento — sem iniciar busca nova — pra não
+  // misturar linhas de hosts diferentes na próxima busca.
   useEffect(() => {
-    search();
+    stopScan(searchSessionRef.current);
+    disconnectSearch();
+    setLines([]);
+    setSearchScan(null);
+    // limpa também o painel de chamadas recentes — ele só recarrega no Buscar,
+    // não na seleção, pra nada escanear antes do usuário pedir.
+    stopScan(callsSessionRef.current);
+    disconnectCalls();
+    setCalls([]);
+    setCallsScan(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [serverId, fromIso, toIso, status]);
+  }, [serverId]);
 
   function pickCall(c: CallRow) {
     setCallUuid(c.callUuid);
@@ -446,11 +459,9 @@ export default function UnityPage() {
     URL.revokeObjectURL(url);
   }
 
-  // Substitui o antigo botão "Buscar": a busca já dispara sozinha ao trocar
-  // ambiente/janela/status (useEffect acima) e ao apertar Enter no campo de
-  // texto — um botão manual de busca virou redundante. Em troca, um jeito
-  // rápido de limpar a tela principal (sem mexer nos filtros escolhidos) é
-  // mais útil no dia a dia.
+  // "Limpar" (botão do topo): zera a tela principal e o campo de texto sem
+  // mexer no ambiente/servidor/janela escolhidos. A busca em si é sempre
+  // manual (botão "Buscar", Enter no campo, ou clique numa chamada recente).
   function clearLog() {
     if (searchScan && !searchScan.done) stopScan(searchScan.sessionId);
     disconnectSearch();
@@ -530,9 +541,9 @@ export default function UnityPage() {
             <div className="md:col-span-2">
               <Button
                 className="w-full"
-                onClick={() => search(undefined, { append: true })}
+                onClick={runSearch}
                 disabled={loading || !serverId}
-                title="Busca a janela atual (2/3/5 min) com o filtro de agora e adiciona ao que já está na tela, sem apagar o que já tem"
+                title="Escaneia a janela atual (2/3/5 min) com o filtro de agora, adiciona ao que já está na tela e atualiza as chamadas recentes"
               >
                 <RefreshCw size={14} /> Buscar
               </Button>
@@ -654,6 +665,9 @@ export default function UnityPage() {
             <div className="max-h-[calc(100vh-360px)] overflow-auto divide-y divide-border/50">
               {!serverId && (
                 <div className="p-4 text-xs text-muted">Selecione um servidor.</div>
+              )}
+              {serverId && !callsScan && (
+                <div className="p-4 text-xs text-muted">Clique em “Buscar” para carregar as chamadas desta janela.</div>
               )}
               {serverId && callsScan?.done && calls.length === 0 && !callsScan.error && (
                 <div className="p-4 text-xs text-muted">

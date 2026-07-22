@@ -182,7 +182,7 @@ export default function ScriptsPage() {
                 onChange={setServerId}
                 className="flex items-center gap-2"
                 selectClassName="w-auto"
-                autoSelectFirst
+                placeholder="Selecione um servidor"
               />
               {env && (
                 <Badge tone={env === 'production' ? 'danger' : 'info'}>
@@ -206,7 +206,13 @@ export default function ScriptsPage() {
           </div>
         )}
 
-        <div className="grid grid-cols-12 gap-4">
+        {!serverId && (
+          <Card className="p-6 text-sm text-muted">
+            Selecione um ambiente e um servidor para abrir os scripts.
+          </Card>
+        )}
+
+        <div className={`grid grid-cols-12 gap-4 ${!serverId ? 'hidden' : ''}`}>
           {/* TREE */}
           <Card className="col-span-3 p-0 overflow-hidden">
             <div className="px-3 pt-3 pb-2 flex items-center gap-2 text-2xs font-semibold uppercase tracking-wide text-muted">

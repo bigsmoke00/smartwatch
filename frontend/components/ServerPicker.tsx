@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Select } from './ui/Select';
 import { useServers, type ServerRow } from '@/lib/useServers';
 
@@ -80,6 +80,13 @@ export function ServerPicker({
 }: ServerPickerProps) {
   const { groups, loading } = useServers();
 
+  // Ambiente escolhido guardado à parte do servidor. Sem isso, o "ambiente
+  // corrente" só existia derivado do servidor selecionado — então em telas de
+  // modo manual (placeholder), escolher um ambiente não "grudava" enquanto
+  // nenhum servidor estivesse escolhido. Agora o ambiente fica selecionado e
+  // o usuário escolhe o servidor depois.
+  const [groupKey, setGroupKey] = useState<string | null>(null);
+
   // Grupos de ambiente sempre completos (cloud/região não é filtrada); só a
   // lista de servidores DENTRO de cada grupo passa pelo serverFilter, quando
   // fornecido. Grupos que ficam sem nenhum servidor após o filtro continuam
@@ -101,28 +108,52 @@ export function ServerPicker({
 
   const currentGroup = useMemo(() => {
     if (!effectiveGroups.length) return null;
-    if (!value && allowAll) return effectiveGroups[0]; // pseudo-grupo "Todos"
-    const bySelected = effectiveGroups.find((g) => g.servers.some((s) => s.id === value));
+    // Servidor selecionado é a fonte de verdade do ambiente.
+    const bySelected = value
+      ? effectiveGroups.find((g) => g.servers.some((s) => s.id === value))
+      : null;
     if (bySelected) return bySelected;
-    // Sem servidor selecionado ainda (ou id não encontrado): cai no primeiro
-    // grupo REAL (pula o pseudo-grupo "Todos" quando allowAll, senão o
-    // ambiente já viria pré-selecionado como "Todos" mesmo sem pedir).
+    // Sem servidor: usa o ambiente escolhido manualmente, se houver.
+    if (groupKey) {
+      const byKey = effectiveGroups.find((g) => g.key === groupKey);
+      if (byKey) return byKey;
+    }
+    if (!value && allowAll) return effectiveGroups[0]; // pseudo-grupo "Todos"
+    // Fallback: primeiro grupo REAL (pula o pseudo-grupo "Todos" quando allowAll).
     return allowAll ? effectiveGroups[1] ?? effectiveGroups[0] : effectiveGroups[0];
-  }, [effectiveGroups, value, allowAll]);
+  }, [effectiveGroups, value, allowAll, groupKey]);
+
+  // Mantém o ambiente guardado em sincronia quando um servidor é escolhido
+  // (por qualquer caminho) — assim o primeiro select reflete o grupo do
+  // servidor atual.
+  useEffect(() => {
+    if (!value) return;
+    const g = effectiveGroups.find((x) => x.servers.some((s) => s.id === value));
+    if (g && g.key !== groupKey) setGroupKey(g.key);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value, effectiveGroups]);
 
   // Seleciona automaticamente o primeiro servidor assim que a lista carrega
   // — só quando NÃO é o modo "Todos" e o chamador pediu explicitamente
   // (telas que sempre precisam de um servidor escolhido pra funcionar, como
-  // Docker manager e Script Manager).
+  // Docker manager e Script Manager). NÃO se aplica ao modo manual
+  // (placeholder), onde o usuário escolhe o servidor.
   useEffect(() => {
-    if (autoSelectFirst && !value && !allowAll && filteredGroups.length && filteredGroups[0].servers[0]) {
+    if (autoSelectFirst && !placeholder && !value && !allowAll && filteredGroups.length && filteredGroups[0].servers[0]) {
       onChange(filteredGroups[0].servers[0].id);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoSelectFirst, value, allowAll, filteredGroups]);
 
   function onGroupChange(key: string) {
+    setGroupKey(key);
     if (key === ALL_KEY) {
+      onChange('');
+      return;
+    }
+    // Modo manual (placeholder): só troca o ambiente; o servidor fica pro
+    // usuário escolher no segundo select (não auto-seleciona nem dispara nada).
+    if (placeholder) {
       onChange('');
       return;
     }

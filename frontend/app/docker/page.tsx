@@ -70,7 +70,7 @@ export default function DockerPage() {
                 onChange={setServerId}
                 className="flex items-center gap-2"
                 selectClassName="w-auto"
-                autoSelectFirst
+                placeholder="Selecione um servidor"
               />
               {serverId && (
                 <Badge tone={online ? 'success' : 'warn'}>
