@@ -257,7 +257,8 @@ export default function DbAccessPage() {
 
         {canQuery && (
           <>
-            <Card className="p-0 overflow-hidden">
+            <div className="grid lg:grid-cols-3 gap-4 items-start">
+            <Card className="lg:col-span-2 p-0 overflow-hidden">
               <div className="flex items-center justify-between gap-3 px-4 py-3 border-b border-border">
                 <div className="min-w-0">
                   <div className="font-mono text-[13px] text-text truncate">
@@ -302,6 +303,8 @@ export default function DbAccessPage() {
                 {queryError && <div className="text-xs text-danger">{queryError}</div>}
               </div>
             </Card>
+            <SchemaPanel clusterId={clusterId} database={database} onUseTable={setSql} />
+            </div>
 
             {result && (
               <Card className="p-0 overflow-hidden">
@@ -403,5 +406,122 @@ export default function DbAccessPage() {
         </Card>
       </div>
     </AppShell>
+  );
+}
+
+interface SchemaColumn { name: string; type: string; notnull: boolean; pk: boolean }
+interface SchemaTable {
+  schema: string; name: string; kind: 'table' | 'view' | 'matview';
+  estRows: number | null; columns: SchemaColumn[];
+}
+
+/**
+ * Painel lateral com o schema do database escolhido — tabelas, colunas, tipo,
+ * PK e uma estimativa de linhas — pra ajudar a montar o SELECT. O botão
+ * "SELECT" preenche o editor com um SELECT já pronto daquela tabela.
+ */
+function SchemaPanel({
+  clusterId, database, onUseTable,
+}: { clusterId: string; database: string; onUseTable: (sql: string) => void }) {
+  const [tables, setTables] = useState<SchemaTable[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [filter, setFilter] = useState('');
+  const [open, setOpen] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!clusterId) { setTables([]); return; }
+    setLoading(true); setError(null); setOpen(null);
+    const qs = database ? `?database=${encodeURIComponent(database)}` : '';
+    apiFetch<SchemaTable[]>(`/db-access/clusters/${clusterId}/schema${qs}`)
+      .then((r) => setTables(safeArray<SchemaTable>(r)))
+      .catch((e: any) => setError(e?.payload?.message || e?.message || 'erro ao carregar schema'))
+      .finally(() => setLoading(false));
+  }, [clusterId, database]);
+
+  const q = filter.trim().toLowerCase();
+  const shown = q
+    ? tables.filter((t) =>
+        `${t.schema}.${t.name}`.toLowerCase().includes(q) ||
+        t.columns.some((c) => c.name.toLowerCase().includes(q)))
+    : tables;
+
+  const ident = (s: string) => (/^[a-z_][a-z0-9_]*$/.test(s) ? s : `"${s}"`);
+  const fqn = (t: SchemaTable) =>
+    t.schema === 'public' ? ident(t.name) : `${ident(t.schema)}.${ident(t.name)}`;
+  function buildSelect(t: SchemaTable) {
+    const cols =
+      t.columns.length && t.columns.length <= 40
+        ? t.columns.map((c) => ident(c.name)).join(', ')
+        : '*';
+    onUseTable(`SELECT ${cols}\nFROM ${fqn(t)}\nLIMIT 100;`);
+  }
+
+  return (
+    <Card className="p-0 overflow-hidden self-start">
+      <div className="px-3 py-2.5 border-b border-border flex items-center gap-2">
+        <span className="text-[13px] font-semibold">Tabelas</span>
+        {!!tables.length && <span className="ml-auto text-2xs text-mutedFaint tabular-nums">{tables.length}</span>}
+      </div>
+      <div className="p-2 border-b border-border">
+        <input
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+          placeholder="filtrar tabela ou coluna…"
+          className="w-full bg-bg border border-border rounded-md px-2 py-1.5 text-xs text-text placeholder:text-mutedFaint outline-none focus:border-accent/60"
+        />
+      </div>
+      <div className="max-h-[460px] overflow-auto">
+        {!clusterId && <div className="p-3 text-xs text-muted">Escolha um cluster e um database.</div>}
+        {clusterId && loading && <div className="p-3 text-xs text-muted">carregando schema…</div>}
+        {error && <div className="p-3 text-xs text-warn">{error}</div>}
+        {clusterId && !loading && !error && shown.length === 0 && (
+          <div className="p-3 text-xs text-muted">Nenhuma tabela encontrada.</div>
+        )}
+        {shown.map((t) => {
+          const key = `${t.schema}.${t.name}`;
+          const isOpen = open === key;
+          return (
+            <div key={key} className="border-b border-border/50 last:border-0">
+              <div className="flex items-center gap-2 px-3 py-1.5 hover:bg-panel2/50">
+                <button
+                  onClick={() => setOpen(isOpen ? null : key)}
+                  className="flex-1 min-w-0 flex items-center gap-1.5 text-left"
+                >
+                  <span className="text-mutedFaint text-2xs w-3 shrink-0">{isOpen ? '▾' : '▸'}</span>
+                  <span className="font-mono text-xs truncate">{t.schema === 'public' ? t.name : key}</span>
+                  {t.kind !== 'table' && <span className="text-2xs text-mutedFaint shrink-0">{t.kind}</span>}
+                </button>
+                {t.estRows != null && (
+                  <span className="text-2xs text-mutedFaint tabular-nums shrink-0" title="linhas estimadas (último ANALYZE)">
+                    ~{t.estRows.toLocaleString()}
+                  </span>
+                )}
+                <button
+                  onClick={() => buildSelect(t)}
+                  title="Gerar SELECT desta tabela no editor"
+                  className="text-2xs text-accentSoft hover:underline shrink-0"
+                >
+                  SELECT
+                </button>
+              </div>
+              {isOpen && (
+                <div className="px-3 pb-2 pl-6 space-y-0.5">
+                  {t.columns.map((c) => (
+                    <div key={c.name} className="flex items-center gap-2 text-2xs font-mono">
+                      <span className={`w-4 shrink-0 ${c.pk ? 'text-warn' : 'text-transparent'}`} title={c.pk ? 'chave primária' : undefined}>PK</span>
+                      <span className="text-text truncate">{c.name}</span>
+                      <span className="text-mutedFaint ml-auto shrink-0">
+                        {c.type}{c.notnull ? ' · NN' : ''}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </Card>
   );
 }

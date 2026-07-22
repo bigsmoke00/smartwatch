@@ -61,6 +61,60 @@ export class DbAccessService {
     return this.pgMonitor.listDatabasesForCluster(clusterId);
   }
 
+  /**
+   * Schema do database escolhido (tabelas + colunas), pra ajudar a montar o
+   * SELECT na tela. Só lê catálogo (pg_class/pg_attribute) — barato e sem
+   * tocar em dados —, na mesma conexão ad-hoc read-only (com timeout) usada
+   * pelas leituras diretas. Ignora schemas de sistema (pg_*, information_schema).
+   */
+  async getSchema(clusterId: string, database?: string) {
+    const { client } = await this.pgMonitor.getAdhocClient(clusterId, database);
+    try {
+      const rows = await client.queryRawWithTimeout<any>(
+        `SELECT n.nspname AS schema,
+                c.relname AS tbl,
+                c.relkind AS kind,
+                c.reltuples::bigint AS est_rows,
+                a.attname AS col,
+                format_type(a.atttypid, a.atttypmod) AS type,
+                a.attnotnull AS notnull,
+                EXISTS (
+                  SELECT 1 FROM pg_index i
+                  WHERE i.indrelid = c.oid AND i.indisprimary
+                    AND a.attnum = ANY(i.indkey)
+                ) AS is_pk
+         FROM pg_class c
+         JOIN pg_namespace n ON n.oid = c.relnamespace
+         JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped
+         WHERE c.relkind IN ('r','p','v','m')
+           AND n.nspname <> 'information_schema'
+           AND left(n.nspname, 3) <> 'pg_'
+         ORDER BY n.nspname, c.relname, a.attnum`,
+        READ_STATEMENT_TIMEOUT_MS,
+      );
+      const map = new Map<string, any>();
+      for (const r of rows) {
+        const key = `${r.schema}.${r.tbl}`;
+        let t = map.get(key);
+        if (!t) {
+          t = {
+            schema: r.schema,
+            name: r.tbl,
+            kind: r.kind === 'v' ? 'view' : r.kind === 'm' ? 'matview' : 'table',
+            // reltuples é -1 (ou negativo) quando a tabela nunca teve ANALYZE.
+            estRows: Number(r.est_rows) < 0 ? null : Number(r.est_rows),
+            columns: [] as any[],
+          };
+          map.set(key, t);
+        }
+        t.columns.push({ name: r.col, type: r.type, notnull: r.notnull, pk: r.is_pk });
+      }
+      return Array.from(map.values());
+    } finally {
+      await client.end();
+    }
+  }
+
   private assertReadOnly(sql: string) {
     if (!/^\s*(SELECT|WITH)\b/i.test(sql.trim())) {
       throw new ForbiddenException('Só SELECT/WITH são permitidos em leitura direta — para UPDATE/INSERT/DELETE, abra um pedido de escrita.');

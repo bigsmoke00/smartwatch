@@ -38,6 +38,12 @@ class DbAccessController {
   databases(@Param('id') id: string) { return this.svc.listDatabases(id); }
 
   @RequirePermission('db:query')
+  @Get('clusters/:id/schema')
+  schema(@Param('id') id: string, @Query('database') database?: string) {
+    return this.svc.getSchema(id, database);
+  }
+
+  @RequirePermission('db:query')
   @Audit('db.query')
   @Post('query')
   run(@Body() dto: RunQueryDto, @CurrentUser() u: JwtUserPayload) {
