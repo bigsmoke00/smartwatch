@@ -153,31 +153,71 @@ export default function ExportsPage() {
   );
 }
 
+// Presets de período — geram a sintaxe relativa que o backend entende
+// (now-<n><unidade>). "Personalizado" abre dois campos de data/hora.
+const PERIOD_PRESETS: { value: string; label: string; from: string }[] = [
+  { value: '1h', label: 'Última 1 hora', from: 'now-1h' },
+  { value: '6h', label: 'Últimas 6 horas', from: 'now-6h' },
+  { value: '12h', label: 'Últimas 12 horas', from: 'now-12h' },
+  { value: '24h', label: 'Últimas 24 horas', from: 'now-24h' },
+  { value: '48h', label: 'Últimos 2 dias', from: 'now-48h' },
+  { value: '7d', label: 'Últimos 7 dias', from: 'now-7d' },
+  { value: '30d', label: 'Últimos 30 dias', from: 'now-30d' },
+];
+
 function ServerExportList({
   onExport, onBundle,
 }: {
   onExport: (o: { serverId?: string; from: string; to: string; format: string }) => Promise<void>;
   onBundle: (serverId: string, from: string, to: string) => Promise<void>;
 }) {
-  const [from, setFrom] = useState('now-24h');
-  const [to, setTo] = useState('now');
+  const [period, setPeriod] = useState('24h');
+  const [customFrom, setCustomFrom] = useState('');
+  const [customTo, setCustomTo] = useState('');
   const [format, setFormat] = useState('log');
   const [serverId, setServerId] = useState<string>('');
 
+  // Converte a escolha de período no par {from, to} que a API espera. Presets
+  // viram "now-Xh"→"now"; personalizado converte os campos de data/hora locais
+  // pra ISO (e usa "now" se o "Até" ficar em branco).
+  function resolveRange(): { from: string; to: string } | null {
+    if (period === 'custom') {
+      if (!customFrom) { alert('Escolha a data/hora inicial (De).'); return null; }
+      const from = new Date(customFrom).toISOString();
+      const to = customTo ? new Date(customTo).toISOString() : 'now';
+      return { from, to };
+    }
+    const p = PERIOD_PRESETS.find((x) => x.value === period) ?? PERIOD_PRESETS[3];
+    return { from: p.from, to: 'now' };
+  }
+
+  function doExport() {
+    const r = resolveRange();
+    if (!r) return;
+    onExport({ serverId: serverId || undefined, from: r.from, to: r.to, format });
+  }
+  function doBundle() {
+    const r = resolveRange();
+    if (!r || !serverId) return;
+    onBundle(serverId, r.from, r.to);
+  }
+
   return (
     <>
-      <div className="grid md:grid-cols-5 gap-2 items-end">
+      <div className="grid md:grid-cols-4 gap-2 items-end">
         <div>
           <label className="text-xs text-muted">Servidor</label>
-          <ServerPicker
-            value={serverId}
-            onChange={setServerId}
-            allowAll
-            allLabel="Todos"
-          />
+          <ServerPicker value={serverId} onChange={setServerId} allowAll allLabel="Todos" />
         </div>
-        <div><label className="text-xs text-muted">De</label><Input value={from} onChange={(e) => setFrom(e.target.value)} /></div>
-        <div><label className="text-xs text-muted">Até</label><Input value={to} onChange={(e) => setTo(e.target.value)} /></div>
+        <div>
+          <label className="text-xs text-muted">Período</label>
+          <Select value={period} onChange={(e) => setPeriod(e.target.value)}>
+            {PERIOD_PRESETS.map((p) => (
+              <option key={p.value} value={p.value}>{p.label}</option>
+            ))}
+            <option value="custom">Personalizado…</option>
+          </Select>
+        </div>
         <div>
           <label className="text-xs text-muted">Formato</label>
           <Select value={format} onChange={(e) => setFormat(e.target.value)}>
@@ -188,19 +228,38 @@ function ServerExportList({
           </Select>
         </div>
         <div className="flex gap-2">
-          <Button onClick={() => onExport({ serverId: serverId || undefined, from, to, format })}>
+          <Button onClick={doExport}>
             <Download size={14} /> Baixar
           </Button>
           {serverId && (
-            <Button variant="secondary" onClick={() => onBundle(serverId, from, to)}>
+            <Button variant="secondary" onClick={doBundle}>
               <Package size={14} /> ZIP
             </Button>
           )}
         </div>
       </div>
-      <p className="text-xs text-muted mt-2">
-        ZIP traz <code>all.log</code>, 1 arquivo por container e o journalctl do host.
-      </p>
+
+      {period === 'custom' && (
+        <div className="grid md:grid-cols-2 gap-2 mt-2">
+          <div>
+            <label className="text-xs text-muted">De</label>
+            <Input type="datetime-local" value={customFrom} onChange={(e) => setCustomFrom(e.target.value)} />
+          </div>
+          <div>
+            <label className="text-xs text-muted">Até (vazio = agora)</label>
+            <Input type="datetime-local" value={customTo} onChange={(e) => setCustomTo(e.target.value)} />
+          </div>
+        </div>
+      )}
+
+      <div className="text-xs text-muted mt-2 space-y-1">
+        <p>
+          <b className="text-text">Baixar</b> gera um único arquivo com os logs indexados do período (no formato escolhido).
+        </p>
+        <p>
+          <b className="text-text">ZIP</b> (só com um servidor específico) traz os arquivos brutos do host: <code>all.log</code>, 1 arquivo por container e o journalctl.
+        </p>
+      </div>
     </>
   );
 }
