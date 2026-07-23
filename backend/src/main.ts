@@ -16,6 +16,13 @@ async function bootstrap() {
   const app = await NestFactory.create(AppModule, { bufferLogs: true, bodyParser: false });
   app.useLogger(app.get(PinoLogger));
 
+  // Atrás do reverse-proxy (nginx/haproxy): confia no primeiro hop pra que
+  // `req.ip` reflita o X-Forwarded-For real do cliente. Sem isto, TODAS as
+  // requisições chegam com o IP do proxy (ex.: 10.10.0.191) e o rate-limit
+  // global agrupa a frota inteira de agents num único balde — foi o que
+  // derrubava todos os agents com 429 em massa (ThrottlerException).
+  app.getHttpAdapter().getInstance().set('trust proxy', 1);
+
   const bodyLimit = process.env.LOGWATCH_INGEST_BODY_LIMIT ?? '150mb';
   app.use(json({ limit: bodyLimit }));
   app.use(urlencoded({ extended: true, limit: bodyLimit }));

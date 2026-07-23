@@ -10,6 +10,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiSecurity, ApiTags } from '@nestjs/swagger';
+import { SkipThrottle } from '@nestjs/throttler';
 import {
   ArrayMaxSize,
   ArrayMinSize,
@@ -63,6 +64,12 @@ export class LogsController {
     private readonly servers: ServersService,
   ) {}
 
+  // Endpoints de máquina (agents) — isentos do throttler global (30 req/s),
+  // que existe pra endpoints de usuário. O ingest tem controle de vazão
+  // próprio por servidor (quota/rate-limit por servidor); sem o SkipThrottle,
+  // quando um agent volta de uma queda de rede e despeja o buffer acumulado
+  // de uma vez, ele tomava 429 e não conseguia esvaziar a fila.
+  @SkipThrottle()
   @Public()
   @UseGuards(ApiKeyGuard)
   @ApiSecurity('api-key')
@@ -78,6 +85,7 @@ export class LogsController {
    * usam, para não exigir redeploy deles. Endpoints de inventário de
    * containers foram removidos junto com a tela de containers.
    */
+  @SkipThrottle()
   @Public()
   @UseGuards(ApiKeyGuard)
   @ApiSecurity('api-key')

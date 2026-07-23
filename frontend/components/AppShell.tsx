@@ -20,6 +20,7 @@ import {
   Boxes,
   FileCode,
   Download,
+  Rocket,
   Terminal as TerminalIcon,
   Database as DbIcon,
   TerminalSquare,
@@ -67,6 +68,7 @@ const NAV_GROUPS: { title: string; items: NavItem[] }[] = [
   {
     title: 'Operações',
     items: [
+      { href: '/deploy', label: 'Deploys (CD)', icon: Rocket, perms: ['deploy:read'] },
       { href: '/exports', label: 'Log exports', icon: Download, perms: ['logs:download'] },
       { href: '/audit', label: 'Audit log', icon: History, perms: ['audit:read'] },
     ],

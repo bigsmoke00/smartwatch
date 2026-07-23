@@ -9,6 +9,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiSecurity, ApiTags } from '@nestjs/swagger';
+import { SkipThrottle } from '@nestjs/throttler';
 import { Request } from 'express';
 import { ApiKeyGuard } from '../logs/api-key.guard';
 import { Public } from '../auth/public.decorator';
@@ -19,6 +20,10 @@ import { MetricsService } from './metrics.service';
 export class MetricsController {
   constructor(private readonly metrics: MetricsService) {}
 
+  // Endpoint de máquina (agents), alto volume — isento do throttler global
+  // (30 req/s), que é pra endpoints de usuário. O controle de vazão do agent
+  // é feito por servidor na ingestão, não por esse rate-limit global.
+  @SkipThrottle()
   @Public()
   @UseGuards(ApiKeyGuard)
   @ApiSecurity('api-key')
