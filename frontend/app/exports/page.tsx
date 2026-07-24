@@ -47,9 +47,13 @@ export default function ExportsPage() {
 
   async function downloadExport(opts: {
     serverId?: string; from: string; to: string; format: string;
+    source?: 'all' | 'host' | 'container'; containerName?: string; fileName?: string;
   }) {
     const qp = new URLSearchParams();
     if (opts.serverId) qp.set('serverId', opts.serverId);
+    if (opts.source && opts.source !== 'all') qp.set('source', opts.source);
+    if (opts.source === 'container' && opts.containerName) qp.set('containerName', opts.containerName);
+    if (opts.source === 'host' && opts.fileName) qp.set('fileName', opts.fileName);
     qp.set('from', opts.from); qp.set('to', opts.to); qp.set('format', opts.format);
     const res = await authedFetch(`${API}/logs/export?${qp}`);
     if (!res.ok) { alert(`Falha (${res.status})`); return; }
@@ -165,10 +169,15 @@ const PERIOD_PRESETS: { value: string; label: string; from: string }[] = [
   { value: '30d', label: 'Últimos 30 dias', from: 'now-30d' },
 ];
 
+type Source = 'all' | 'host' | 'container';
+
 function ServerExportList({
   onExport, onBundle,
 }: {
-  onExport: (o: { serverId?: string; from: string; to: string; format: string }) => Promise<void>;
+  onExport: (o: {
+    serverId?: string; from: string; to: string; format: string;
+    source?: Source; containerName?: string; fileName?: string;
+  }) => Promise<void>;
   onBundle: (serverId: string, from: string, to: string) => Promise<void>;
 }) {
   const [period, setPeriod] = useState('24h');
@@ -177,9 +186,25 @@ function ServerExportList({
   const [format, setFormat] = useState('log');
   const [serverId, setServerId] = useState<string>('');
 
-  // Converte a escolha de período no par {from, to} que a API espera. Presets
-  // viram "now-Xh"→"now"; personalizado converte os campos de data/hora locais
-  // pra ISO (e usa "now" se o "Até" ficar em branco).
+  // Mesma escolha de fonte da tela de Logs: tudo / só host (/var/log) / só
+  // containers (e um container específico). As listas de container/arquivo
+  // dependem de um servidor específico (não dá pra listar em "Todos").
+  const [source, setSource] = useState<Source>('all');
+  const [containerName, setContainerName] = useState('');
+  const [fileName, setFileName] = useState('');
+  const [containerOptions, setContainerOptions] = useState<{ containerName: string; image: string | null }[]>([]);
+  const [fileOptions, setFileOptions] = useState<{ fileName: string }[]>([]);
+
+  useEffect(() => {
+    setContainerName('');
+    setFileName('');
+    if (!serverId) { setContainerOptions([]); setFileOptions([]); return; }
+    apiFetch<{ containerName: string; image: string | null }[]>(`/logs/containers?serverId=${serverId}`)
+      .then((r) => setContainerOptions(safeArray(r))).catch(() => setContainerOptions([]));
+    apiFetch<{ fileName: string }[]>(`/logs/files?serverId=${serverId}`)
+      .then((r) => setFileOptions(safeArray(r))).catch(() => setFileOptions([]));
+  }, [serverId]);
+
   function resolveRange(): { from: string; to: string } | null {
     if (period === 'custom') {
       if (!customFrom) { alert('Escolha a data/hora inicial (De).'); return null; }
@@ -194,13 +219,22 @@ function ServerExportList({
   function doExport() {
     const r = resolveRange();
     if (!r) return;
-    onExport({ serverId: serverId || undefined, from: r.from, to: r.to, format });
+    onExport({
+      serverId: serverId || undefined, from: r.from, to: r.to, format,
+      source, containerName: containerName || undefined, fileName: fileName || undefined,
+    });
   }
   function doBundle() {
     const r = resolveRange();
     if (!r || !serverId) return;
     onBundle(serverId, r.from, r.to);
   }
+
+  const SOURCES: { key: Source; label: string }[] = [
+    { key: 'all', label: 'Tudo' },
+    { key: 'host', label: 'Host (/var/log)' },
+    { key: 'container', label: 'Containers' },
+  ];
 
   return (
     <>
@@ -239,6 +273,55 @@ function ServerExportList({
         </div>
       </div>
 
+      {/* Fonte: tudo / host / containers — igual à tela de Logs */}
+      <div className="flex flex-wrap items-center gap-2 mt-2">
+        <div className="inline-flex rounded-lg border border-border p-0.5 bg-bg">
+          {SOURCES.map((s) => (
+            <button
+              key={s.key}
+              onClick={() => setSource(s.key)}
+              className={`px-3 py-1.5 rounded-md text-xs transition-colors ${
+                source === s.key ? 'bg-accent text-white' : 'text-muted hover:text-text'
+              }`}
+            >
+              {s.label}
+            </button>
+          ))}
+        </div>
+
+        {source === 'container' && (
+          <div className="min-w-[240px]">
+            {serverId ? (
+              <Select value={containerName} onChange={(e) => setContainerName(e.target.value)}>
+                <option value="">Todos os containers</option>
+                {containerOptions.map((c) => (
+                  <option key={c.containerName} value={c.containerName}>
+                    {c.containerName}{c.image ? ` (${c.image})` : ''}
+                  </option>
+                ))}
+              </Select>
+            ) : (
+              <span className="text-2xs text-mutedFaint">Escolha um servidor para listar containers.</span>
+            )}
+          </div>
+        )}
+
+        {source === 'host' && (
+          <div className="min-w-[240px]">
+            {serverId ? (
+              <Select value={fileName} onChange={(e) => setFileName(e.target.value)}>
+                <option value="">Todos os arquivos (/var/log)</option>
+                {fileOptions.map((f) => (
+                  <option key={f.fileName} value={f.fileName}>{f.fileName}</option>
+                ))}
+              </Select>
+            ) : (
+              <span className="text-2xs text-mutedFaint">Escolha um servidor para listar arquivos.</span>
+            )}
+          </div>
+        )}
+      </div>
+
       {period === 'custom' && (
         <div className="grid md:grid-cols-2 gap-2 mt-2">
           <div>
@@ -254,7 +337,7 @@ function ServerExportList({
 
       <div className="text-xs text-muted mt-2 space-y-1">
         <p>
-          <b className="text-text">Baixar</b> gera um único arquivo com os logs indexados do período (no formato escolhido).
+          <b className="text-text">Baixar</b> gera um único arquivo com os logs indexados do período e da fonte escolhida (tudo, só host, ou só containers / um container específico).
         </p>
         <p>
           <b className="text-text">ZIP</b> (só com um servidor específico) traz os arquivos brutos do host: <code>all.log</code>, 1 arquivo por container e o journalctl.

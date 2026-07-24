@@ -40,7 +40,10 @@ class LogExportController {
   async exportLogs(
     @Res() res: Response,
     @Query('serverId') serverId?: string,
+    @Query('source') source?: 'all' | 'host' | 'container',
     @Query('containerName') containerName?: string,
+    // CSV de arquivos de host (mesmo padrão da tela de Logs), ex.: syslog,nginx/error.log
+    @Query('fileName') fileName?: string,
     @Query('q') q?: string,
     @Query('level') level?: string,
     @Query('from') from?: string,
@@ -48,7 +51,8 @@ class LogExportController {
     @Query('format') format: ExportFormat = 'log',
   ) {
     await this.svc.streamExport(res, {
-      serverId, containerName, q, from, to,
+      serverId, source, containerName, q, from, to,
+      fileNames: fileName ? fileName.split(',') : undefined,
       level: level ? level.split(',') : undefined,
     }, format);
   }
