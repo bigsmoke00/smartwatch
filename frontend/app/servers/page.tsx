@@ -45,9 +45,10 @@ export default function ServersPage() {
   const [cloud, setCloud] = useState<string>('onprem');
   const [cloudRegion, setCloudRegion] = useState('');
   const [retentionDays, setRetentionDays] = useState('4');
-  // Override opcional do teto de linhas de log armazenadas/minuto — só
-  // relevante pra fontes de altíssimo volume (ex: trace de dialplan do
-  // FreeSWITCH/Unity). Vazio = usa o default global do backend.
+  // Override opcional do teto de linhas de log armazenadas/minuto.
+  // Vazio ou 0 = ILIMITADO (nada é descartado — é o padrão). Só preencha
+  // com um número > 0 se quiser impor um teto rígido nesse servidor
+  // (proteção de disco); nada disso é necessário no uso normal.
   const [logRateLimitPerMinute, setLogRateLimitPerMinute] = useState('');
 
   // Edição inline de um servidor já existente — UM único popover por linha
@@ -81,12 +82,12 @@ export default function ServersPage() {
       alert('Informe um número de dias entre 1 e 365 para a retenção.');
       return;
     }
-    // Vazio = remove o override do limite de linhas/min (volta pro default
-    // global) — por isso só valida o range quando algo foi digitado.
+    // Vazio = remove o override (volta pro default global, que é ilimitado).
+    // 0 = ilimitado explícito. >0 = teto rígido. Só valida o range digitado.
     const rawLimit = editForm.logRateLimitPerMinute.trim();
     const limit = rawLimit === '' ? null : parseInt(rawLimit, 10);
-    if (limit !== null && (!Number.isFinite(limit) || limit < 100 || limit > 500000)) {
-      alert('Limite de linhas/minuto deve estar entre 100 e 500000, ou vazio para usar o default global.');
+    if (limit !== null && (!Number.isFinite(limit) || limit < 0 || limit > 500000)) {
+      alert('Limite de linhas/minuto deve estar entre 0 e 500000 (0 = ilimitado), ou vazio para usar o default global.');
       return;
     }
     setEditSaving(true);
@@ -245,18 +246,19 @@ export default function ServersPage() {
                 </div>
               </div>
               <div>
-                <label className="text-xs text-muted">Limite de linhas de log/minuto (fontes de alto volume)</label>
+                <label className="text-xs text-muted">Limite de linhas de log/minuto (opcional)</label>
                 <Input
                   type="number"
-                  min={100}
+                  min={0}
                   max={500000}
                   value={logRateLimitPerMinute}
                   onChange={(e) => setLogRateLimitPerMinute(e.target.value)}
-                  placeholder="vazio = default global"
+                  placeholder="vazio ou 0 = ilimitado"
                 />
                 <div className="text-[11px] text-muted mt-0.5">
-                  Override opcional do teto de linhas ARMAZENADAS por minuto para este servidor
-                  (ex: 200000 para o FreeSWITCH/Unity). Deixe vazio para usar o default global.
+                  Vazio ou 0 = ILIMITADO (nada é descartado — padrão). Preencha com um
+                  número &gt; 0 só para impor um teto rígido de linhas ARMAZENADAS por minuto
+                  neste servidor (proteção de disco).
                 </div>
               </div>
               <div className="md:col-span-2 flex gap-2">
@@ -330,7 +332,7 @@ export default function ServersPage() {
                           <Badge title="Retenção de logs">
                             {s.retentionDays ?? 14}d retenção
                           </Badge>
-                          {s.logRateLimitPerMinute && (
+                          {typeof s.logRateLimitPerMinute === 'number' && s.logRateLimitPerMinute > 0 && (
                             <Badge title="Limite de linhas de log armazenadas por minuto (override deste servidor)">
                               {s.logRateLimitPerMinute.toLocaleString()} linhas/min
                             </Badge>
@@ -433,9 +435,9 @@ export default function ServersPage() {
                             <label className="text-xs text-muted">Limite de linhas de log/minuto</label>
                             <Input
                               type="number"
-                              min={100}
+                              min={0}
                               max={500000}
-                              placeholder="vazio = default global"
+                              placeholder="vazio ou 0 = ilimitado"
                               value={editForm.logRateLimitPerMinute}
                               onChange={(e) => setEditForm({ ...editForm, logRateLimitPerMinute: e.target.value })}
                             />

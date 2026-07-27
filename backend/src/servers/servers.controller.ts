@@ -36,7 +36,8 @@ class CreateServerDto {
   @IsOptional() @IsArray() tags?: string[];
   @IsOptional() @IsObject() labels?: Record<string, any>;
   @IsOptional() @IsInt() @Min(1) @Max(365) retentionDays?: number;
-  @IsOptional() @IsInt() @Min(100) @Max(500000) logRateLimitPerMinute?: number;
+  // 0 = ilimitado (sem descarte). >0 impõe teto rígido de linhas/min.
+  @IsOptional() @IsInt() @Min(0) @Max(500000) logRateLimitPerMinute?: number;
 }
 /**
  * UpdateServerDto NÃO herda de CreateServerDto — todos os campos são opcionais
@@ -55,7 +56,8 @@ class UpdateServerDto {
   @IsOptional() @IsArray() tags?: string[];
   @IsOptional() @IsObject() labels?: Record<string, any>;
   @IsOptional() @IsInt() @Min(1) @Max(365) retentionDays?: number;
-  @IsOptional() @IsInt() @Min(100) @Max(500000) logRateLimitPerMinute?: number;
+  // 0 = ilimitado (sem descarte). >0 impõe teto rígido de linhas/min.
+  @IsOptional() @IsInt() @Min(0) @Max(500000) logRateLimitPerMinute?: number;
 }
 class CreateApiKeyDto {
   @IsOptional() @IsArray() ipAllowlist?: string[];

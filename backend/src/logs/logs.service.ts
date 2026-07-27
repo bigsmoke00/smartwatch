@@ -32,9 +32,22 @@ const MAX_META_BYTES = Math.min(
   16_384,
   Math.max(512, parseInt(process.env.LOGWATCH_MAX_META_BYTES ?? '4096', 10)),
 );
-const MAX_STORED_ROWS_PER_MINUTE = Math.max(
-  100,
-  parseInt(process.env.LOGWATCH_MAX_STORED_ROWS_PER_MINUTE ?? '5000', 10),
+// Teto de linhas ARMAZENADAS por minuto, por servidor. Regra de interpretação
+// (vale tanto pro default global aqui quanto pro override por servidor):
+//   - ausente / vazio  -> ILIMITADO (default): a plataforma NÃO descarta log.
+//   - 0 ou negativo     -> ILIMITADO (forma explícita de desligar o teto).
+//   - N > 0             -> teto rígido de N linhas/min (proteção de disco).
+// Antes o default era 5000 e o excedente era DESCARTADO — conforme a frota
+// crescia, quase todo servidor batia o teto e perdia log. Agora só limita
+// quem for explicitamente configurado com um N > 0.
+function parseRowsPerMinute(raw: string | undefined | null): number {
+  if (raw == null || raw.trim() === '') return Infinity;
+  const n = parseInt(raw, 10);
+  if (!Number.isFinite(n) || n <= 0) return Infinity;
+  return n;
+}
+const MAX_STORED_ROWS_PER_MINUTE = parseRowsPerMinute(
+  process.env.LOGWATCH_MAX_STORED_ROWS_PER_MINUTE,
 );
 // Fallback só usado se o servidor não vier com retentionDays carregado
 // (ex: integrações antigas) — o valor real fica em servers.retention_days,
@@ -168,23 +181,35 @@ export class LogsService {
     }
 
     const docs = Array.from(grouped.values());
-    const quota = this.quotaFor(server.id, now);
-    // Teto de linhas armazenadas/minuto: usa o override por servidor
-    // (servers.log_rate_limit_per_minute) quando configurado — necessário
-    // pra fontes de altíssimo volume como o FreeSWITCH/Unity, cujo trace de
-    // dialplan facilmente estoura o default global. NULL/undefined cai no
-    // default global de sempre.
-    const limit = server.logRateLimitPerMinute ?? MAX_STORED_ROWS_PER_MINUTE;
-    const remaining = Math.max(0, limit - quota.used);
-    const acceptedDocs = docs.slice(0, remaining);
-    const quotaDropped = docs.length - acceptedDocs.length;
-    quota.used += acceptedDocs.length;
-    quota.dropped += quotaDropped;
+    // Teto de linhas armazenadas/minuto: override por servidor
+    // (servers.log_rate_limit_per_minute) tem precedência; 0/negativo/NULL
+    // seguem a mesma regra de parseRowsPerMinute (0/negativo = ILIMITADO,
+    // NULL = cai no default global — que também é ilimitado por padrão).
+    // Quando o limite é ilimitado NÃO descartamos nada e nem contabilizamos
+    // quota (evita crescer o Map à toa pra frota inteira).
+    const perServer = server.logRateLimitPerMinute;
+    const limit =
+      perServer == null
+        ? MAX_STORED_ROWS_PER_MINUTE
+        : perServer <= 0
+          ? Infinity
+          : perServer;
 
-    if (quotaDropped && quota.dropped === quotaDropped) {
-      this.logger.warn(
-        `Log quota reached for server ${server.name}: max ${limit} stored rows/minute`,
-      );
+    let acceptedDocs = docs;
+    let quotaDropped = 0;
+    if (Number.isFinite(limit)) {
+      const quota = this.quotaFor(server.id, now);
+      const remaining = Math.max(0, limit - quota.used);
+      acceptedDocs = docs.slice(0, remaining);
+      quotaDropped = docs.length - acceptedDocs.length;
+      quota.used += acceptedDocs.length;
+      quota.dropped += quotaDropped;
+
+      if (quotaDropped && quota.dropped === quotaDropped) {
+        this.logger.warn(
+          `Log quota reached for server ${server.name}: max ${limit} stored rows/minute`,
+        );
+      }
     }
 
     await this.repo.insertBatch(acceptedDocs);
