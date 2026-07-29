@@ -141,7 +141,7 @@ export class DeployService {
 
     // Validações que barram a execução com erro claro + callback.
     if (!p.servidor) return this.bail(execId, 'payload sem "servidor"', p.callbackUrl);
-    if (!server) return this.bail(execId, `servidor "${p.servidor}" não encontrado no SmartWatch`, p.callbackUrl);
+    if (!server) return this.bail(execId, `servidor "${p.servidor}" não encontrado no SmartGuard`, p.callbackUrl);
     if (!p.diretorio) return this.bail(execId, 'payload sem "diretorio"', p.callbackUrl);
     if (!version) return this.bail(execId, 'payload sem versão', p.callbackUrl);
 
@@ -344,7 +344,7 @@ export class DeployService {
   ) {
     if (!callbackUrl) return;
     try {
-      const headers: Record<string, string> = { 'content-type': 'application/json', 'user-agent': 'SmartWatch/1.0' };
+      const headers: Record<string, string> = { 'content-type': 'application/json', 'user-agent': 'SmartGuard/1.0' };
       const tok = process.env.SMARTONE_CALLBACK_TOKEN;
       if (tok) headers['authorization'] = `Bearer ${tok}`;
       const body = JSON.stringify({ status, message, pipeline_id: execId, completed_at: new Date().toISOString() });

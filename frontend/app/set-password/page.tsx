@@ -73,8 +73,8 @@ function SetPasswordInner() {
       <Card className="w-full max-w-md p-6">
         <div className="mb-6">
           <div className="font-semibold text-xl flex items-center gap-2">
-            <img src="/logo.jpeg" alt="SmartWatch" className="w-7 h-7 rounded-lg" />
-            SmartWatch
+            <img src="/logo.jpeg" alt="SmartGuard" className="w-7 h-7 rounded-lg" />
+            SmartGuard
           </div>
           <p className="text-sm text-muted mt-1">Defina sua senha de acesso.</p>
         </div>

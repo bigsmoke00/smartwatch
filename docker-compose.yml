@@ -36,6 +36,11 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
+    # É usado SÓ como cache (pg-monitor.tableHealth) — sem fila/pubsub. Por
+    # isso: teto de memória + LRU (nunca deixa estourar/OOM-kill, evita o
+    # "Stream isn't writeable" quando cresce) e sem RDB snapshot (--save "":
+    # não precisa persistir cache e evita stall de fork no save).
+    command: ["redis-server", "--maxmemory", "512mb", "--maxmemory-policy", "allkeys-lru", "--save", ""]
     ports:
       - "6379:6379"
     healthcheck:

@@ -6,7 +6,7 @@ const sans = Inter({ subsets: ['latin'], variable: '--font-sans', display: 'swap
 const mono = JetBrains_Mono({ subsets: ['latin'], variable: '--font-mono', display: 'swap' });
 
 export const metadata: Metadata = {
-  title: 'SmartWatch',
+  title: 'SmartGuard',
   description: 'Plataforma de gerenciamento e visualização de logs',
 };
 

@@ -118,7 +118,7 @@ function matchNavItem(pathname: string): NavItem | null {
 }
 
 function currentPageLabel(pathname: string): string {
-  return matchNavItem(pathname)?.label ?? 'SmartWatch';
+  return matchNavItem(pathname)?.label ?? 'SmartGuard';
 }
 
 export function AppShell({ children }: { children: React.ReactNode }) {
@@ -233,7 +233,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </div>
           {!collapsed && (
             <div className="min-w-0">
-              <div className="font-bold text-[15px] tracking-tight leading-none">SmartWatch</div>
+              <div className="font-bold text-[15px] tracking-tight leading-none">SmartGuard</div>
               <div className="text-2xs text-mutedFaint mt-1">Observabilidade</div>
             </div>
           )}

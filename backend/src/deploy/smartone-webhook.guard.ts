@@ -8,7 +8,7 @@ import { timingSafeEqual } from 'crypto';
 
 /**
  * Autentica o webhook que o SmartOne chama. O "Token de Segurança fornecido
- * pelo SmartWatch" é o env `SMARTONE_WEBHOOK_TOKEN`. Aceita tanto
+ * pelo SmartGuard" é o env `SMARTONE_WEBHOOK_TOKEN`. Aceita tanto
  * `Authorization: Bearer <token>` quanto `x-api-key: <token>`.
  *
  * Não reusa o ApiKeyGuard dos agents porque aquele valida contra a tabela

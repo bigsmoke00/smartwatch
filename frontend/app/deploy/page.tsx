@@ -73,7 +73,7 @@ export default function DeployPage() {
       <div className="p-[22px] space-y-4">
         <PageHeader
           title="Deploys (CD)"
-          description="O SmartOne aprova e inicia a GMUD → o SmartWatch aplica a versão no servidor e devolve o resultado. Cadastre cada aplicação e acompanhe as execuções."
+          description="O SmartOne aprova e inicia a GMUD → o SmartGuard aplica a versão no servidor e devolve o resultado. Cadastre cada aplicação e acompanhe as execuções."
           icon={<Rocket size={16} />}
           actions={
             <Button onClick={() => { setEditing(null); setShowForm((v) => !v); }}>
@@ -220,7 +220,7 @@ function AppForm({ initial, onSaved, onCancel }: { initial: DeployApp | null; on
       </div>
       <p className="text-2xs text-mutedFaint">
         O cadastro serve para o <b>disparo manual</b> e como catálogo. Quando o deploy vem do SmartOne, o servidor,
-        o diretório e as envs chegam no próprio webhook — o SmartWatch detecta sozinho se é compose ou script.
+        o diretório e as envs chegam no próprio webhook — o SmartGuard detecta sozinho se é compose ou script.
       </p>
       <div className="grid md:grid-cols-3 gap-3">
         <div><label className="text-2xs uppercase tracking-wider text-mutedFaint">Nome</label><Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Unity Manager · PROD" /></div>
