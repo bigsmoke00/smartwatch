@@ -1,19 +1,19 @@
-# Integração SmartOne → SmartGuard (módulo CD)
+# Integração SmartOne → SmartGard (módulo CD)
 
-Lado **SmartGuard** da integração descrita em `integracao_smartwatch.md`. É o que você passa pro dev do SmartOne + o checklist de configuração da nossa infra.
+Lado **SmartGard** da integração descrita em `integracao_smartwatch.md`. É o que você passa pro dev do SmartOne + o checklist de configuração da nossa infra.
 
 ## Visão geral do fluxo
 
 1. No SmartOne, a GMUD é aprovada e o usuário clica em **Iniciar GMUD**.
-2. O SmartOne faz `POST` no **webhook** do SmartGuard com os dados do deploy.
-3. O SmartGuard **localiza o servidor** informado, **inspeciona o diretório**, detecta sozinho se é `docker-compose` ou script `.sh`, aplica as **envs** e a **versão**, e executa (deploy ou rollback).
-4. Ao terminar, o SmartGuard faz `POST` no **callback_url**, com sucesso/erro.
+2. O SmartOne faz `POST` no **webhook** do SmartGard com os dados do deploy.
+3. O SmartGard **localiza o servidor** informado, **inspeciona o diretório**, detecta sozinho se é `docker-compose` ou script `.sh`, aplica as **envs** e a **versão**, e executa (deploy ou rollback).
+4. Ao terminar, o SmartGard faz `POST` no **callback_url**, com sucesso/erro.
 
-Sem aprovação extra no SmartGuard — quem autoriza é a GMUD. O disparo do webhook já executa.
+Sem aprovação extra no SmartGard — quem autoriza é a GMUD. O disparo do webhook já executa.
 
 ---
 
-## 1. O que o SmartGuard fornece ao SmartOne
+## 1. O que o SmartGard fornece ao SmartOne
 
 - **URL do webhook:** `POST https://<host-do-smartwatch>/api/webhooks/smartone/gmud`
 - **Token de segurança:** Bearer token em `Authorization: Bearer <token>` (ou `x-api-key: <token>`). O valor é a env `SMARTONE_WEBHOOK_TOKEN` da nossa infra; o mesmo valor é cadastrado no SmartOne.
@@ -49,7 +49,7 @@ Authorization: Bearer <SMARTONE_WEBHOOK_TOKEN>
 }
 ```
 
-Campos (o SmartGuard aceita alias em PT e EN):
+Campos (o SmartGard aceita alias em PT e EN):
 
 | Campo | Obrigatório | O que é |
 |---|---|---|
@@ -58,7 +58,7 @@ Campos (o SmartGuard aceita alias em PT e EN):
 | `componente` | sim | Componente que sobe |
 | `versao` | sim (deploy) | Versão/tag a aplicar |
 | `versao_anterior` | sim (rollback) | Versão para onde voltar |
-| `servidor` | **sim** | hostname, IP ou nome do servidor **como cadastrado no SmartGuard** |
+| `servidor` | **sim** | hostname, IP ou nome do servidor **como cadastrado no SmartGard** |
 | `diretorio` | **sim** | Caminho no host onde está o `docker-compose` ou o `.sh` |
 | `envs` | não | Lista de variáveis a **adicionar ou trocar** (upsert). Aceita `[{chave,valor}]` ou objeto `{CHAVE: "valor"}` |
 | `ambiente` | recomendado | `production`/`staging`/... (usado no histórico) |
@@ -71,9 +71,9 @@ Campos (o SmartGuard aceita alias em PT e EN):
 ```
 Se algo essencial faltar (servidor não encontrado, sem diretório/versão), volta `{ "status": "error", "message": "..." }` e o mesmo erro segue no callback.
 
-## 3. Como o SmartGuard aplica (detecção automática)
+## 3. Como o SmartGard aplica (detecção automática)
 
-No `diretorio` informado, o SmartGuard inspeciona os arquivos e decide:
+No `diretorio` informado, o SmartGard inspeciona os arquivos e decide:
 
 - **Se acha um compose** (`docker-compose.yml/.yaml`, `compose.yml/.yaml`):
   1. Aplica as `envs` no `.env` do diretório (cria se não existir; troca se já existir).
@@ -89,7 +89,7 @@ No `diretorio` informado, o SmartGuard inspeciona os arquivos e decide:
 
 Cada passo (arquivos vistos, envs aplicadas, edição da versão, saída do comando) fica registrado na aba **Execuções** da tela Deploys.
 
-## 4. Callback que o SmartGuard envia (volta)
+## 4. Callback que o SmartGard envia (volta)
 
 ```
 POST <callback_url>

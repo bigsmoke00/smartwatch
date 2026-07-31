@@ -61,10 +61,10 @@ function LoginInner() {
           <div className="mb-8 flex items-center gap-2.5">
             <img
               src="/logo.jpeg"
-              alt="SmartGuard"
+              alt="SmartGard"
               className="w-9 h-9 rounded-xl shadow-[0_1px_0_0_rgba(255,255,255,0.15)_inset]"
             />
-            <span className="font-semibold text-xl tracking-tight">SmartGuard</span>
+            <span className="font-semibold text-xl tracking-tight">SmartGard</span>
           </div>
 
           <h1 className="text-2xl font-semibold tracking-tight">Login</h1>
@@ -131,7 +131,7 @@ function LoginInner() {
           <h2 className="mt-6 text-4xl font-semibold leading-tight tracking-tight">
             Olá,
             <br />
-            bem-vindo ao SmartGuard
+            bem-vindo ao SmartGard
           </h2>
           <p className="mt-4 text-white/80 leading-relaxed">
             Logs, capturas SIP, métricas e chamadas da sua infraestrutura — tudo
