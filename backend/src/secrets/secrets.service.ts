@@ -7,16 +7,18 @@ import {
   scryptSync,
 } from 'crypto';
 import { PG_POOL } from '../db/db.module';
+import { requireSecret } from '../common/env-secret';
 
 const KEY = (() => {
   const v = process.env.SECRETS_MASTER_KEY;
-  if (!v) {
-    // Em produção, falhar se não vier por env. Aqui derivamos uma de fallback.
-    return scryptSync('logwatch-dev-master', 'lw-salt', 32);
-  }
-  if (v.length === 64) return Buffer.from(v, 'hex');
-  return scryptSync(v, 'logwatch-salt', 32);
+  // Chave hex de 32 bytes fornecida explicitamente.
+  if (v && v.length === 64) return Buffer.from(v, 'hex');
+  // Deriva via scrypt do SECRETS_MASTER_KEY. requireSecret garante que em
+  // PRODUÇÃO isso falha se a env não existir (sem chave-mestra default no
+  // código); em dev gera uma efêmera. Sem literal hardcoded.
+  return scryptSync(requireSecret('SECRETS_MASTER_KEY'), 'logwatch-salt', 32);
 })();
+const GCM_TAG_LEN = 16;
 
 @Injectable()
 export class SecretsService {
@@ -33,7 +35,7 @@ export class SecretsService {
 
   async set(name: string, value: string, description?: string) {
     const iv = randomBytes(12);
-    const cipher = createCipheriv('aes-256-gcm', KEY, iv);
+    const cipher = createCipheriv('aes-256-gcm', KEY, iv, { authTagLength: GCM_TAG_LEN });
     const ct = Buffer.concat([cipher.update(value, 'utf8'), cipher.final()]);
     const tag = cipher.getAuthTag();
 
@@ -61,7 +63,7 @@ export class SecretsService {
       [name],
     );
     if (!r.rowCount) throw new NotFoundException();
-    const decipher = createDecipheriv('aes-256-gcm', KEY, r.rows[0].iv);
+    const decipher = createDecipheriv('aes-256-gcm', KEY, r.rows[0].iv, { authTagLength: GCM_TAG_LEN });
     decipher.setAuthTag(r.rows[0].tag);
     return Buffer.concat([
       decipher.update(r.rows[0].ciphertext),

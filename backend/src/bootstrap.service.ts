@@ -5,6 +5,7 @@ import {
   OnApplicationBootstrap,
 } from '@nestjs/common';
 import { Pool } from 'pg';
+import { randomBytes } from 'crypto';
 import { UsersService } from './users/users.service';
 import { PG_POOL } from './db/db.module';
 
@@ -36,12 +37,22 @@ export class BootstrapService implements OnApplicationBootstrap {
     }
 
     const email = process.env.ADMIN_EMAIL ?? 'admin@logwatch.local';
-    const password = process.env.ADMIN_PASSWORD ?? 'ChangeMe!123';
+    // Sem senha default fixa no código. Se ADMIN_PASSWORD não vier, gera uma
+    // forte e aleatória e loga UMA vez (só no primeiro boot, quando o admin é
+    // realmente criado) para troca imediata.
+    let password = process.env.ADMIN_PASSWORD;
+    const generated = !password;
+    if (!password) password = randomBytes(12).toString('base64url');
     const created = await this.users.ensureAdmin(email, password);
     if (created) {
       this.logger.warn(
         `Initial admin created (${email}). CHANGE THE PASSWORD NOW.`,
       );
+      if (generated) {
+        this.logger.warn(
+          `ADMIN_PASSWORD não definida — senha inicial gerada: ${password} (troque no primeiro login).`,
+        );
+      }
     }
 
     await this.seedLegacyPatroniCluster();

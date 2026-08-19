@@ -307,8 +307,10 @@ export class DeployService {
     // 3) fallback: variável de versão conhecida já presente no .env
     const envBefore = await this.ctrl.invoke<any>(serverId, 'fs.readFile', { path: envPath }).catch(() => null);
     const envContent: string = envBefore?.content ?? '';
+    // v vem de uma allowlist fixa (não é input do usuário), mas escapamos por
+    // higiene e para não disparar o detector de RegExp não-literal.
     const known = ['TAG', 'VERSION', 'IMAGE_TAG', 'APP_VERSION'].find((v) =>
-      new RegExp(`^\\s*(?:export\\s+)?${v}=`, 'm').test(envContent),
+      new RegExp(`^\\s*(?:export\\s+)?${escapeRe(v)}=`, 'm').test(envContent),
     );
     if (known) {
       await this.upsertEnvFile(serverId, envPath, [{ key: known, value: version }], addStep);

@@ -19,7 +19,7 @@ docker run -d \
   -v /:/host:rw,rslave \
   --group-add $(stat -c '%g' /var/run/docker.sock) \
   -e LOGWATCH_BASE_URL="https://smartwatch.smartspace.us/api" \
-  -e LOGWATCH_API_KEY="sk_03985776.LXcw8idFsvYgb-MdZhJRU2Rbv14Ht0Z8" \
+  -e LOGWATCH_API_KEY="sk_xxxxxxxx.yyyyyyyyyyyyyyyyyyyyyyyy" \
   -e LOGWATCH_SERVER_NAME="$(hostname -s)" \
   -e LOGWATCH_HOST_ROOT="/host" \
   -e LOGWATCH_MAX_LINES_PER_SOURCE_PER_SECOND=500000 \

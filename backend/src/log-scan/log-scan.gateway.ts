@@ -1,3 +1,4 @@
+import { requireSecret } from '../common/env-secret';
 import {
   WebSocketGateway,
   WebSocketServer,
@@ -72,7 +73,7 @@ export class LogScanGateway implements OnGatewayConnection, OnGatewayDisconnect 
       const sessionId = client.handshake.auth?.sessionId;
       if (!token || !sessionId) throw new Error('token + sessionId required');
       const payload = await this.jwt.verifyAsync(token, {
-        secret: process.env.JWT_SECRET ?? 'dev-secret',
+        secret: requireSecret('JWT_SECRET'),
       });
       const perms = await this.roles.permissionsOf(payload.sub);
       if (!perms.has('logs:read')) throw new Error('sem permissão para acompanhar este scan');

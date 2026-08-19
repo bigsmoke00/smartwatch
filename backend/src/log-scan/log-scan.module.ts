@@ -1,3 +1,4 @@
+import { requireSecret } from '../common/env-secret';
 import { Module } from '@nestjs/common';
 import { JwtModule } from '@nestjs/jwt';
 import { LogScanService } from './log-scan.service';
@@ -10,7 +11,7 @@ import { RolesModule } from '../roles/roles.module';
   imports: [
     DockerManagerModule, // dá acesso ao ControlGateway (canal agent <-> backend)
     RolesModule, // LogScanGateway checa logs:read na autenticação do WS
-    JwtModule.register({ secret: process.env.JWT_SECRET ?? 'dev-secret' }),
+    JwtModule.register({ secret: requireSecret('JWT_SECRET') }),
   ],
   providers: [LogScanService, LogScanGateway],
   controllers: [LogScanController],

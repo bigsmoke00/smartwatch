@@ -1,3 +1,4 @@
+import { requireSecret } from '../common/env-secret';
 import {
   Inject,
   Injectable,
@@ -67,7 +68,7 @@ export class AuthService {
     let payload: any;
     try {
       payload = await this.jwt.verifyAsync(token, {
-        secret: process.env.JWT_REFRESH_SECRET ?? 'dev-refresh',
+        secret: requireSecret('JWT_REFRESH_SECRET'),
       });
     } catch {
       throw new UnauthorizedException('Invalid refresh token');
@@ -127,11 +128,11 @@ export class AuthService {
   ): Promise<TokenPair & { user: any }> {
     const payload = { sub: user.id, email: user.email, role: user.role };
     const accessToken = await this.jwt.signAsync(payload, {
-      secret: process.env.JWT_SECRET ?? 'dev-secret',
+      secret: requireSecret('JWT_SECRET'),
       expiresIn: process.env.JWT_ACCESS_EXPIRES ?? '15m',
     });
     const refreshToken = await this.jwt.signAsync(payload, {
-      secret: process.env.JWT_REFRESH_SECRET ?? 'dev-refresh',
+      secret: requireSecret('JWT_REFRESH_SECRET'),
       expiresIn: process.env.JWT_REFRESH_EXPIRES ?? '7d',
     });
     const refreshDays = parseInt(

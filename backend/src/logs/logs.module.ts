@@ -1,3 +1,4 @@
+import { requireSecret } from '../common/env-secret';
 import { Module } from '@nestjs/common';
 import { JwtModule } from '@nestjs/jwt';
 import { LogsService } from './logs.service';
@@ -10,7 +11,7 @@ import { ServersModule } from '../servers/servers.module';
 @Module({
   imports: [
     ServersModule,
-    JwtModule.register({ secret: process.env.JWT_SECRET ?? 'dev-secret' }),
+    JwtModule.register({ secret: requireSecret('JWT_SECRET') }),
   ],
   providers: [LogsService, LogsRepository, LogsGateway, ApiKeyGuard],
   controllers: [LogsController],

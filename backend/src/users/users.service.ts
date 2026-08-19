@@ -1,3 +1,4 @@
+import { requireSecret } from '../common/env-secret';
 import {
   Inject,
   Injectable,
@@ -326,7 +327,7 @@ export class UsersService {
     return this.jwt.signAsync(
       { sub: userId, email, purpose: SET_PASSWORD_PURPOSE },
       {
-        secret: process.env.JWT_INVITE_SECRET ?? process.env.JWT_SECRET ?? 'dev-secret',
+        secret: process.env.JWT_INVITE_SECRET ?? requireSecret('JWT_SECRET'),
         expiresIn: process.env.JWT_INVITE_EXPIRES ?? '3d',
       },
     );
@@ -337,7 +338,7 @@ export class UsersService {
     let payload: any;
     try {
       payload = await this.jwt.verifyAsync(token, {
-        secret: process.env.JWT_INVITE_SECRET ?? process.env.JWT_SECRET ?? 'dev-secret',
+        secret: process.env.JWT_INVITE_SECRET ?? requireSecret('JWT_SECRET'),
       });
     } catch {
       throw new UnauthorizedException('Link inválido ou expirado');
@@ -354,7 +355,7 @@ export class UsersService {
     let payload: any;
     try {
       payload = await this.jwt.verifyAsync(token, {
-        secret: process.env.JWT_INVITE_SECRET ?? process.env.JWT_SECRET ?? 'dev-secret',
+        secret: process.env.JWT_INVITE_SECRET ?? requireSecret('JWT_SECRET'),
       });
     } catch {
       throw new UnauthorizedException('Link inválido ou expirado');

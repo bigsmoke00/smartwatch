@@ -1,3 +1,4 @@
+import { requireSecret } from '../common/env-secret';
 import {
   Body,
   Controller,
@@ -151,7 +152,7 @@ class ZeroTrustController {
 @Module({
   imports: [
     DockerManagerModule,
-    JwtModule.register({ secret: process.env.JWT_SECRET ?? 'dev-secret' }),
+    JwtModule.register({ secret: requireSecret('JWT_SECRET') }),
   ],
   providers: [ZeroTrustService, TerminalGateway],
   controllers: [ZeroTrustController],

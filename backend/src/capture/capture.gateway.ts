@@ -1,3 +1,4 @@
+import { requireSecret } from '../common/env-secret';
 import {
   WebSocketGateway,
   WebSocketServer,
@@ -82,7 +83,7 @@ export class CaptureGateway implements OnGatewayConnection, OnGatewayDisconnect 
       const sessionId = client.handshake.auth?.sessionId;
       if (!token || !sessionId) throw new Error('token + sessionId required');
       const payload = await this.jwt.verifyAsync(token, {
-        secret: process.env.JWT_SECRET ?? 'dev-secret',
+        secret: requireSecret('JWT_SECRET'),
       });
 
       const r = await this.pool.query(`SELECT * FROM capture_sessions WHERE id=$1`, [sessionId]);

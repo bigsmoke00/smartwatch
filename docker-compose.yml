@@ -14,6 +14,8 @@ services:
       context: .
       dockerfile: Dockerfile.postgres
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -36,6 +38,8 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
     # É usado SÓ como cache (pg-monitor.tableHealth) — sem fila/pubsub. Por
     # isso: teto de memória + LRU (nunca deixa estourar/OOM-kill, evita o
     # "Stream isn't writeable" quando cresce) e sem RDB snapshot (--save "":
@@ -55,6 +59,8 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
     env_file: .env
     ports:
       - "4000:4000"
@@ -77,6 +83,8 @@ services:
         NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL}
         NEXT_PUBLIC_WS_URL: ${NEXT_PUBLIC_WS_URL}
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
     env_file: .env
     environment:
       # Necessário para o `next start` standalone bind no 0.0.0.0

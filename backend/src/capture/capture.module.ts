@@ -1,3 +1,4 @@
+import { requireSecret } from '../common/env-secret';
 import {
   Body, Controller, Get, Module, NotFoundException, Param, Post, Query, Res, StreamableFile,
 } from '@nestjs/common';
@@ -15,7 +16,7 @@ import { CurrentUser, JwtUserPayload } from '../auth/current-user.decorator';
 import { DockerManagerModule } from '../docker-manager/docker-manager.module';
 import { RolesModule } from '../roles/roles.module';
 
-const JWT_SECRET = process.env.JWT_SECRET ?? 'dev-secret';
+const JWT_SECRET = requireSecret('JWT_SECRET');
 
 class RequestCaptureDto {
   @IsString() serverId!: string;
@@ -147,7 +148,7 @@ class CaptureController {
   imports: [
     DockerManagerModule,
     RolesModule,
-    JwtModule.register({ secret: process.env.JWT_SECRET ?? 'dev-secret' }),
+    JwtModule.register({ secret: requireSecret('JWT_SECRET') }),
   ],
   providers: [CaptureService, CaptureGateway],
   controllers: [CaptureController],

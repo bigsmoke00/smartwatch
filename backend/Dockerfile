@@ -48,6 +48,12 @@ COPY package*.json ./
 COPY migrations ./migrations
 EXPOSE 4000
 
+# Não roda como root (hardening — Semgrep dockerfile.security.missing-user).
+# A imagem node:20-alpine já traz o usuário 'node' (uid 1000). Observação: o
+# bind mount de capturas (./capturas_sip) precisa ser gravável por esse uid —
+# no host: `chown -R 1000:1000 ./capturas_sip` (ou ajuste as permissões).
+USER node
+
 # Por padrão: roda migrations e depois sobe o servidor.
 # Para pular, defina SKIP_MIGRATIONS=true.
 CMD sh -c '\

@@ -1,3 +1,4 @@
+import { requireSecret } from '../common/env-secret';
 import {
   WebSocketGateway,
   WebSocketServer,
@@ -29,7 +30,7 @@ export class LogsGateway implements OnGatewayConnection, OnGatewayDisconnect {
         (client.handshake.headers.authorization || '').replace('Bearer ', '');
       if (!token) throw new Error('No token');
       const payload = await this.jwt.verifyAsync(token, {
-        secret: process.env.JWT_SECRET ?? 'dev-secret',
+        secret: requireSecret('JWT_SECRET'),
       });
       (client.data as any).user = payload;
     } catch {
