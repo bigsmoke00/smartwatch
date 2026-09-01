@@ -50,10 +50,19 @@ async function probeHttp(cfg: EndpointCfg): Promise<ProbeOutcome> {
     isHttps && cfg.insecureSkipVerify
       ? new Agent({ connect: { rejectUnauthorized: false } })
       : undefined;
+  // Muitos edges/WAF (nginx, Cloudflare) tratam requisições SEM User-Agent
+  // de forma diferente (403/503/challenge) — ao contrário do curl, o undici
+  // não envia UA nem Accept por padrão. Mandamos defaults "de navegador" para
+  // o check bater com o que um cliente real vê; headers do usuário sobrescrevem.
+  const headers: Record<string, string> = {
+    'user-agent': 'SmartGard-Monitor/1.0 (+synthetic-health-check)',
+    accept: '*/*',
+    ...(cfg.requestHeaders ?? {}),
+  };
   try {
     const res = await request(cfg.target, {
       method: (cfg.method ?? 'GET') as any,
-      headers: cfg.requestHeaders ?? {},
+      headers,
       body: cfg.requestBody ?? undefined,
       maxRedirections: cfg.followRedirects === false ? 0 : 5,
       headersTimeout: cfg.timeoutMs,

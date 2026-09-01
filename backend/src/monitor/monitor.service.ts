@@ -162,6 +162,38 @@ export class MonitorService {
     return this.runCheck(ep);
   }
 
+  /** Série temporal (bucketada) de latência e uptime para o gráfico. */
+  async series(id: string, window: string) {
+    const { interval, bucket } = windowSpec(window);
+    const r = await this.pool.query(
+      `SELECT time_bucket($2::interval, ts) AS bucket,
+              round(avg(response_time_ms))::int AS "avgMs",
+              count(*) FILTER (WHERE success)::int AS up,
+              count(*)::int AS total
+       FROM monitor_results
+       WHERE endpoint_id=$1 AND ts >= now() - $3::interval
+       GROUP BY bucket ORDER BY bucket`,
+      [id, bucket, interval],
+    );
+    return r.rows;
+  }
+
+  /** Uptime + latência agregados numa janela (para badges e cards). */
+  async badgeInfo(id: string, window: string) {
+    const ep = await this.get(id);
+    if (!ep) return null;
+    const { interval } = windowSpec(window);
+    const r = await this.pool.query(
+      `SELECT count(*)::int AS total, count(*) FILTER (WHERE success)::int AS up,
+              round(avg(response_time_ms))::int AS "avgMs"
+       FROM monitor_results WHERE endpoint_id=$1 AND ts >= now() - $2::interval`,
+      [id, interval],
+    );
+    const row = r.rows[0] ?? { total: 0, up: 0, avgMs: null };
+    const uptime = row.total ? Math.round((row.up / row.total) * 100) : null;
+    return { name: ep.name, status: ep.lastStatus as string, uptime, avgMs: row.avgMs as number | null };
+  }
+
   // ============================================================ Scheduler
   @Cron('*/10 * * * * *') // a cada 10s: dispara quem já venceu o intervalo
   async tick() {
@@ -299,6 +331,16 @@ function clampInt(v: unknown, min: number, max: number, def: number): number {
   const n = typeof v === 'number' ? v : parseInt(String(v ?? ''), 10);
   if (!Number.isFinite(n)) return def;
   return Math.min(max, Math.max(min, Math.trunc(n)));
+}
+
+function windowSpec(window: string): { interval: string; bucket: string } {
+  switch (String(window || '24h')) {
+    case '1h': return { interval: '1 hour', bucket: '1 minute' };
+    case '7d': return { interval: '7 days', bucket: '1 hour' };
+    case '30d': return { interval: '30 days', bucket: '6 hours' };
+    case '24h':
+    default: return { interval: '24 hours', bucket: '10 minutes' };
+  }
 }
 
 function normType(t: unknown): ProbeType {

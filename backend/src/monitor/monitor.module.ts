@@ -1,5 +1,5 @@
 import {
-  Body, Controller, Delete, Get, Module, Param, Patch, Post, Query,
+  Body, Controller, Delete, Get, Header, Module, Param, Patch, Post, Query,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import {
@@ -8,8 +8,10 @@ import {
 import { MonitorService } from './monitor.service';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { RequirePermission } from '../auth/permissions.decorator';
+import { Public } from '../auth/public.decorator';
 import { Audit } from '../audit/audit.decorator';
 import { CurrentUser, JwtUserPayload } from '../auth/current-user.decorator';
+import { svgBadge, uptimeColor, healthColor, latencyColor, safeEq } from './monitor.badge';
 
 const TYPES = ['http', 'tcp', 'udp', 'icmp', 'dns', 'tls'];
 
@@ -64,6 +66,41 @@ class MonitorController {
   @RequirePermission('monitor:read')
   @Get('endpoints/:id/events')
   events(@Param('id') id: string) { return this.svc.events(id); }
+
+  @RequirePermission('monitor:read')
+  @Get('endpoints/:id/series')
+  series(@Param('id') id: string, @Query('window') window?: string) {
+    return this.svc.series(id, window || '24h');
+  }
+
+  @RequirePermission('monitor:read')
+  @Get('endpoints/:id/uptime')
+  uptime(@Param('id') id: string, @Query('window') window?: string) {
+    return this.svc.badgeInfo(id, window || '24h');
+  }
+
+  // Badge SVG embutível (README/status externo). Público, mas exige token:
+  // sem MONITOR_BADGE_TOKEN definido, os badges ficam desativados (não vazam nada).
+  @Public()
+  @Header('Content-Type', 'image/svg+xml; charset=utf-8')
+  @Header('Cache-Control', 'public, max-age=60')
+  @Get('endpoints/:id/badge/:kind')
+  async badge(
+    @Param('id') id: string,
+    @Param('kind') kind: string,
+    @Query('window') window?: string,
+    @Query('token') token?: string,
+  ): Promise<string> {
+    const need = process.env.MONITOR_BADGE_TOKEN;
+    if (!need) return svgBadge('monitor', 'defina MONITOR_BADGE_TOKEN', '#657079');
+    if (!safeEq(token, need)) return svgBadge('monitor', 'token invalido', '#ef5566');
+    const info = await this.svc.badgeInfo(id, window || '24h');
+    if (!info) return svgBadge('monitor', 'nao encontrado', '#657079');
+    const k = kind.replace(/\.svg$/i, '');
+    if (k === 'health') return svgBadge(info.name, info.status.toUpperCase(), healthColor(info.status));
+    if (k === 'response-time') return svgBadge('resp', info.avgMs == null ? 'n/d' : `${info.avgMs}ms`, latencyColor(info.avgMs));
+    return svgBadge('uptime', info.uptime == null ? 'n/d' : `${info.uptime}%`, uptimeColor(info.uptime));
+  }
 
   @RequirePermission('monitor:write')
   @Audit('monitor.create')
