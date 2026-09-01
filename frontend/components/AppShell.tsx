@@ -25,6 +25,7 @@ import {
   Database as DbIcon,
   TerminalSquare,
   Radar,
+  HeartPulse,
   PhoneCall,
   ChevronsLeft,
   ChevronsRight,
@@ -53,6 +54,7 @@ const NAV_GROUPS: { title: string; items: NavItem[] }[] = [
       { href: '/unity', label: 'Logs de chamadas', icon: PhoneCall, perms: ['logs:read'] },
       { href: '/metrics', label: 'Métricas', icon: Gauge, perms: ['metrics:read'] },
       { href: '/alerts', label: 'Alertas', icon: Bell, perms: ['alerts:read'] },
+      { href: '/monitor', label: 'Monitoramento', icon: HeartPulse, perms: ['monitor:read'] },
     ],
   },
   {

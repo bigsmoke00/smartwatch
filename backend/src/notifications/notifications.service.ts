@@ -3,6 +3,12 @@ import { Pool } from 'pg';
 import { request } from 'undici';
 import { createHmac } from 'crypto';
 import { PG_POOL } from '../db/db.module';
+import { MailService } from '../mail/mail.service';
+
+function escapeHtml(s: string): string {
+  const map: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+  return String(s ?? '').replace(/[&<>"']/g, (ch) => map[ch]);
+}
 
 export type ChannelKind =
   | 'slack'
@@ -23,7 +29,10 @@ export interface Channel {
 @Injectable()
 export class NotificationsService {
   private readonly logger = new Logger('NotificationsService');
-  constructor(@Inject(PG_POOL) private readonly pool: Pool) {}
+  constructor(
+    @Inject(PG_POOL) private readonly pool: Pool,
+    private readonly mail: MailService,
+  ) {}
 
   async list() {
     const r = await this.pool.query(
@@ -108,11 +117,14 @@ export class NotificationsService {
           return await this.sendTelegram(c.config.botToken, c.config.chatId, payload);
         case 'pagerduty':
           return await this.sendPagerDuty(c.config.routingKey, payload);
-        case 'email':
-          this.logger.warn(
-            'Email channel: configure SMTP/MailHog and implement nodemailer for prod.',
-          );
-          return { ok: false, message: 'email not implemented in MVP' };
+        case 'email': {
+          const to: string | undefined = c.config.to || c.config.email || c.config.address;
+          if (!to) return { ok: false, message: 'canal de email sem destinatário (config.to)' };
+          const sev = (payload.severity || 'info').toUpperCase();
+          const html = `<h3>[${sev}] ${escapeHtml(payload.title)}</h3><p>${escapeHtml(payload.message)}</p>`;
+          const ok = await this.mail.send(to, `[${sev}] ${payload.title}`, html);
+          return { ok, message: ok ? undefined : 'falha no envio (ver logs do MailService)' };
+        }
       }
     } catch (e: any) {
       this.logger.error(`channel ${c.name} failed: ${e.message}`);

@@ -32,6 +32,7 @@ import { LogScanModule } from './log-scan/log-scan.module';
 import { HealthModule } from './health/health.module';
 import { DbMaintenanceModule } from './db-maintenance/db-maintenance.module';
 import { DeployModule } from './deploy/deploy.module';
+import { MonitorModule } from './monitor/monitor.module';
 import { BootstrapService } from './bootstrap.service';
 
 @Module({
@@ -101,6 +102,7 @@ import { BootstrapService } from './bootstrap.service';
     HealthModule,
     DbMaintenanceModule,
     DeployModule,
+    MonitorModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: ThrottlerGuard },
