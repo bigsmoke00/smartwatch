@@ -104,8 +104,9 @@ export class CertService {
   /** Todos os certificados encontrados, ordenados pelo vencimento mais próximo. */
   async listCerts() {
     const r = await this.pool.query(
-      `SELECT f.id, f.target_id AS "targetId", t.name AS "targetName", s.name AS "serverName",
-              f.path, f.common_name AS "commonName", f.issuer, f.san,
+      `SELECT f.id, f.target_id AS "targetId", t.name AS "targetName",
+              t.server_id AS "serverId", s.name AS "serverName",
+              f.path, f.common_name AS "commonName", f.subject, f.issuer, f.san,
               f.not_before AS "notBefore", f.not_after AS "notAfter",
               f.fingerprint, f.error, f.scanned_at AS "scannedAt"
        FROM cert_files f

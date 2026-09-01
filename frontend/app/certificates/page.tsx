@@ -16,8 +16,8 @@ import { fmtTime, safeArray } from '@/lib/utils';
 import { ShieldCheck, Plus, RefreshCw, Trash2, X, FolderSearch, Edit3 } from 'lucide-react';
 
 interface CertRow {
-  id: string; targetName: string; serverName: string; path: string;
-  commonName: string | null; issuer: string | null; san: string | null;
+  id: string; targetName: string; serverId?: string; serverName: string; path: string;
+  commonName: string | null; subject?: string | null; issuer: string | null; san: string | null;
   notBefore: string | null; notAfter: string | null; fingerprint: string | null;
   error: string | null; scannedAt: string;
 }
@@ -69,6 +69,10 @@ export default function CertificatesPage() {
   const [tform, setTForm] = useState<TForm | null>(null);
   const [saving, setSaving] = useState(false);
   const [showTargets, setShowTargets] = useState(false);
+  const [serverFilter, setServerFilter] = useState('');
+  const [detail, setDetail] = useState<CertRow | null>(null);
+
+  const serverNames = useMemo(() => Array.from(new Set(certs.map((c) => c.serverName))).sort(), [certs]);
 
   async function load() {
     setLoading(true);
@@ -102,10 +106,11 @@ export default function CertificatesPage() {
       if (filter === 'soon' && !(st === 'warn' || st === 'crit')) return false;
       if (filter === 'expired' && st !== 'expired') return false;
       if (filter === 'err' && st !== 'err') return false;
+      if (serverFilter && c.serverName !== serverFilter) return false;
       if (term && ![c.commonName, c.issuer, c.san, c.path, c.serverName, c.targetName].some((v) => (v || '').toLowerCase().includes(term))) return false;
       return true;
     });
-  }, [certs, filter, q]);
+  }, [certs, filter, q, serverFilter]);
 
   async function saveTarget() {
     if (!tform) return;
@@ -193,6 +198,12 @@ export default function CertificatesPage() {
               {f === 'all' ? 'Todos' : f === 'soon' ? 'Vencendo (≤30d)' : f === 'expired' ? 'Expirados' : 'Erros'}
             </button>
           ))}
+          <div className="w-56">
+            <Select value={serverFilter} onChange={(e) => setServerFilter(e.target.value)}>
+              <option value="">Todos os servidores</option>
+              {serverNames.map((s) => <option key={s} value={s}>{s}</option>)}
+            </Select>
+          </div>
           <div className="w-64"><Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Buscar CN/issuer/SAN/servidor…" /></div>
         </div>
 
@@ -209,8 +220,10 @@ export default function CertificatesPage() {
                 return (
                   <Tr key={c.id} tone={st === 'expired' || st === 'crit' ? 'danger' : st === 'warn' ? 'warn' : 'default'}>
                     <Td>
-                      <div className="font-medium text-text">{c.commonName || c.path.split('/').pop()}</div>
-                      <div className="text-2xs text-mutedFaint font-mono truncate max-w-[300px]" title={c.san || c.path}>{c.error ? <span className="text-danger">{c.error}</span> : (c.san || c.path)}</div>
+                      <button className="text-left hover:text-accentSoft transition-colors" onClick={() => setDetail(c)}>
+                        <div className="font-medium text-text">{c.commonName || c.path.split('/').pop()}</div>
+                        <div className="text-2xs text-mutedFaint font-mono truncate max-w-[300px]" title={c.san || c.path}>{c.error ? <span className="text-danger">{c.error}</span> : (c.san || c.path)}</div>
+                      </button>
                     </Td>
                     <Td className="text-muted">{c.serverName}<div className="text-2xs text-mutedFaint">{c.targetName}</div></Td>
                     <Td className="text-muted max-w-[200px] truncate" title={c.issuer || ''}>{c.issuer || '—'}</Td>
@@ -225,6 +238,49 @@ export default function CertificatesPage() {
           </DataTable>
         )}
       </div>
+
+      {detail && (() => {
+        const st = statusOf(detail); const d = daysTo(detail.notAfter);
+        const rows: [string, React.ReactNode][] = [
+          ['Servidor', detail.serverName],
+          ['Alvo', detail.targetName],
+          ['Arquivo', <span className="font-mono break-all">{detail.path}</span>],
+          ['Common Name', detail.commonName || '—'],
+          ['Assunto', <span className="font-mono break-all">{detail.subject || '—'}</span>],
+          ['Emissor', detail.issuer || '—'],
+          ['SAN', <span className="font-mono break-all">{detail.san || '—'}</span>],
+          ['Válido de', detail.notBefore ? fmtTime(detail.notBefore) : '—'],
+          ['Válido até', detail.notAfter ? fmtTime(detail.notAfter) : '—'],
+          ['Dias restantes', d == null ? '—' : d < 0 ? `${d} (expirado)` : `${d}`],
+          ['Fingerprint (SHA-256)', <span className="font-mono break-all text-2xs">{detail.fingerprint || '—'}</span>],
+          ['Última varredura', fmtTime(detail.scannedAt)],
+        ];
+        if (detail.error) rows.push(['Erro', <span className="text-danger">{detail.error}</span>]);
+        return (
+          <div className="fixed inset-0 z-50 bg-black/50 flex items-start justify-center overflow-auto py-8 px-4" onClick={() => setDetail(null)}>
+            <Card className="w-full max-w-2xl p-5 space-y-3" onClick={(e) => e.stopPropagation()}>
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <Badge tone={ST_BADGE[st].tone} dot>{ST_BADGE[st].label}</Badge>
+                    <h2 className="text-[15px] font-semibold text-text truncate">{detail.commonName || detail.path.split('/').pop()}</h2>
+                  </div>
+                  <div className="text-2xs text-mutedFaint mt-1">{detail.serverName} · {detail.targetName}</div>
+                </div>
+                <Button variant="ghost" size="icon" onClick={() => setDetail(null)}><X size={16} /></Button>
+              </div>
+              <div className="border-t border-border pt-3 grid grid-cols-1 gap-y-2">
+                {rows.map(([k, v], i) => (
+                  <div key={i} className="grid grid-cols-[150px_1fr] gap-3 text-[12.5px]">
+                    <div className="text-muted">{k}</div>
+                    <div className="text-text min-w-0">{v}</div>
+                  </div>
+                ))}
+              </div>
+            </Card>
+          </div>
+        );
+      })()}
 
       {tform && (
         <div className="fixed inset-0 z-50 bg-black/50 flex items-start justify-center overflow-auto py-8 px-4" onClick={() => setTForm(null)}>
