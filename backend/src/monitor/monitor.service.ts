@@ -73,6 +73,19 @@ export class MonitorService {
     return r.rows;
   }
 
+  /** Dados mínimos para a status page pública (sem alvo/config internos). */
+  async publicStatus() {
+    const r = await this.pool.query(
+      `SELECT e.name, e.group_name AS "groupName", e.type, e.last_status AS "lastStatus",
+        (SELECT count(*) FILTER (WHERE m.success) FROM monitor_results m WHERE m.endpoint_id=e.id AND m.ts >= now()-interval '24 hours')::int AS "up24h",
+        (SELECT count(*) FROM monitor_results m WHERE m.endpoint_id=e.id AND m.ts >= now()-interval '24 hours')::int AS "checks24h"
+       FROM monitor_endpoints e
+       WHERE e.enabled = true
+       ORDER BY group_name NULLS FIRST, name`,
+    );
+    return r.rows;
+  }
+
   async get(id: string): Promise<MonitorEndpoint> {
     const r = await this.pool.query(`SELECT ${SELECT_COLS} FROM monitor_endpoints e WHERE id=$1`, [id]);
     return r.rows[0];
@@ -345,7 +358,7 @@ function windowSpec(window: string): { interval: string; bucket: string } {
 
 function normType(t: unknown): ProbeType {
   const s = String(t ?? 'http').toLowerCase();
-  return (['http', 'tcp', 'udp', 'icmp', 'dns', 'tls', 'ws'] as string[]).includes(s) ? (s as ProbeType) : 'http';
+  return (['http', 'tcp', 'udp', 'icmp', 'dns', 'tls', 'ws', 'ssh', 'starttls', 'domain'] as string[]).includes(s) ? (s as ProbeType) : 'http';
 }
 
 function parseDurationSeconds(s: unknown, def: number): number {

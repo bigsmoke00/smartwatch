@@ -27,6 +27,7 @@ import {
   Radar,
   HeartPulse,
   ShieldCheck,
+  Send,
   PhoneCall,
   ChevronsLeft,
   ChevronsRight,
@@ -56,6 +57,7 @@ const NAV_GROUPS: { title: string; items: NavItem[] }[] = [
       { href: '/metrics', label: 'Métricas', icon: Gauge, perms: ['metrics:read'] },
       { href: '/alerts', label: 'Alertas', icon: Bell, perms: ['alerts:read'] },
       { href: '/monitor', label: 'Monitoramento', icon: HeartPulse, perms: ['monitor:read'] },
+      { href: '/channels', label: 'Canais de notificação', icon: Send, perms: ['notifications:read', 'notifications:write'] },
     ],
   },
   {

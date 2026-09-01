@@ -13,7 +13,7 @@ import { Audit } from '../audit/audit.decorator';
 import { CurrentUser, JwtUserPayload } from '../auth/current-user.decorator';
 import { svgBadge, uptimeColor, healthColor, latencyColor, safeEq } from './monitor.badge';
 
-const TYPES = ['http', 'tcp', 'udp', 'icmp', 'dns', 'tls', 'ws'];
+const TYPES = ['http', 'tcp', 'udp', 'icmp', 'dns', 'tls', 'ws', 'ssh', 'starttls', 'domain'];
 
 class EndpointDto {
   @IsString() name!: string;
@@ -100,6 +100,16 @@ class MonitorController {
     if (k === 'health') return svgBadge(info.name, info.status.toUpperCase(), healthColor(info.status));
     if (k === 'response-time') return svgBadge('resp', info.avgMs == null ? 'n/d' : `${info.avgMs}ms`, latencyColor(info.avgMs));
     return svgBadge('uptime', info.uptime == null ? 'n/d' : `${info.uptime}%`, uptimeColor(info.uptime));
+  }
+
+  // Status page pública (sem login). Só liga com MONITOR_PUBLIC_TOKEN definido;
+  // sem token válido, retorna enabled:false (nada vaza). Expõe só nome/grupo/tipo/status/uptime.
+  @Public()
+  @Get('public/status')
+  async publicStatus(@Query('token') token?: string) {
+    const need = process.env.MONITOR_PUBLIC_TOKEN;
+    if (!need || !safeEq(token, need)) return { enabled: false };
+    return { enabled: true, updatedAt: new Date().toISOString(), endpoints: await this.svc.publicStatus() };
   }
 
   @RequirePermission('monitor:write')

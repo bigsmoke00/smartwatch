@@ -16,7 +16,8 @@ export type ChannelKind =
   | 'webhook'
   | 'email'
   | 'pagerduty'
-  | 'telegram';
+  | 'telegram'
+  | 'teams';
 
 export interface Channel {
   id: string;
@@ -117,6 +118,8 @@ export class NotificationsService {
           return await this.sendTelegram(c.config.botToken, c.config.chatId, payload);
         case 'pagerduty':
           return await this.sendPagerDuty(c.config.routingKey, payload);
+        case 'teams':
+          return await this.sendTeams(c.config.webhookUrl, payload);
         case 'email': {
           const to: string | undefined = c.config.to || c.config.email || c.config.address;
           if (!to) return { ok: false, message: 'canal de email sem destinatário (config.to)' };
@@ -130,6 +133,25 @@ export class NotificationsService {
       this.logger.error(`channel ${c.name} failed: ${e.message}`);
       return { ok: false, message: e.message };
     }
+  }
+
+  // Teams / Power Automate: envia um "MessageCard" (mesmo formato do
+  // send_teams do script dgvx-sync). Funciona com webhook nativo do Teams e
+  // com fluxos do Power Automate que esperam esse schema.
+  private async sendTeams(url: string, p: any) {
+    if (!url) return { ok: false, message: 'canal Teams sem webhookUrl' };
+    const color =
+      p.severity === 'critical' ? 'FF0000' : p.severity === 'warning' ? 'E0A64B' : '1497A8';
+    const body = JSON.stringify({
+      '@type': 'MessageCard',
+      '@context': 'http://schema.org/extensions',
+      summary: p.title || 'SmartGard',
+      themeColor: color,
+      title: `[${(p.severity || 'info').toUpperCase()}] ${p.title}`,
+      text: String(p.message || '').replace(/\n/g, '\n\n'),
+    });
+    await request(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body });
+    return { ok: true };
   }
 
   private async sendSlack(url: string, p: any) {

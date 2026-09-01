@@ -27,6 +27,7 @@ export interface ProbeContext {
   IP?: string;
   DNS_RCODE?: string;
   CERTIFICATE_EXPIRATION?: number; // ms
+  DOMAIN_EXPIRATION?: number; // ms (registro do domínio, via RDAP)
 }
 
 export interface ConditionResult {
@@ -63,8 +64,8 @@ function evalOne(cond: string, ctx: ProbeContext): boolean {
   const left = parts.left.trim();
   const leftVal = resolveLeft(left, ctx);
   if (leftVal === undefined) return false;
-  const isCert = left.includes('CERTIFICATE_EXPIRATION');
-  const rightVal = parseRight(parts.right.trim(), isCert);
+  const isDuration = left.includes('CERTIFICATE_EXPIRATION') || left.includes('DOMAIN_EXPIRATION');
+  const rightVal = parseRight(parts.right.trim(), isDuration);
   return compare(leftVal, parts.op, rightVal);
 }
 
@@ -113,6 +114,7 @@ function resolveValue(expr: string, ctx: ProbeContext): unknown {
     case 'IP': base = ctx.IP; break;
     case 'DNS_RCODE': base = ctx.DNS_RCODE; break;
     case 'CERTIFICATE_EXPIRATION': base = ctx.CERTIFICATE_EXPIRATION; break;
+    case 'DOMAIN_EXPIRATION': base = ctx.DOMAIN_EXPIRATION; break;
     case 'BODY': base = ctx.BODY !== undefined ? ctx.BODY : ctx.BODY_RAW; break;
     default: base = undefined;
   }

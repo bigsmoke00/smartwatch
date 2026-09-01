@@ -6,7 +6,8 @@ import { promises as dnsp } from 'dns';
 import { execFile } from 'child_process';
 import type { ProbeContext } from './monitor.conditions';
 
-export type ProbeType = 'http' | 'tcp' | 'udp' | 'icmp' | 'dns' | 'tls' | 'ws';
+export type ProbeType =
+  | 'http' | 'tcp' | 'udp' | 'icmp' | 'dns' | 'tls' | 'ws' | 'ssh' | 'starttls' | 'domain';
 
 export interface EndpointCfg {
   type: ProbeType;
@@ -38,6 +39,9 @@ export async function probe(cfg: EndpointCfg): Promise<ProbeOutcome> {
     case 'dns': return probeDns(cfg);
     case 'tls': return probeTls(cfg);
     case 'ws': return probeWs(cfg);
+    case 'ssh': return probeSsh(cfg);
+    case 'starttls': return probeStarttls(cfg);
+    case 'domain': return probeDomain(cfg);
     default:
       return { networkOk: false, responseTimeMs: 0, error: `tipo desconhecido: ${cfg.type}`, ctx: {} };
   }
@@ -278,6 +282,117 @@ function probeWs(cfg: EndpointCfg): Promise<ProbeOutcome> {
     ws.addEventListener('open', () => finish(true));
     ws.addEventListener('error', (ev: any) => finish(false, ev?.message || 'erro de WebSocket'));
   });
+}
+
+// ---------------- SSH (banner) ----------------
+function probeSsh(cfg: EndpointCfg): Promise<ProbeOutcome> {
+  const { host, port } = parseHostPort(cfg.target, 22);
+  const start = Date.now();
+  return new Promise((resolve) => {
+    const sock = new net.Socket();
+    let done = false;
+    const finish = (ok: boolean, error?: string, banner?: string) => {
+      if (done) return;
+      done = true;
+      const rt = Date.now() - start;
+      const ip = sock.remoteAddress;
+      sock.destroy();
+      resolve({ networkOk: ok, responseTimeMs: rt, error, ip, ctx: { CONNECTED: ok, RESPONSE_TIME: rt, IP: ip, BODY: banner, BODY_RAW: banner } });
+    };
+    sock.setTimeout(cfg.timeoutMs);
+    sock.once('timeout', () => finish(false, 'timeout'));
+    sock.once('error', (e) => finish(false, e.message));
+    sock.once('data', (d) => {
+      const b = d.toString('utf8').trim();
+      if (/^SSH-/.test(b)) finish(true, undefined, b);
+      else finish(false, 'porta aberta mas sem banner SSH');
+    });
+    sock.connect(port, host);
+  });
+}
+
+// ---------------- STARTTLS (SMTP) + validade do certificado ----------------
+function probeStarttls(cfg: EndpointCfg): Promise<ProbeOutcome> {
+  const { host, port } = parseHostPort(cfg.target, 587);
+  const start = Date.now();
+  return new Promise((resolve) => {
+    const sock = net.connect(port, host);
+    let done = false;
+    let stage = 0; // 0=greeting 1=ehlo 2=starttls
+    let buf = '';
+    const fail = (m: string) => { if (done) return; done = true; try { sock.destroy(); } catch { /* */ } resolve({ networkOk: false, responseTimeMs: Date.now() - start, error: m, ctx: { CONNECTED: false } }); };
+    sock.setTimeout(cfg.timeoutMs);
+    sock.once('timeout', () => fail('timeout'));
+    sock.once('error', (e) => fail(e.message));
+    sock.on('data', (d) => {
+      buf += d.toString('utf8');
+      const fin = lastFinalLine(buf);
+      if (!fin) return; // resposta ainda incompleta (multi-linha)
+      buf = '';
+      if (stage === 0) {
+        if (!fin.startsWith('220')) return fail(`greeting inesperado: ${fin}`);
+        stage = 1; sock.write('EHLO smartguard.local\r\n');
+      } else if (stage === 1) {
+        if (!fin.startsWith('250')) return fail(`EHLO recusado: ${fin}`);
+        stage = 2; sock.write('STARTTLS\r\n');
+      } else if (stage === 2) {
+        if (!fin.startsWith('220')) return fail(`STARTTLS recusado: ${fin}`);
+        stage = 3;
+        const tsock = tls.connect(
+          { socket: sock, servername: host, rejectUnauthorized: !cfg.insecureSkipVerify },
+          () => {
+            if (done) return;
+            done = true;
+            const rt = Date.now() - start;
+            const cert = tsock.getPeerCertificate();
+            let expMs: number | undefined;
+            if (cert && cert.valid_to) { const t = new Date(cert.valid_to).getTime(); if (!Number.isNaN(t)) expMs = t - Date.now(); }
+            try { tsock.destroy(); } catch { /* */ }
+            resolve({ networkOk: true, responseTimeMs: rt, ip: sock.remoteAddress, ctx: { CONNECTED: true, RESPONSE_TIME: rt, CERTIFICATE_EXPIRATION: expMs } });
+          },
+        );
+        tsock.once('error', (e) => fail((e as Error).message));
+      }
+    });
+  });
+}
+
+// última linha "final" de resposta SMTP (código seguido de espaço, não de '-')
+function lastFinalLine(buf: string): string | null {
+  const lines = buf.split(/\r?\n/).filter((l) => l.length > 0);
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (/^\d{3} /.test(lines[i])) return lines[i];
+  }
+  return null;
+}
+
+// ---------------- Expiração de domínio (RDAP) ----------------
+async function probeDomain(cfg: EndpointCfg): Promise<ProbeOutcome> {
+  const domain = cfg.target.trim().replace(/^[a-z]+:\/\//i, '').replace(/\/.*$/, '');
+  const start = Date.now();
+  try {
+    const res = await request(`https://rdap.org/domain/${encodeURIComponent(domain)}`, {
+      method: 'GET',
+      maxRedirections: 5,
+      headersTimeout: cfg.timeoutMs,
+      bodyTimeout: cfg.timeoutMs,
+      headers: { 'user-agent': 'SmartGard-Monitor/1.0', accept: 'application/rdap+json, application/json' },
+    });
+    const text = await readBodyBounded(res.body, 512 * 1024);
+    const rt = Date.now() - start;
+    if (res.statusCode >= 400) {
+      return { networkOk: false, responseTimeMs: rt, statusCode: res.statusCode, error: `RDAP HTTP ${res.statusCode} (TLD sem RDAP?)`, ctx: { CONNECTED: false, RESPONSE_TIME: rt } };
+    }
+    let data: any;
+    try { data = JSON.parse(text); } catch { return { networkOk: false, responseTimeMs: rt, error: 'resposta RDAP inválida', ctx: { CONNECTED: false, RESPONSE_TIME: rt } }; }
+    const ev = Array.isArray(data.events) ? data.events.find((e: any) => e.eventAction === 'expiration') : null;
+    let expMs: number | undefined;
+    if (ev?.eventDate) { const t = new Date(ev.eventDate).getTime(); if (!Number.isNaN(t)) expMs = t - Date.now(); }
+    return { networkOk: true, responseTimeMs: rt, statusCode: res.statusCode, ctx: { CONNECTED: true, RESPONSE_TIME: rt, DOMAIN_EXPIRATION: expMs, BODY: data, BODY_RAW: text } };
+  } catch (e) {
+    const rt = Date.now() - start;
+    return { networkOk: false, responseTimeMs: rt, error: errMsg(e), ctx: { CONNECTED: false, RESPONSE_TIME: rt } };
+  }
 }
 
 // ---------------- helpers ----------------

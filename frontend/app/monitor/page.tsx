@@ -40,7 +40,7 @@ interface ResultRow {
 interface EventRow { id: string; type: 'up' | 'down'; message: string; ts: string }
 interface SeriesRow { bucket: string; avgMs: number | null; up: number; total: number }
 
-const TYPES = ['http', 'tcp', 'udp', 'icmp', 'dns', 'tls', 'ws'];
+const TYPES = ['http', 'tcp', 'udp', 'icmp', 'dns', 'tls', 'ws', 'ssh', 'starttls', 'domain'];
 const DNS_TYPES = ['A', 'AAAA', 'CNAME', 'MX', 'TXT', 'NS'];
 const WINDOWS: { k: string; label: string }[] = [
   { k: '1h', label: '1h' }, { k: '24h', label: '24h' }, { k: '7d', label: '7d' }, { k: '30d', label: '30d' },
@@ -463,8 +463,15 @@ function FormOverlay({ form, setForm, channels, saving, onSave }: { form: FormSt
         <Field label="Nome"><Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="API de produção" /></Field>
         <Field label="Grupo (opcional)"><Input value={form.group} onChange={(e) => setForm({ ...form, group: e.target.value })} placeholder="Produção" /></Field>
         <Field label="Tipo"><Select value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value })}>{TYPES.map((t) => <option key={t} value={t}>{t.toUpperCase()}</option>)}</Select></Field>
-        <Field label={form.type === 'http' || form.type === 'ws' ? 'URL' : form.type === 'dns' || form.type === 'icmp' ? 'Host' : 'host:porta'}>
-          <Input value={form.target} onChange={(e) => setForm({ ...form, target: e.target.value })} placeholder={form.type === 'http' ? 'https://api.exemplo.com/health' : form.type === 'ws' ? 'wss://host.exemplo.com/socket' : form.type === 'icmp' || form.type === 'dns' ? 'exemplo.com' : 'exemplo.com:443'} />
+        <Field label={form.type === 'http' || form.type === 'ws' ? 'URL' : form.type === 'domain' ? 'Domínio' : form.type === 'dns' || form.type === 'icmp' ? 'Host' : 'host:porta'}>
+          <Input value={form.target} onChange={(e) => setForm({ ...form, target: e.target.value })} placeholder={
+            form.type === 'http' ? 'https://api.exemplo.com/health'
+            : form.type === 'ws' ? 'wss://host.exemplo.com/socket'
+            : form.type === 'ssh' ? 'host.exemplo.com:22'
+            : form.type === 'starttls' ? 'smtp.exemplo.com:587'
+            : form.type === 'domain' ? 'exemplo.com'
+            : form.type === 'icmp' || form.type === 'dns' ? 'exemplo.com'
+            : 'exemplo.com:443'} />
         </Field>
         {form.type === 'http' && <Field label="Método"><Select value={form.method} onChange={(e) => setForm({ ...form, method: e.target.value })}>{['GET', 'POST', 'HEAD', 'PUT', 'DELETE'].map((m) => <option key={m}>{m}</option>)}</Select></Field>}
         {form.type === 'dns' && <Field label="Tipo de registro"><Select value={form.dnsQueryType} onChange={(e) => setForm({ ...form, dnsQueryType: e.target.value })}>{DNS_TYPES.map((t) => <option key={t}>{t}</option>)}</Select></Field>}
@@ -477,7 +484,7 @@ function FormOverlay({ form, setForm, channels, saving, onSave }: { form: FormSt
         <textarea className="w-full rounded-lg bg-panel2 border border-border px-3 py-2 text-sm text-text font-mono min-h-[92px] focus:outline-none focus:ring-2 focus:ring-accent/35"
           value={form.conditions} onChange={(e) => setForm({ ...form, conditions: e.target.value })}
           placeholder={'[STATUS] == 200\n[RESPONSE_TIME] < 500\n[CERTIFICATE_EXPIRATION] > 168h'} />
-        <div className="text-2xs text-mutedFaint mt-1">Placeholders: [STATUS] [RESPONSE_TIME] [CONNECTED] [BODY].path [IP] [DNS_RCODE] [CERTIFICATE_EXPIRATION]. Operadores: == != &lt; &lt;= &gt; &gt;=.</div>
+        <div className="text-2xs text-mutedFaint mt-1">Placeholders: [STATUS] [RESPONSE_TIME] [CONNECTED] [BODY].path [IP] [DNS_RCODE] [CERTIFICATE_EXPIRATION] [DOMAIN_EXPIRATION]. Operadores: == != &lt; &lt;= &gt; &gt;=. (domain/tls/starttls = expiração; ssh = [CONNECTED])</div>
       </Field>
       {form.type === 'http' && (
         <div className="grid md:grid-cols-2 gap-3">
@@ -491,7 +498,7 @@ function FormOverlay({ form, setForm, channels, saving, onSave }: { form: FormSt
         <label className="flex items-center gap-2 text-sm text-muted"><input type="checkbox" checked={form.enabled} onChange={(e) => setForm({ ...form, enabled: e.target.checked })} /> Ativo</label>
       </div>
       <Field label="Alertar nestes canais (falha/recuperação)">
-        {channels.length === 0 ? <div className="text-2xs text-mutedFaint">Nenhum canal cadastrado. Configure em Alertas → Canais.</div> : (
+        {channels.length === 0 ? <div className="text-2xs text-mutedFaint">Nenhum canal cadastrado. Configure no menu → Canais de notificação.</div> : (
           <div className="flex flex-wrap gap-2">
             {channels.map((c) => {
               const on = form.alertChannels.includes(c.id);

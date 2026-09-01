@@ -7,7 +7,7 @@ import { NotificationsService, ChannelKind } from './notifications.service';
 
 class ChannelDto {
   @IsString() name!: string;
-  @IsIn(['slack', 'discord', 'webhook', 'email', 'pagerduty', 'telegram']) kind!: ChannelKind;
+  @IsIn(['slack', 'discord', 'webhook', 'email', 'pagerduty', 'telegram', 'teams']) kind!: ChannelKind;
   @IsObject() config!: Record<string, any>;
 }
 class UpdateChannelDto {

@@ -307,7 +307,7 @@ export default function CertificatesPage() {
                 <span className="text-xs text-muted">dias (ou já expirado)</span>
               </div>
               {channels.length === 0 ? (
-                <div className="text-2xs text-mutedFaint">Nenhum canal de notificação cadastrado — sem canal, não dispara alerta. Configure em Alertas → Canais.</div>
+                <div className="text-2xs text-mutedFaint">Nenhum canal de notificação cadastrado — sem canal, não dispara alerta. Configure no menu → Canais de notificação.</div>
               ) : (
                 <div className="flex flex-wrap gap-2">
                   {channels.map((c) => {
