@@ -345,7 +345,7 @@ function windowSpec(window: string): { interval: string; bucket: string } {
 
 function normType(t: unknown): ProbeType {
   const s = String(t ?? 'http').toLowerCase();
-  return (['http', 'tcp', 'udp', 'icmp', 'dns', 'tls'] as string[]).includes(s) ? (s as ProbeType) : 'http';
+  return (['http', 'tcp', 'udp', 'icmp', 'dns', 'tls', 'ws'] as string[]).includes(s) ? (s as ProbeType) : 'http';
 }
 
 function parseDurationSeconds(s: unknown, def: number): number {

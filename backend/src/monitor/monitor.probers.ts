@@ -1,4 +1,4 @@
-import { request, Agent } from 'undici';
+import { request, Agent, WebSocket } from 'undici';
 import * as net from 'net';
 import * as dgram from 'dgram';
 import * as tls from 'tls';
@@ -6,7 +6,7 @@ import { promises as dnsp } from 'dns';
 import { execFile } from 'child_process';
 import type { ProbeContext } from './monitor.conditions';
 
-export type ProbeType = 'http' | 'tcp' | 'udp' | 'icmp' | 'dns' | 'tls';
+export type ProbeType = 'http' | 'tcp' | 'udp' | 'icmp' | 'dns' | 'tls' | 'ws';
 
 export interface EndpointCfg {
   type: ProbeType;
@@ -37,6 +37,7 @@ export async function probe(cfg: EndpointCfg): Promise<ProbeOutcome> {
     case 'icmp': return probeIcmp(cfg);
     case 'dns': return probeDns(cfg);
     case 'tls': return probeTls(cfg);
+    case 'ws': return probeWs(cfg);
     default:
       return { networkOk: false, responseTimeMs: 0, error: `tipo desconhecido: ${cfg.type}`, ctx: {} };
   }
@@ -251,6 +252,31 @@ function probeTls(cfg: EndpointCfg): Promise<ProbeOutcome> {
     );
     sock.once('timeout', () => finish({ networkOk: false, responseTimeMs: Date.now() - start, error: 'timeout', ctx: { CONNECTED: false } }));
     sock.once('error', (e) => finish({ networkOk: false, responseTimeMs: Date.now() - start, error: (e as Error).message, ctx: { CONNECTED: false } }));
+  });
+}
+
+// ---------------- WebSocket ----------------
+function probeWs(cfg: EndpointCfg): Promise<ProbeOutcome> {
+  const start = Date.now();
+  return new Promise((resolve) => {
+    let done = false;
+    let ws: WebSocket | undefined;
+    const finish = (ok: boolean, error?: string) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      try { ws?.close(); } catch { /* ignore */ }
+      const rt = Date.now() - start;
+      resolve({ networkOk: ok, responseTimeMs: rt, error, ctx: { CONNECTED: ok, RESPONSE_TIME: rt } });
+    };
+    const timer = setTimeout(() => finish(false, 'timeout'), cfg.timeoutMs);
+    try {
+      ws = new WebSocket(cfg.target);
+    } catch (e) {
+      return finish(false, errMsg(e));
+    }
+    ws.addEventListener('open', () => finish(true));
+    ws.addEventListener('error', (ev: any) => finish(false, ev?.message || 'erro de WebSocket'));
   });
 }
 

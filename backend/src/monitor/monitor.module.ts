@@ -13,7 +13,7 @@ import { Audit } from '../audit/audit.decorator';
 import { CurrentUser, JwtUserPayload } from '../auth/current-user.decorator';
 import { svgBadge, uptimeColor, healthColor, latencyColor, safeEq } from './monitor.badge';
 
-const TYPES = ['http', 'tcp', 'udp', 'icmp', 'dns', 'tls'];
+const TYPES = ['http', 'tcp', 'udp', 'icmp', 'dns', 'tls', 'ws'];
 
 class EndpointDto {
   @IsString() name!: string;

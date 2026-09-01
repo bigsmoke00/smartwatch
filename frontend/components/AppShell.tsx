@@ -26,6 +26,7 @@ import {
   TerminalSquare,
   Radar,
   HeartPulse,
+  ShieldCheck,
   PhoneCall,
   ChevronsLeft,
   ChevronsRight,
@@ -65,6 +66,7 @@ const NAV_GROUPS: { title: string; items: NavItem[] }[] = [
       { href: '/scripts', label: 'Scripts', icon: FileCode, perms: ['scripts:read'] },
       { href: '/databases', label: 'PostgreSQL', icon: DbIcon, perms: ['pg:read'] },
       { href: '/patroni', label: 'Cluster Patroni', icon: Database, perms: ['patroni:read'] },
+      { href: '/certificates', label: 'Certificados', icon: ShieldCheck, perms: ['cert:read'] },
     ],
   },
   {

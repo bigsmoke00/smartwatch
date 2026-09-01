@@ -33,6 +33,7 @@ import { HealthModule } from './health/health.module';
 import { DbMaintenanceModule } from './db-maintenance/db-maintenance.module';
 import { DeployModule } from './deploy/deploy.module';
 import { MonitorModule } from './monitor/monitor.module';
+import { CertModule } from './cert-watch/cert.module';
 import { BootstrapService } from './bootstrap.service';
 
 @Module({
@@ -103,6 +104,7 @@ import { BootstrapService } from './bootstrap.service';
     DbMaintenanceModule,
     DeployModule,
     MonitorModule,
+    CertModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: ThrottlerGuard },
