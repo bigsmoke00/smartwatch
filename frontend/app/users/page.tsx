@@ -23,6 +23,16 @@ function initials(value: string): string {
 interface AssignedRole {
   id: string;
   name: string;
+  environmentId: string | null;
+  environmentSlug?: string | null;
+  environmentName?: string | null;
+}
+interface EnvOption {
+  id: string;
+  slug: string;
+  name: string;
+  color: string;
+  isDefault: boolean;
 }
 interface UserRow {
   id: string;
@@ -45,6 +55,9 @@ interface RoleSummary {
 export default function UsersPage() {
   const [users, setUsers] = useState<UserRow[]>([]);
   const [roles, setRoles] = useState<RoleSummary[]>([]);
+  const [environments, setEnvironments] = useState<EnvOption[]>([]);
+  // Escopo em edição: 'global' (vale em todos os ambientes) ou o id de um ambiente.
+  const [editingScope, setEditingScope] = useState<string>('global');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [passwordMode, setPasswordMode] = useState<'invite' | 'manual'>('invite');
@@ -56,13 +69,15 @@ export default function UsersPage() {
   const [info, setInfo] = useState<string | null>(null);
 
   async function load() {
-    const [loadedUsers, loadedRoles] = await Promise.all([
+    const [loadedUsers, loadedRoles, loadedEnvs] = await Promise.all([
       apiFetch<UserRow[]>('/users'),
       apiFetch<RoleSummary[]>('/roles'),
+      apiFetch<EnvOption[]>('/environments').catch(() => []),
     ]);
     const nextRoles = safeArray<RoleSummary>(loadedRoles);
     setUsers(safeArray<UserRow>(loadedUsers));
     setRoles(nextRoles);
+    setEnvironments(safeArray<EnvOption>(loadedEnvs));
     setSelectedRoleIds((current) => {
       if (current.length) return current;
       const viewer = nextRoles.find((item) => item.name === 'Viewer');
@@ -164,9 +179,23 @@ export default function UsersPage() {
     await load();
   }
 
-  function startEditing(user: UserRow) {
+  // roleIds de um usuário DENTRO de um escopo ('global' = environmentId null).
+  function roleIdsForScope(user: UserRow, scope: string): string[] {
+    return safeArray<AssignedRole>(user.roles)
+      .filter((r) => (scope === 'global' ? r.environmentId == null : r.environmentId === scope))
+      .map((r) => r.id);
+  }
+
+  function startEditing(user: UserRow, scope: string) {
     setEditingUserId(user.id);
-    setEditingRoleIds(safeArray<AssignedRole>(user.roles).map((item) => item.id));
+    setEditingScope(scope);
+    setEditingRoleIds(roleIdsForScope(user, scope));
+  }
+
+  // Ao trocar o escopo dentro do editor, recarrega os papéis daquele escopo.
+  function changeScope(user: UserRow, scope: string) {
+    setEditingScope(scope);
+    setEditingRoleIds(roleIdsForScope(user, scope));
   }
 
   async function saveRoles(userId: string) {
@@ -174,7 +203,10 @@ export default function UsersPage() {
     try {
       await apiFetch(`/users/${userId}/roles`, {
         method: 'PUT',
-        body: JSON.stringify({ roleIds: editingRoleIds }),
+        body: JSON.stringify({
+          roleIds: editingRoleIds,
+          environmentId: editingScope === 'global' ? null : editingScope,
+        }),
       });
       setEditingUserId(null);
       await load();
@@ -368,9 +400,15 @@ export default function UsersPage() {
                     </Td>
                     <Td>
                       <div className="flex flex-wrap items-center gap-1.5">
-                        {safeArray<AssignedRole>(user.roles).map((item) => (
-                          <Badge key={item.id} tone="accent">
+                        {safeArray<AssignedRole>(user.roles).length === 0 && (
+                          <span className="text-mutedFaint text-xs">sem acesso</span>
+                        )}
+                        {safeArray<AssignedRole>(user.roles).map((item, idx) => (
+                          <Badge key={`${item.id}-${item.environmentId ?? 'g'}-${idx}`} tone="accent">
                             {item.name}
+                            <span className="text-2xs opacity-70 ml-1">
+                              · {item.environmentId ? (item.environmentName || item.environmentSlug) : 'Global'}
+                            </span>
                           </Badge>
                         ))}
                       </div>
@@ -418,7 +456,7 @@ export default function UsersPage() {
                           size="sm"
                           type="button"
                           variant="secondary"
-                          onClick={() => startEditing(user)}
+                          onClick={() => startEditing(user, 'global')}
                         >
                           <ShieldCheck size={14} /> Perfis
                         </Button>
@@ -438,6 +476,34 @@ export default function UsersPage() {
                   {editing && (
                     <Tr>
                       <Td colSpan={5} className="bg-panel2/30">
+                        <div className="mb-3">
+                          <div className="text-2xs uppercase tracking-wide text-mutedFaint mb-1.5">Escopo do acesso</div>
+                          <div className="flex flex-wrap gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => changeScope(user, 'global')}
+                              className={`px-2.5 py-1 rounded-md text-xs border transition ${editingScope === 'global' ? 'border-accent text-text bg-accent/10' : 'border-border text-muted hover:text-text'}`}
+                            >
+                              Global (todos)
+                            </button>
+                            {environments.map((env) => (
+                              <button
+                                key={env.id}
+                                type="button"
+                                onClick={() => changeScope(user, env.id)}
+                                className={`px-2.5 py-1 rounded-md text-xs border transition flex items-center gap-1.5 ${editingScope === env.id ? 'border-accent text-text bg-accent/10' : 'border-border text-muted hover:text-text'}`}
+                              >
+                                <span className="w-2 h-2 rounded-full" style={{ backgroundColor: env.color || '#1497a8' }} />
+                                {env.name}
+                              </button>
+                            ))}
+                          </div>
+                          <div className="text-2xs text-mutedFaint mt-1.5">
+                            {editingScope === 'global'
+                              ? 'Papéis globais valem em todos os ambientes (ex.: você/owner).'
+                              : 'Papéis concedidos apenas neste ambiente. Marque nenhum para revogar o acesso do usuário aqui.'}
+                          </div>
+                        </div>
                         <RoleSelector
                           selected={editingRoleIds}
                           onChange={setEditingRoleIds}
@@ -455,9 +521,8 @@ export default function UsersPage() {
                             size="sm"
                             type="button"
                             onClick={() => saveRoles(user.id)}
-                            disabled={!editingRoleIds.length}
                           >
-                            <Save size={14} /> Salvar perfis
+                            <Save size={14} /> Salvar {editingScope === 'global' ? '(global)' : 'neste ambiente'}
                           </Button>
                         </div>
                       </Td>

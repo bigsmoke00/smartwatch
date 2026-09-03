@@ -125,24 +125,53 @@ export class RolesService {
   }
 
   // ---------- User × Role ----------
+  /**
+   * Lista as concessões de papel do usuário, já com o ambiente de cada uma
+   * (environmentId NULL = concessão global, vale em todos os ambientes).
+   */
   async listUserRoles(userId: string) {
     const r = await this.pool.query(
-      `SELECT r.id, r.name FROM user_roles ur
+      `SELECT r.id, r.name,
+              ur.environment_id AS "environmentId",
+              e.slug AS "environmentSlug",
+              e.name AS "environmentName"
+       FROM user_roles ur
        JOIN roles r ON r.id = ur.role_id
+       LEFT JOIN environments e ON e.id = ur.environment_id
        WHERE ur.user_id = $1
-       ORDER BY r.name`,
+       ORDER BY e.name NULLS FIRST, r.name`,
       [userId],
     );
     return r.rows;
   }
 
-  async setUserRoles(userId: string, roleIds: string[], grantedBy: string) {
+  /**
+   * Define os papéis de um usuário DENTRO DE UM ESCOPO:
+   *   - envId = null  -> escopo GLOBAL (vale em todos os ambientes)
+   *   - envId = uuid  -> escopo daquele ambiente
+   *
+   * Substitui apenas as concessões daquele escopo — as dos demais escopos
+   * ficam intactas. O papel legado em users.role é recalculado a partir de
+   * TODAS as concessões (qualquer escopo), pra manter compat.
+   */
+  async setUserRoles(
+    userId: string,
+    roleIds: string[],
+    grantedBy: string,
+    envId: string | null = null,
+  ) {
     const client = await this.pool.connect();
-    let assignedRoles: { id: string; name: string }[] = [];
+    let assignedRoles: any[] = [];
     try {
       await client.query('BEGIN');
       const user = await client.query(`SELECT id FROM users WHERE id=$1`, [userId]);
       if (!user.rowCount) throw new NotFoundException('User not found');
+
+      if (envId) {
+        const env = await client.query(`SELECT id FROM environments WHERE id=$1`, [envId]);
+        if (!env.rowCount) throw new NotFoundException('Environment not found');
+      }
+
       const uniqueRoleIds = Array.from(new Set(roleIds));
       if (uniqueRoleIds.length) {
         const valid = await client.query(
@@ -153,27 +182,54 @@ export class RolesService {
           throw new NotFoundException('One or more profiles do not exist');
         }
       }
-      await client.query(`DELETE FROM user_roles WHERE user_id=$1`, [userId]);
-      for (const rid of uniqueRoleIds) {
+
+      // Remove só as concessões do escopo alvo.
+      if (envId) {
         await client.query(
-          `INSERT INTO user_roles(user_id, role_id, granted_by) VALUES ($1,$2,$3)
-           ON CONFLICT DO NOTHING`,
-          [userId, rid, grantedBy],
+          `DELETE FROM user_roles WHERE user_id=$1 AND environment_id=$2`,
+          [userId, envId],
+        );
+      } else {
+        await client.query(
+          `DELETE FROM user_roles WHERE user_id=$1 AND environment_id IS NULL`,
+          [userId],
         );
       }
-      const legacyRole = await this.legacyRoleForIds(uniqueRoleIds, client);
+      for (const rid of uniqueRoleIds) {
+        await client.query(
+          `INSERT INTO user_roles(user_id, role_id, granted_by, environment_id)
+           VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING`,
+          [userId, rid, grantedBy, envId],
+        );
+      }
+
+      // Papel legado = maior privilégio entre TODAS as concessões do usuário.
+      const allRoleIds = (
+        await client.query(
+          `SELECT DISTINCT role_id FROM user_roles WHERE user_id=$1`,
+          [userId],
+        )
+      ).rows.map((x) => x.role_id);
+      const legacyRole = await this.legacyRoleForIds(allRoleIds, client);
       await client.query(
         `UPDATE users SET role=$2, updated_at=now() WHERE id=$1`,
         [userId, legacyRole],
       );
-      assignedRoles = (await client.query(
-        `SELECT r.id, r.name
-         FROM user_roles ur
-         JOIN roles r ON r.id = ur.role_id
-         WHERE ur.user_id=$1
-         ORDER BY r.name`,
-        [userId],
-      )).rows;
+
+      assignedRoles = (
+        await client.query(
+          `SELECT r.id, r.name,
+                  ur.environment_id AS "environmentId",
+                  e.slug AS "environmentSlug",
+                  e.name AS "environmentName"
+           FROM user_roles ur
+           JOIN roles r ON r.id = ur.role_id
+           LEFT JOIN environments e ON e.id = ur.environment_id
+           WHERE ur.user_id=$1
+           ORDER BY e.name NULLS FIRST, r.name`,
+          [userId],
+        )
+      ).rows;
       await client.query('COMMIT');
     } catch (e) {
       await client.query('ROLLBACK');
@@ -208,14 +264,34 @@ export class RolesService {
     return 'viewer';
   }
 
-  /** Permissões efetivas de um usuário (união de todas as roles atribuídas). */
-  async permissionsOf(userId: string): Promise<Set<string>> {
+  /**
+   * Permissões efetivas de um usuário.
+   *
+   * - Sem `envId` (undefined): união de TODAS as concessões, em qualquer
+   *   ambiente (comportamento legado — usado por gateways WS e checagens
+   *   agnósticas de ambiente).
+   * - Com `envId`: concessões GLOBAIS (environment_id IS NULL) + as concessões
+   *   escopadas naquele ambiente. É o que o guard HTTP usa, escopando a
+   *   autorização ao ambiente ativo (header X-Environment).
+   */
+  async permissionsOf(userId: string, envId?: string | null): Promise<Set<string>> {
+    if (envId === undefined) {
+      const r = await this.pool.query(
+        `SELECT DISTINCT rp.permission_key
+         FROM user_roles ur
+         JOIN role_permissions rp ON rp.role_id = ur.role_id
+         WHERE ur.user_id = $1`,
+        [userId],
+      );
+      return new Set(r.rows.map((x) => x.permission_key));
+    }
     const r = await this.pool.query(
       `SELECT DISTINCT rp.permission_key
        FROM user_roles ur
        JOIN role_permissions rp ON rp.role_id = ur.role_id
-       WHERE ur.user_id = $1`,
-      [userId],
+       WHERE ur.user_id = $1
+         AND (ur.environment_id IS NULL OR ur.environment_id = $2)`,
+      [userId, envId],
     );
     return new Set(r.rows.map((x) => x.permission_key));
   }

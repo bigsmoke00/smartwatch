@@ -22,6 +22,7 @@ import {
 } from 'class-validator';
 import { ServersService } from './servers.service';
 import { RequirePermission } from '../auth/permissions.decorator';
+import { ActiveEnvironment } from '../auth/active-environment.decorator';
 import { Audit } from '../audit/audit.decorator';
 
 class CreateServerDto {
@@ -84,28 +85,36 @@ export class ServersController {
     'capture:request', 'terminal:request', 'terminal:open', 'patroni:read',
   )
   @Get()
-  list(@Query('cloud') cloud?: string, @Query('tag') tag?: string) {
-    return this.service.list({ cloud, tag });
+  list(
+    @ActiveEnvironment() envId: string | null,
+    @Query('cloud') cloud?: string,
+    @Query('tag') tag?: string,
+  ) {
+    return this.service.list({ cloud, tag, environmentId: envId });
   }
 
   @RequirePermission('servers:read')
   @Get(':id')
-  get(@Param('id') id: string) {
-    return this.service.get(id);
+  get(@Param('id') id: string, @ActiveEnvironment() envId: string | null) {
+    return this.service.get(id, envId);
   }
 
   @RequirePermission('servers:write')
   @Audit('server.create')
   @Post()
-  create(@Body() dto: CreateServerDto) {
-    return this.service.create(dto as any);
+  create(@Body() dto: CreateServerDto, @ActiveEnvironment() envId: string | null) {
+    return this.service.create({ ...(dto as any), environmentId: envId });
   }
 
   @RequirePermission('servers:write')
   @Audit('server.update')
   @Patch(':id')
-  update(@Param('id') id: string, @Body() dto: UpdateServerDto) {
-    return this.service.update(id, dto as any);
+  update(
+    @Param('id') id: string,
+    @Body() dto: UpdateServerDto,
+    @ActiveEnvironment() envId: string | null,
+  ) {
+    return this.service.update(id, dto as any, envId);
   }
 
   @RequirePermission('servers:delete')
@@ -113,29 +122,38 @@ export class ServersController {
   @Delete(':id')
   remove(
     @Param('id') id: string,
+    @ActiveEnvironment() envId: string | null,
     @Query('soft') soft?: string,
   ) {
-    return this.service.remove(id, soft === 'true');
+    return this.service.remove(id, soft === 'true', envId);
   }
 
   @RequirePermission('servers:delete')
   @Audit('server.restore')
   @Post(':id/restore')
-  restore(@Param('id') id: string) {
-    return this.service.restore(id);
+  restore(@Param('id') id: string, @ActiveEnvironment() envId: string | null) {
+    return this.service.restore(id, envId);
   }
 
   @RequirePermission('apikey:write')
   @Audit('apikey.create')
   @Post(':id/api-keys')
-  createApiKey(@Param('id') id: string, @Body() dto: CreateApiKeyDto) {
-    return this.service.createApiKey(id, dto);
+  createApiKey(
+    @Param('id') id: string,
+    @Body() dto: CreateApiKeyDto,
+    @ActiveEnvironment() envId: string | null,
+  ) {
+    return this.service.createApiKey(id, dto, envId);
   }
 
   @RequirePermission('apikey:write')
   @Audit('apikey.revoke')
   @Delete(':id/api-keys/:keyId')
-  revokeApiKey(@Param('id') id: string, @Param('keyId') keyId: string) {
-    return this.service.revokeApiKey(id, keyId);
+  revokeApiKey(
+    @Param('id') id: string,
+    @Param('keyId') keyId: string,
+    @ActiveEnvironment() envId: string | null,
+  ) {
+    return this.service.revokeApiKey(id, keyId, envId);
   }
 }

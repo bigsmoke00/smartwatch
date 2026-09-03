@@ -34,10 +34,12 @@ import {
   ChevronDown,
   ChevronRight,
   Search,
+  Layers,
   User as UserIcon,
 } from 'lucide-react';
 import { Auth, apiFetch } from '@/lib/api';
 import { loadMyPermissions, hasPerm } from '@/lib/perms';
+import { EnvironmentSwitcher } from '@/components/EnvironmentSwitcher';
 import { cn } from '@/lib/utils';
 
 interface NavItem {
@@ -98,6 +100,7 @@ const NAV_GROUPS: { title: string; items: NavItem[] }[] = [
     title: 'Conta',
     items: [
       { href: '/settings', label: 'Ajustes / 2FA', icon: Settings },
+      { href: '/environments', label: 'Ambientes', icon: Layers, perms: ['environments:read'] },
       { href: '/settings/roles', label: 'Perfis e permissões', icon: Shield, perms: ['roles:read'] },
       { href: '/users', label: 'Usuários', icon: Users, perms: ['users:read'] },
     ],
@@ -340,6 +343,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </button>
 
           <div className="flex items-center gap-3 ml-auto">
+            <EnvironmentSwitcher />
             {hasPerm(perms, 'alerts:read') && (
               <Link href="/alerts" title="Alertas" className="relative text-muted hover:text-text transition-colors">
                 <Bell size={18} />

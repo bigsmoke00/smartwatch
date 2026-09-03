@@ -8,6 +8,7 @@ import { DockerManagerModule } from '../docker-manager/docker-manager.module';
 import { RequirePermission } from '../auth/permissions.decorator';
 import { Audit } from '../audit/audit.decorator';
 import { CurrentUser, JwtUserPayload } from '../auth/current-user.decorator';
+import { ActiveEnvironment } from '../auth/active-environment.decorator';
 
 class TargetDto {
   @IsString() name!: string;
@@ -27,11 +28,11 @@ class CertController {
 
   @RequirePermission('cert:read')
   @Get()
-  list() { return this.svc.listCerts(); }
+  list(@ActiveEnvironment() envId: string | null) { return this.svc.listCerts(envId); }
 
   @RequirePermission('cert:read')
   @Get('targets')
-  targets() { return this.svc.listTargets(); }
+  targets(@ActiveEnvironment() envId: string | null) { return this.svc.listTargets(envId); }
 
   @RequirePermission('cert:read')
   @Get('channels')
@@ -40,26 +41,38 @@ class CertController {
   @RequirePermission('cert:write')
   @Audit('cert.target.create')
   @Post('targets')
-  create(@Body() dto: TargetDto, @CurrentUser() u: JwtUserPayload) {
-    return this.svc.createTarget(dto, u.sub);
+  create(
+    @Body() dto: TargetDto,
+    @CurrentUser() u: JwtUserPayload,
+    @ActiveEnvironment() envId: string | null,
+  ) {
+    return this.svc.createTarget(dto, u.sub, envId);
   }
 
   @RequirePermission('cert:write')
   @Audit('cert.target.update')
   @Patch('targets/:id')
-  update(@Param('id') id: string, @Body() patch: any) {
-    return this.svc.updateTarget(id, patch);
+  update(
+    @Param('id') id: string,
+    @Body() patch: any,
+    @ActiveEnvironment() envId: string | null,
+  ) {
+    return this.svc.updateTarget(id, patch, envId);
   }
 
   @RequirePermission('cert:write')
   @Audit('cert.target.delete')
   @Delete('targets/:id')
-  remove(@Param('id') id: string) { return this.svc.removeTarget(id); }
+  remove(@Param('id') id: string, @ActiveEnvironment() envId: string | null) {
+    return this.svc.removeTarget(id, envId);
+  }
 
   @RequirePermission('cert:write')
   @Audit('cert.rescan')
   @Post('targets/:id/rescan')
-  rescan(@Param('id') id: string) { return this.svc.rescan(id); }
+  rescan(@Param('id') id: string, @ActiveEnvironment() envId: string | null) {
+    return this.svc.rescan(id, envId);
+  }
 }
 
 @Module({

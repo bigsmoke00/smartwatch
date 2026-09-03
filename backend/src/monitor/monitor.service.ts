@@ -1,4 +1,4 @@
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { Pool } from 'pg';
 import { PG_POOL } from '../db/db.module';
@@ -42,6 +42,7 @@ const SELECT_COLS = `
   insecure_skip_verify AS "insecureSkipVerify",
   failure_threshold AS "failureThreshold", success_threshold AS "successThreshold",
   alert_channels AS "alertChannels", enabled,
+  environment_id AS "environmentId",
   last_checked_at AS "lastCheckedAt", last_status AS "lastStatus",
   consecutive_failures AS "consecutiveFailures",
   consecutive_successes AS "consecutiveSuccesses",
@@ -58,7 +59,7 @@ export class MonitorService {
   ) {}
 
   // ============================================================ CRUD
-  async summary() {
+  async summary(envId?: string | null) {
     const r = await this.pool.query(
       `SELECT ${SELECT_COLS},
         (SELECT count(*) FROM monitor_results m WHERE m.endpoint_id=e.id AND m.ts >= now()-interval '24 hours')::int AS "checks24h",
@@ -68,9 +69,21 @@ export class MonitorService {
             SELECT success, ts FROM monitor_results m WHERE m.endpoint_id=e.id ORDER BY ts DESC LIMIT 30
         ) x) AS "recent"
        FROM monitor_endpoints e
+       WHERE ($1::uuid IS NULL OR e.environment_id = $1)
        ORDER BY group_name NULLS FIRST, name`,
+      [envId ?? null],
     );
     return r.rows;
+  }
+
+  /** 404 se o endpoint não pertence ao ambiente ativo (isolamento). */
+  private async assertEnv(id: string, envId?: string | null) {
+    if (!envId) return;
+    const r = await this.pool.query(
+      `SELECT 1 FROM monitor_endpoints WHERE id=$1 AND environment_id=$2`,
+      [id, envId],
+    );
+    if (!r.rowCount) throw new NotFoundException();
   }
 
   /** Dados mínimos para a status page pública (sem alvo/config internos). */
@@ -86,18 +99,23 @@ export class MonitorService {
     return r.rows;
   }
 
-  async get(id: string): Promise<MonitorEndpoint> {
-    const r = await this.pool.query(`SELECT ${SELECT_COLS} FROM monitor_endpoints e WHERE id=$1`, [id]);
+  async get(id: string, envId?: string | null): Promise<MonitorEndpoint> {
+    const r = await this.pool.query(
+      `SELECT ${SELECT_COLS} FROM monitor_endpoints e
+       WHERE id=$1 AND ($2::uuid IS NULL OR e.environment_id=$2)`,
+      [id, envId ?? null],
+    );
     return r.rows[0];
   }
 
-  async create(input: any, userId: string | null) {
+  async create(input: any, userId: string | null, envId?: string | null) {
     const r = await this.pool.query(
       `INSERT INTO monitor_endpoints
          (name, group_name, type, target, method, request_headers, request_body,
           dns_query_type, interval_seconds, timeout_ms, conditions, follow_redirects,
-          insecure_skip_verify, failure_threshold, success_threshold, alert_channels, enabled, created_by)
-       VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10,$11::jsonb,$12,$13,$14,$15,$16::uuid[],$17,$18)
+          insecure_skip_verify, failure_threshold, success_threshold, alert_channels, enabled, created_by,
+          environment_id)
+       VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10,$11::jsonb,$12,$13,$14,$15,$16::uuid[],$17,$18,$19)
        RETURNING id`,
       [
         input.name, input.group ?? input.groupName ?? null, normType(input.type), input.target,
@@ -107,12 +125,14 @@ export class MonitorService {
         input.followRedirects !== false, !!input.insecureSkipVerify,
         clampInt(input.failureThreshold, 1, 100, 1), clampInt(input.successThreshold, 1, 100, 1),
         Array.isArray(input.alertChannels) ? input.alertChannels : [], input.enabled !== false, userId,
+        input.environmentId ?? envId ?? null,
       ],
     );
     return this.get(r.rows[0].id);
   }
 
-  async update(id: string, patch: any) {
+  async update(id: string, patch: any, envId?: string | null) {
+    await this.assertEnv(id, envId);
     const cols: Record<string, string> = {
       name: 'name', group: 'group_name', groupName: 'group_name', target: 'target', method: 'method',
       requestBody: 'request_body', dnsQueryType: 'dns_query_type', intervalSeconds: 'interval_seconds',
@@ -136,13 +156,15 @@ export class MonitorService {
     return this.get(id);
   }
 
-  async remove(id: string) {
+  async remove(id: string, envId?: string | null) {
+    await this.assertEnv(id, envId);
     await this.pool.query(`DELETE FROM monitor_results WHERE endpoint_id=$1`, [id]);
     await this.pool.query(`DELETE FROM monitor_endpoints WHERE id=$1`, [id]);
     return { ok: true };
   }
 
-  async results(id: string, limit = 100) {
+  async results(id: string, limit = 100, envId?: string | null) {
+    await this.assertEnv(id, envId);
     const r = await this.pool.query(
       `SELECT ts, success, status_code AS "statusCode", response_time_ms AS "responseTimeMs",
               ip, condition_results AS "conditionResults", error
@@ -160,7 +182,8 @@ export class MonitorService {
     return r.rows;
   }
 
-  async events(id: string, limit = 50) {
+  async events(id: string, limit = 50, envId?: string | null) {
+    await this.assertEnv(id, envId);
     const r = await this.pool.query(
       `SELECT id, type, message, ts FROM monitor_events WHERE endpoint_id=$1 ORDER BY ts DESC LIMIT $2`,
       [id, Math.min(500, Math.max(1, limit))],
@@ -169,14 +192,15 @@ export class MonitorService {
   }
 
   /** Roda a checagem sob demanda (botão "testar agora"). */
-  async runNow(id: string) {
-    const ep = await this.get(id);
+  async runNow(id: string, envId?: string | null) {
+    const ep = await this.get(id, envId);
     if (!ep) return { ok: false, message: 'endpoint não encontrado' };
     return this.runCheck(ep);
   }
 
   /** Série temporal (bucketada) de latência e uptime para o gráfico. */
-  async series(id: string, window: string) {
+  async series(id: string, window: string, envId?: string | null) {
+    await this.assertEnv(id, envId);
     const { interval, bucket } = windowSpec(window);
     const r = await this.pool.query(
       `SELECT time_bucket($2::interval, ts) AS bucket,
@@ -311,7 +335,7 @@ export class MonitorService {
   }
 
   // ============================================================ Import YAML (Gatus)
-  async importYaml(text: string, userId: string | null) {
+  async importYaml(text: string, userId: string | null, envId?: string | null) {
     let doc: any;
     try {
       doc = yaml.load(text);
@@ -328,7 +352,7 @@ export class MonitorService {
       try {
         const mapped = mapGatusEndpoint(raw);
         if (!mapped) { skipped++; continue; }
-        await this.create(mapped, userId);
+        await this.create(mapped, userId, envId);
         imported++;
       } catch (e) {
         skipped++;

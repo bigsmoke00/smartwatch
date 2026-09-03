@@ -72,14 +72,20 @@ export class UsersService {
               u.created_at AS "createdAt",
               coalesce(
                 jsonb_agg(
-                  jsonb_build_object('id', r.id, 'name', r.name)
-                  ORDER BY r.name
+                  jsonb_build_object(
+                    'id', r.id, 'name', r.name,
+                    'environmentId', ur.environment_id,
+                    'environmentSlug', e.slug,
+                    'environmentName', e.name
+                  )
+                  ORDER BY e.name NULLS FIRST, r.name
                 ) FILTER (WHERE r.id IS NOT NULL),
                 '[]'::jsonb
               ) AS roles
        FROM users u
        LEFT JOIN user_roles ur ON ur.user_id = u.id
        LEFT JOIN roles r ON r.id = ur.role_id
+       LEFT JOIN environments e ON e.id = ur.environment_id
        GROUP BY u.id
        ORDER BY u.created_at ASC`,
     );
@@ -233,8 +239,15 @@ export class UsersService {
    * a senha fica inválida até ele definir uma nova pelo link.
    */
   async requirePasswordReset(id: string) {
+    // Ao disparar o reset, já desbloqueia a conta: zera tentativas e limpa o
+    // lockout por brute-force. Assim o colaborador que ficou bloqueado por
+    // erro de senha volta a conseguir acessar assim que definir a nova senha
+    // (antes disso o must_change_password mantém o acesso fechado ao link),
+    // sem precisar remover e recriar o usuário.
     await this.pool.query(
-      `UPDATE users SET must_change_password=true WHERE id=$1`,
+      `UPDATE users
+         SET must_change_password=true, failed_logins=0, locked_until=NULL
+       WHERE id=$1`,
       [id],
     );
   }
@@ -308,12 +321,17 @@ export class UsersService {
    * Usado tanto pelo admin (PATCH /users/:id/password) quanto pelo fluxo de
    * autoatendimento (consumeSetPasswordToken). Sempre limpa
    * must_change_password — uma vez definida a senha, o acesso normal abre.
+   *
+   * Também zera o contador de falhas e remove o bloqueio por tentativas
+   * (failed_logins/locked_until): definir uma senha nova é prova de posse da
+   * conta, então não faz sentido manter o lockout de brute-force anterior.
    */
   async changePassword(id: string, newPassword: string) {
     const hash = await bcrypt.hash(newPassword, 12);
     await this.pool.query(
       `UPDATE users
-         SET password_hash=$2, password_changed_at=now(), must_change_password=false
+         SET password_hash=$2, password_changed_at=now(), must_change_password=false,
+             failed_logins=0, locked_until=NULL
        WHERE id=$1`,
       [id, hash],
     );

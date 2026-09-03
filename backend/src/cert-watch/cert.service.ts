@@ -50,7 +50,7 @@ export class CertService {
   }
 
   // ============================================================ Alvos
-  async listTargets() {
+  async listTargets(envId?: string | null) {
     const r = await this.pool.query(
       `SELECT t.id, t.name, t.server_id AS "serverId", s.name AS "serverName",
               t.directory, t.recursive, t.enabled,
@@ -58,18 +58,31 @@ export class CertService {
               t.last_scan_at AS "lastScanAt", t.last_scan_error AS "lastScanError",
               (SELECT count(*)::int FROM cert_files f WHERE f.target_id=t.id) AS "certCount"
        FROM cert_targets t JOIN servers s ON s.id = t.server_id
+       WHERE ($1::uuid IS NULL OR t.environment_id = $1)
        ORDER BY t.name`,
+      [envId ?? null],
     );
     return r.rows;
   }
 
-  async createTarget(input: any, userId: string | null) {
+  /** 404 se o alvo não pertence ao ambiente ativo (isolamento). */
+  private async assertEnv(id: string, envId?: string | null) {
+    if (!envId) return;
     const r = await this.pool.query(
-      `INSERT INTO cert_targets(name, server_id, directory, recursive, enabled, alert_days, alert_channels, created_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7::uuid[],$8) RETURNING id`,
+      `SELECT 1 FROM cert_targets WHERE id=$1 AND environment_id=$2`,
+      [id, envId],
+    );
+    if (!r.rowCount) throw new NotFoundException('alvo não encontrado');
+  }
+
+  async createTarget(input: any, userId: string | null, envId?: string | null) {
+    const r = await this.pool.query(
+      `INSERT INTO cert_targets(name, server_id, directory, recursive, enabled, alert_days, alert_channels, created_by, environment_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7::uuid[],$8,$9) RETURNING id`,
       [
         input.name, input.serverId, input.directory, input.recursive !== false, input.enabled !== false,
         clampDays(input.alertDays), Array.isArray(input.alertChannels) ? input.alertChannels : [], userId,
+        input.environmentId ?? envId ?? null,
       ],
     );
     const id = r.rows[0].id;
@@ -77,7 +90,8 @@ export class CertService {
     return { id };
   }
 
-  async updateTarget(id: string, patch: any) {
+  async updateTarget(id: string, patch: any, envId?: string | null) {
+    await this.assertEnv(id, envId);
     const map: Record<string, string> = {
       name: 'name', serverId: 'server_id', directory: 'directory', recursive: 'recursive', enabled: 'enabled',
     };
@@ -96,13 +110,14 @@ export class CertService {
     return { ok: true };
   }
 
-  async removeTarget(id: string) {
+  async removeTarget(id: string, envId?: string | null) {
+    await this.assertEnv(id, envId);
     await this.pool.query(`DELETE FROM cert_targets WHERE id=$1`, [id]);
     return { ok: true };
   }
 
   /** Todos os certificados encontrados, ordenados pelo vencimento mais próximo. */
-  async listCerts() {
+  async listCerts(envId?: string | null) {
     const r = await this.pool.query(
       `SELECT f.id, f.target_id AS "targetId", t.name AS "targetName",
               t.server_id AS "serverId", s.name AS "serverName",
@@ -112,13 +127,16 @@ export class CertService {
        FROM cert_files f
        JOIN cert_targets t ON t.id = f.target_id
        JOIN servers s ON s.id = t.server_id
+       WHERE ($1::uuid IS NULL OR t.environment_id = $1)
        ORDER BY f.not_after ASC NULLS LAST`,
+      [envId ?? null],
     );
     return r.rows;
   }
 
   // ============================================================ Varredura
-  async rescan(id: string) {
+  async rescan(id: string, envId?: string | null) {
+    await this.assertEnv(id, envId);
     const ok = await this.scanTarget(id);
     return { ok };
   }

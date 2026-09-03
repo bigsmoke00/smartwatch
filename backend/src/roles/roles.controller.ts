@@ -9,10 +9,11 @@ import {
   Put,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import { IsArray, IsOptional, IsString } from 'class-validator';
+import { IsArray, IsOptional, IsString, IsUUID } from 'class-validator';
 import { RolesService } from './roles.service';
 import { RequirePermission } from '../auth/permissions.decorator';
 import { CurrentUser, JwtUserPayload } from '../auth/current-user.decorator';
+import { ActiveEnvironment } from '../auth/active-environment.decorator';
 import { Audit } from '../audit/audit.decorator';
 
 class CreateRoleDto {
@@ -27,6 +28,8 @@ class UpdateRoleDto {
 }
 class SetUserRolesDto {
   @IsArray() @IsString({ each: true }) roleIds!: string[];
+  // Escopo da concessão: omitido/null = global; uuid = aquele ambiente.
+  @IsOptional() @IsUUID() environmentId?: string | null;
 }
 
 @ApiTags('roles')
@@ -91,13 +94,19 @@ export class RolesController {
     @Body() dto: SetUserRolesDto,
     @CurrentUser() actor: JwtUserPayload,
   ) {
-    return this.svc.setUserRoles(userId, dto.roleIds, actor.sub);
+    return this.svc.setUserRoles(userId, dto.roleIds, actor.sub, dto.environmentId ?? null);
   }
 
   // -------- /me/permissions (o frontend usa pra montar menu)
+  // Escopado no ambiente ativo (header X-Environment): retorna as permissões
+  // globais + as do ambiente selecionado, pra o menu refletir o que o usuário
+  // pode fazer NAQUELE ambiente.
   @Get('me/permissions')
-  async myPermissions(@CurrentUser() user: JwtUserPayload) {
-    const set = await this.svc.permissionsOf(user.sub);
-    return { permissions: Array.from(set) };
+  async myPermissions(
+    @CurrentUser() user: JwtUserPayload,
+    @ActiveEnvironment() envId: string | null,
+  ) {
+    const set = await this.svc.permissionsOf(user.sub, envId);
+    return { permissions: Array.from(set), environmentId: envId };
   }
 }

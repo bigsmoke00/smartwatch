@@ -32,6 +32,7 @@ export interface ServerRow {
    * fontes de altíssimo volume, como o FreeSWITCH/Unity.
    */
   logRateLimitPerMinute?: number | null;
+  environmentId?: string | null;
   lastSeenAt?: Date | null;
   createdAt: Date;
 }
@@ -42,17 +43,29 @@ const COLS = `id, name, description, hostname, ip::text AS ip,
               os, arch, agent_version AS "agentVersion",
               tags, labels, retention_days AS "retentionDays",
               log_rate_limit_per_minute AS "logRateLimitPerMinute",
+              environment_id AS "environmentId",
               last_seen_at AS "lastSeenAt", created_at AS "createdAt"`;
 
 @Injectable()
 export class ServersService {
   constructor(@Inject(PG_POOL) private readonly pool: Pool) {}
 
-  async list(filter?: { cloud?: string; tag?: string; includeDeleted?: boolean }) {
+  async list(filter?: {
+    cloud?: string;
+    tag?: string;
+    includeDeleted?: boolean;
+    environmentId?: string | null;
+  }) {
     const where: string[] = [];
     const params: any[] = [];
     let i = 1;
     if (!filter?.includeDeleted) where.push(`deleted_at IS NULL`);
+    // Escopo por ambiente ativo (header X-Environment). Sem env resolvido,
+    // não filtra (comportamento legado / chamadas internas).
+    if (filter?.environmentId) {
+      where.push(`environment_id = $${i++}`);
+      params.push(filter.environmentId);
+    }
     if (filter?.cloud) {
       where.push(`cloud = $${i++}`);
       params.push(filter.cloud);
@@ -69,10 +82,26 @@ export class ServersService {
     return r.rows;
   }
 
-  async get(id: string) {
-    const r = await this.pool.query(`SELECT ${COLS} FROM servers WHERE id=$1`, [
-      id,
-    ]);
+  /**
+   * Garante que o servidor pertence ao ambiente ativo. Se envId for informado
+   * e o servidor não estiver nele (ou não existir), comporta-se como 404 —
+   * assim um usuário do Lab nem enxerga/edita recursos do Prod.
+   */
+  private async assertEnv(id: string, envId?: string | null) {
+    if (!envId) return;
+    const r = await this.pool.query(
+      `SELECT 1 FROM servers WHERE id=$1 AND environment_id=$2`,
+      [id, envId],
+    );
+    if (!r.rowCount) throw new NotFoundException();
+  }
+
+  async get(id: string, envId?: string | null) {
+    const r = await this.pool.query(
+      `SELECT ${COLS} FROM servers
+       WHERE id=$1 AND ($2::uuid IS NULL OR environment_id=$2)`,
+      [id, envId ?? null],
+    );
     if (!r.rowCount) throw new NotFoundException();
     const k = await this.pool.query(
       `SELECT id, prefix, scopes, ip_allowlist::text[] AS "ipAllowlist",
@@ -87,8 +116,8 @@ export class ServersService {
     const r = await this.pool.query(
       `INSERT INTO servers(name, description, hostname, cloud, cloud_region,
                            cloud_account, cloud_instance_id, cloud_az, tags, labels,
-                           retention_days, log_rate_limit_per_minute)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id`,
+                           retention_days, log_rate_limit_per_minute, environment_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id`,
       [
         input.name,
         input.description ?? null,
@@ -102,12 +131,14 @@ export class ServersService {
         JSON.stringify(input.labels ?? {}),
         input.retentionDays ?? 4,
         input.logRateLimitPerMinute ?? null,
+        input.environmentId ?? null,
       ],
     );
     return this.get(r.rows[0].id);
   }
 
-  async update(id: string, patch: Partial<ServerRow>) {
+  async update(id: string, patch: Partial<ServerRow>, envId?: string | null) {
+    await this.assertEnv(id, envId);
     const fields: string[] = [];
     const params: any[] = [id];
     let i = 2;
@@ -122,6 +153,7 @@ export class ServersService {
       cloudAz: 'cloud_az',
       retentionDays: 'retention_days',
       logRateLimitPerMinute: 'log_rate_limit_per_minute',
+      environmentId: 'environment_id',
     };
     for (const [k, col] of Object.entries(map)) {
       if ((patch as any)[k] !== undefined) {
@@ -158,7 +190,8 @@ export class ServersService {
    * para servers, as linhas órfãs não quebram nada — elas são purgadas pelas
    * políticas de retenção (14 dias / 180 dias) no curso normal.
    */
-  async remove(id: string, soft = false) {
+  async remove(id: string, soft = false, envId?: string | null) {
+    await this.assertEnv(id, envId);
     if (soft) {
       await this.pool.query(
         `UPDATE servers SET deleted_at=now() WHERE id=$1 AND deleted_at IS NULL`,
@@ -191,12 +224,18 @@ export class ServersService {
     }
   }
 
-  async restore(id: string) {
+  async restore(id: string, envId?: string | null) {
+    await this.assertEnv(id, envId);
     await this.pool.query(`UPDATE servers SET deleted_at=NULL WHERE id=$1`, [id]);
     return { ok: true };
   }
 
-  async createApiKey(serverId: string, opts?: { ipAllowlist?: string[]; scopes?: string[] }) {
+  async createApiKey(
+    serverId: string,
+    opts?: { ipAllowlist?: string[]; scopes?: string[] },
+    envId?: string | null,
+  ) {
+    await this.assertEnv(serverId, envId);
     const exists = await this.pool.query(`SELECT 1 FROM servers WHERE id=$1`, [
       serverId,
     ]);
@@ -220,7 +259,8 @@ export class ServersService {
     return { prefix, key: `${prefix}.${secret}` };
   }
 
-  async revokeApiKey(serverId: string, keyId: string) {
+  async revokeApiKey(serverId: string, keyId: string, envId?: string | null) {
+    await this.assertEnv(serverId, envId);
     await this.pool.query(
       `UPDATE api_keys SET active=false WHERE id=$1 AND server_id=$2`,
       [keyId, serverId],

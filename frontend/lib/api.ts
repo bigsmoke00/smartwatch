@@ -27,6 +27,19 @@ function clearTokens() {
   localStorage.removeItem('lw_user');
 }
 
+// ---- ambiente ativo (seletor Prod/Lab) -------------------------------------
+// Enviado em todo request no header X-Environment; o backend escopa permissões
+// e dados àquele ambiente. Guardado no localStorage (por navegador/usuário).
+export function getActiveEnv(): string | null {
+  if (typeof window === 'undefined') return null;
+  return localStorage.getItem('lw_env');
+}
+export function setActiveEnv(slug: string | null) {
+  if (typeof window === 'undefined') return;
+  if (slug) localStorage.setItem('lw_env', slug);
+  else localStorage.removeItem('lw_env');
+}
+
 // ---- redirect coordenado (evita loop em /login) ----------------------------
 let redirecting = false;
 function redirectToLogin() {
@@ -97,6 +110,8 @@ export async function apiFetch<T = any>(
   if (init.body && !headers.has('Content-Type'))
     headers.set('Content-Type', 'application/json');
   if (token) headers.set('Authorization', `Bearer ${token}`);
+  const env = getActiveEnv();
+  if (env && !headers.has('X-Environment')) headers.set('X-Environment', env);
 
   let res: Response;
   try {

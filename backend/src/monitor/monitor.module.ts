@@ -11,6 +11,7 @@ import { RequirePermission } from '../auth/permissions.decorator';
 import { Public } from '../auth/public.decorator';
 import { Audit } from '../audit/audit.decorator';
 import { CurrentUser, JwtUserPayload } from '../auth/current-user.decorator';
+import { ActiveEnvironment } from '../auth/active-environment.decorator';
 import { svgBadge, uptimeColor, healthColor, latencyColor, safeEq } from './monitor.badge';
 
 const TYPES = ['http', 'tcp', 'udp', 'icmp', 'dns', 'tls', 'ws', 'ssh', 'starttls', 'domain'];
@@ -47,7 +48,7 @@ class MonitorController {
 
   @RequirePermission('monitor:read')
   @Get('endpoints')
-  list() { return this.svc.summary(); }
+  list(@ActiveEnvironment() envId: string | null) { return this.svc.summary(envId); }
 
   @RequirePermission('monitor:read')
   @Get('channels')
@@ -55,22 +56,34 @@ class MonitorController {
 
   @RequirePermission('monitor:read')
   @Get('endpoints/:id')
-  get(@Param('id') id: string) { return this.svc.get(id); }
+  get(@Param('id') id: string, @ActiveEnvironment() envId: string | null) {
+    return this.svc.get(id, envId);
+  }
 
   @RequirePermission('monitor:read')
   @Get('endpoints/:id/results')
-  results(@Param('id') id: string, @Query('limit') limit?: string) {
-    return this.svc.results(id, limit ? parseInt(limit, 10) : 100);
+  results(
+    @Param('id') id: string,
+    @ActiveEnvironment() envId: string | null,
+    @Query('limit') limit?: string,
+  ) {
+    return this.svc.results(id, limit ? parseInt(limit, 10) : 100, envId);
   }
 
   @RequirePermission('monitor:read')
   @Get('endpoints/:id/events')
-  events(@Param('id') id: string) { return this.svc.events(id); }
+  events(@Param('id') id: string, @ActiveEnvironment() envId: string | null) {
+    return this.svc.events(id, 50, envId);
+  }
 
   @RequirePermission('monitor:read')
   @Get('endpoints/:id/series')
-  series(@Param('id') id: string, @Query('window') window?: string) {
-    return this.svc.series(id, window || '24h');
+  series(
+    @Param('id') id: string,
+    @ActiveEnvironment() envId: string | null,
+    @Query('window') window?: string,
+  ) {
+    return this.svc.series(id, window || '24h', envId);
   }
 
   @RequirePermission('monitor:read')
@@ -115,32 +128,48 @@ class MonitorController {
   @RequirePermission('monitor:write')
   @Audit('monitor.create')
   @Post('endpoints')
-  create(@Body() dto: EndpointDto, @CurrentUser() u: JwtUserPayload) {
-    return this.svc.create(dto, u.sub);
+  create(
+    @Body() dto: EndpointDto,
+    @CurrentUser() u: JwtUserPayload,
+    @ActiveEnvironment() envId: string | null,
+  ) {
+    return this.svc.create(dto, u.sub, envId);
   }
 
   @RequirePermission('monitor:write')
   @Audit('monitor.update')
   @Patch('endpoints/:id')
-  update(@Param('id') id: string, @Body() patch: any) {
-    return this.svc.update(id, patch);
+  update(
+    @Param('id') id: string,
+    @Body() patch: any,
+    @ActiveEnvironment() envId: string | null,
+  ) {
+    return this.svc.update(id, patch, envId);
   }
 
   @RequirePermission('monitor:write')
   @Audit('monitor.delete')
   @Delete('endpoints/:id')
-  remove(@Param('id') id: string) { return this.svc.remove(id); }
+  remove(@Param('id') id: string, @ActiveEnvironment() envId: string | null) {
+    return this.svc.remove(id, envId);
+  }
 
   @RequirePermission('monitor:write')
   @Audit('monitor.run')
   @Post('endpoints/:id/run')
-  run(@Param('id') id: string) { return this.svc.runNow(id); }
+  run(@Param('id') id: string, @ActiveEnvironment() envId: string | null) {
+    return this.svc.runNow(id, envId);
+  }
 
   @RequirePermission('monitor:write')
   @Audit('monitor.import')
   @Post('import')
-  import(@Body() dto: ImportDto, @CurrentUser() u: JwtUserPayload) {
-    return this.svc.importYaml(dto.yaml, u.sub);
+  import(
+    @Body() dto: ImportDto,
+    @CurrentUser() u: JwtUserPayload,
+    @ActiveEnvironment() envId: string | null,
+  ) {
+    return this.svc.importYaml(dto.yaml, u.sub, envId);
   }
 }
 
