@@ -18,11 +18,12 @@ interface DeployApp {
   id: string; name: string; sistema: string; componente: string; environment: string;
   server_id: string; server_name?: string; working_dir: string; strategy: string;
   config: any; image_repo: string | null; enabled: boolean;
+  smartone_component_id?: string | null; script?: string | null; env_mode?: 'block' | 'script';
 }
 interface DeployExec {
   id: string; kind: string; source: string; gmud_id?: string; numero_protocolo?: string;
   sistema?: string; componente?: string; environment?: string; version?: string;
-  previous_version?: string; status: string; error_text?: string; callback_status?: string;
+  previous_version?: string; status: string; error_text?: string; callback_status?: string; callback_state?: string;
   started_at?: string; completed_at?: string; created_at: string; app_name?: string;
 }
 
@@ -111,7 +112,10 @@ export default function DeployPage() {
                   <Td className="font-mono text-xs">{a.sistema} · {a.componente}</Td>
                   <Td><Badge tone={a.environment === 'production' ? 'danger' : 'default'}>{a.environment}</Badge></Td>
                   <Td className="text-muted text-xs">{a.server_name ?? a.server_id.slice(0, 8)}</Td>
-                  <Td className="font-mono text-xs text-muted truncate max-w-xs" title={a.working_dir}>{a.working_dir}</Td>
+                  <Td className="font-mono text-xs text-muted truncate max-w-xs" title={a.working_dir}>
+                    {a.working_dir}{a.script ? `/${a.script}` : ''}
+                    {!a.smartone_component_id && <div className="text-2xs text-warn font-sans">sem componente_id do SmartOne</div>}
+                  </Td>
                   <Td className="text-right whitespace-nowrap space-x-3">
                     <button onClick={() => trigger(a)} className="text-accentSoft hover:underline text-xs inline-flex items-center gap-1">
                       <Play size={12} /> disparar
@@ -158,12 +162,15 @@ export default function DeployPage() {
                   <Td className="text-xs">
                     {e.source === 'smartone' ? 'SmartOne' : 'manual'}
                     {e.kind === 'rollback' && <Badge tone="warn" className="ml-1">rollback</Badge>}
+                    {e.kind === 'prepare' && <Badge tone="info" className="ml-1">preparação</Badge>}
                   </Td>
                   <Td className="font-mono text-xs">{e.sistema} · {e.componente}</Td>
                   <Td className="font-mono text-xs">{e.version ?? e.previous_version ?? '—'}</Td>
                   <Td className="font-mono text-xs text-muted">{e.numero_protocolo ?? '—'}</Td>
                   <Td>
                     <Badge tone={STATUS_TONE[e.status] ?? 'default'} dot>{e.status}</Badge>
+                    {e.callback_state === 'pending' && <span className="ml-1 text-2xs text-warn">callback pendente</span>}
+                    {e.callback_state === 'failed' && <span className="ml-1 text-2xs text-danger">callback falhou</span>}
                   </Td>
                   <Td className="text-right">
                     <button onClick={() => openDetail(e.id)} className="text-accentSoft hover:underline text-xs">ver</button>
@@ -190,6 +197,9 @@ function AppForm({ initial, onSaved, onCancel }: { initial: DeployApp | null; on
   const [environment, setEnvironment] = useState(initial?.environment ?? 'production');
   const [serverId, setServerId] = useState(initial?.server_id ?? '');
   const [workingDir, setWorkingDir] = useState(initial?.working_dir ?? '');
+  const [componentId, setComponentId] = useState(initial?.smartone_component_id ?? '');
+  const [script, setScript] = useState(initial?.script ?? '');
+  const [envMode, setEnvMode] = useState<'block' | 'script'>(initial?.env_mode ?? 'block');
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -201,7 +211,10 @@ function AppForm({ initial, onSaved, onCancel }: { initial: DeployApp | null; on
     }
     setSaving(true);
     try {
-      const body = JSON.stringify({ name, sistema, componente, environment, serverId, workingDir });
+      const body = JSON.stringify({
+        name, sistema, componente, environment, serverId, workingDir,
+        smartoneComponentId: componentId.trim(), script: script.trim(), envMode,
+      });
       if (initial) await apiFetch(`/deploy/apps/${initial.id}`, { method: 'PATCH', body });
       else await apiFetch('/deploy/apps', { method: 'POST', body });
       onSaved();
@@ -219,8 +232,9 @@ function AppForm({ initial, onSaved, onCancel }: { initial: DeployApp | null; on
         <button onClick={onCancel} className="text-muted hover:text-text"><X size={16} /></button>
       </div>
       <p className="text-2xs text-mutedFaint">
-        O cadastro serve para o <b>disparo manual</b> e como catálogo. Quando o deploy vem do SmartOne, o servidor,
-        o diretório e as envs chegam no próprio webhook — o SmartGard detecta sozinho se é compose ou script.
+        Este é o <b>catálogo</b> usado pelo SmartOne: o evento da GMUD não traz servidor, então cada componente
+        precisa estar cadastrado aqui. O SmartGard casa pelo <b>componente_id</b> do SmartOne (ou, sem ele, por
+        sistema + componente) e usa o servidor e o diretório deste cadastro.
       </p>
       <div className="grid md:grid-cols-3 gap-3">
         <div><label className="text-2xs uppercase tracking-wider text-mutedFaint">Nome</label><Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Unity Manager · PROD" /></div>
@@ -233,6 +247,7 @@ function AppForm({ initial, onSaved, onCancel }: { initial: DeployApp | null; on
             <option value="staging">staging</option>
             <option value="development">development</option>
             <option value="sandbox">sandbox</option>
+            <option value="lab">lab</option>
           </Select>
         </div>
         <div className="md:col-span-2">
@@ -241,7 +256,23 @@ function AppForm({ initial, onSaved, onCancel }: { initial: DeployApp | null; on
         </div>
         <div className="md:col-span-3">
           <label className="text-2xs uppercase tracking-wider text-mutedFaint">Diretório no host (onde está o compose / .sh)</label>
-          <Input value={workingDir} onChange={(e) => setWorkingDir(e.target.value)} placeholder="/opt/digivox/docker-scripts/unity-manager" className="font-mono text-xs" />
+          <Input value={workingDir} onChange={(e) => setWorkingDir(e.target.value)} placeholder="/opt/digivox/docker-scripts" className="font-mono text-xs" />
+          <p className="text-2xs text-mutedFaint mt-1">Tem que ser igual ao <span className="font-mono">path</span> que o SmartOne envia; se divergir, o deploy é recusado.</p>
+        </div>
+        <div className="md:col-span-2">
+          <label className="text-2xs uppercase tracking-wider text-mutedFaint">componente_id no SmartOne (UUID)</label>
+          <Input value={componentId} onChange={(e) => setComponentId(e.target.value)} placeholder="f0223cd0-2b0e-47f8-a66d-2d4773c0815b" className="font-mono text-xs" />
+        </div>
+        <div>
+          <label className="text-2xs uppercase tracking-wider text-mutedFaint">Script padrão (opcional)</label>
+          <Input value={script} onChange={(e) => setScript(e.target.value)} placeholder="unity.sh" className="font-mono text-xs" />
+        </div>
+        <div className="md:col-span-3">
+          <label className="text-2xs uppercase tracking-wider text-mutedFaint">Quando a GMUD exigir alteração de configuração (env_variables_required)</label>
+          <Select value={envMode} onChange={(e) => setEnvMode(e.target.value as 'block' | 'script')}>
+            <option value="block">Bloquear: recusar na preparação e dar erro na execução (alteração manual)</option>
+            <option value="script">O script aplica: segue e passa a descrição em GMUD_ENV_DESCRIPTION</option>
+          </Select>
         </div>
       </div>
       {err && <div className="text-xs text-danger">{err}</div>}

@@ -46,7 +46,9 @@ export class AuditInterceptor implements NestInterceptor {
             action,
             targetType: req.params?.id ? 'id' : null,
             targetId: req.params?.id,
-            metadata: { error: err?.message, status: err?.status },
+            // body redigido também nas falhas: sem ele, um login com senha errada não tinha
+            // o e-mail registrado (não dava para saber de quem eram as tentativas).
+            metadata: { method: req.method, path: req.route?.path, body: redact(req.body), error: err?.message, status: err?.status },
             result: err?.status === 403 ? 'denied' : 'error',
           });
         },

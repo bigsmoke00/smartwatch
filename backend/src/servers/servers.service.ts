@@ -6,7 +6,8 @@ import {
 } from '@nestjs/common';
 import { Pool } from 'pg';
 import * as bcrypt from 'bcrypt';
-import { randomBytes } from 'crypto';
+import { createHash, randomBytes } from 'crypto';
+import { BlockList, isIP } from 'net';
 import { PG_POOL } from '../db/db.module';
 
 export interface ServerRow {
@@ -192,6 +193,15 @@ export class ServersService {
    */
   async remove(id: string, soft = false, envId?: string | null) {
     await this.assertEnv(id, envId);
+    try {
+      return await this.removeInner(id, soft);
+    } finally {
+      // depois do commit: derruba o cache e os sockets do agent desse servidor
+      this.invalidateKeyCache(id);
+    }
+  }
+
+  private async removeInner(id: string, soft: boolean) {
     if (soft) {
       await this.pool.query(
         `UPDATE servers SET deleted_at=now() WHERE id=$1 AND deleted_at IS NULL`,
@@ -265,10 +275,65 @@ export class ServersService {
       `UPDATE api_keys SET active=false WHERE id=$1 AND server_id=$2`,
       [keyId, serverId],
     );
+    this.invalidateKeyCache(serverId); // revogação vale na hora (cache + sockets abertos)
     return { ok: true };
   }
 
+  /**
+   * Cache de chaves já validadas (sha256 da chave -> resultado), por 60s.
+   * Antes, TODA requisição de ingest/heartbeat/métricas fazia bcrypt.compare
+   * (CPU pesada no threadpool do libuv) + 2 UPDATEs no banco. Com dezenas de
+   * agents mandando lote a cada 2s isso saturava threadpool e pool do Postgres,
+   * e o handshake do canal de controle passava a falhar por timeout.
+   */
+  private keyCache = new Map<string, { at: number; value: ServerRow & { keyId: string; scopes: string[] }; ipAllowlist: string[] }>();
+  private lastTouch = new Map<string, number>();
+  private static readonly KEY_CACHE_MS = 60_000;
+  private static readonly TOUCH_EVERY_MS = 30_000;
+
+  private cacheKey(raw: string): string {
+    return createHash('sha256').update(raw).digest('hex');
+  }
+
+  /** Atualiza last_used/last_seen no máximo 1x a cada 30s por chave (e nunca derruba o processo). */
+  private touchKey(keyId: string, serverId: string) {
+    const now = Date.now();
+    if (now - (this.lastTouch.get(keyId) ?? 0) < ServersService.TOUCH_EVERY_MS) return;
+    this.lastTouch.set(keyId, now);
+    this.pool.query(`UPDATE api_keys SET last_used_at=now() WHERE id=$1`, [keyId]).catch(() => undefined);
+    this.pool.query(`UPDATE servers SET last_seen_at=now() WHERE id=$1`, [serverId]).catch(() => undefined);
+  }
+
+  /** serverId dono de uma chave pelo prefixo (diagnóstico de auth do canal de controle). */
+  async serverIdForKeyPrefix(prefix: string): Promise<string | null> {
+    if (!prefix) return null;
+    const r = await this.pool.query(`SELECT server_id FROM api_keys WHERE prefix=$1 LIMIT 1`, [prefix]);
+    return r.rows[0]?.server_id ?? null;
+  }
+
+  private cacheGen = 0;
+  private keyListeners: ((serverId: string) => void)[] = [];
+
+  /** O canal de controle se inscreve aqui para derrubar sockets de chave revogada/servidor removido. */
+  onKeysRevoked(cb: (serverId: string) => void) {
+    this.keyListeners.push(cb);
+  }
+
+  invalidateKeyCache(serverId?: string) {
+    this.cacheGen++;
+    this.keyCache.clear();
+    if (serverId) for (const cb of this.keyListeners) { try { cb(serverId); } catch { /* ignore */ } }
+  }
+
   async validateApiKey(raw: string, ip?: string): Promise<ServerRow & { keyId: string; scopes: string[] }> {
+    const ck = raw ? this.cacheKey(raw) : '';
+    const hit = ck ? this.keyCache.get(ck) : undefined;
+    if (hit && Date.now() - hit.at < ServersService.KEY_CACHE_MS) {
+      assertIpAllowed(ip, hit.ipAllowlist);
+      this.touchKey(hit.value.keyId, hit.value.id);
+      return hit.value;
+    }
+    const gen = this.cacheGen;
     const parts = raw?.split('.');
     if (!parts || parts.length !== 2) throw new UnauthorizedException('Invalid API key');
     const [prefix, secret] = parts;
@@ -278,7 +343,7 @@ export class ServersService {
               k.scopes, k.ip_allowlist::text[] AS "ipAllowlist", s.*
        FROM api_keys k
        JOIN servers s ON s.id = k.server_id
-       WHERE k.prefix = $1`,
+       WHERE k.prefix = $1 AND s.deleted_at IS NULL`,
       [prefix],
     );
     if (!r.rowCount) throw new UnauthorizedException('Invalid API key');
@@ -288,20 +353,11 @@ export class ServersService {
     const ok = await bcrypt.compare(secret, row.secretHash);
     if (!ok) throw new UnauthorizedException('Invalid API key');
 
-    if (row.ipAllowlist?.length && ip && !row.ipAllowlist.includes(ip)) {
-      throw new UnauthorizedException(`IP ${ip} not in allowlist`);
-    }
+    assertIpAllowed(ip, row.ipAllowlist ?? []);
 
-    void this.pool.query(
-      `UPDATE api_keys SET last_used_at=now() WHERE id=$1`,
-      [row.keyId],
-    );
-    void this.pool.query(
-      `UPDATE servers SET last_seen_at=now() WHERE id=$1`,
-      [row.id],
-    );
+    this.touchKey(row.keyId, row.id);
 
-    return {
+    const value = {
       keyId: row.keyId,
       scopes: row.scopes ?? [],
       id: row.id,
@@ -324,6 +380,11 @@ export class ServersService {
       lastSeenAt: row.last_seen_at,
       createdAt: row.created_at,
     };
+    if (this.keyCache.size > 5000) this.keyCache.clear();
+    // Só cacheia se nenhuma revogação/remoção aconteceu enquanto validávamos
+    // (senão uma chave recém-revogada voltaria ao cache por até 60s).
+    if (gen === this.cacheGen) this.keyCache.set(ck, { at: Date.now(), value, ipAllowlist: row.ipAllowlist ?? [] });
+    return value;
   }
 
   /** Heartbeat do agent (atualiza metadados de host descobertos pelo agent). */
@@ -343,5 +404,31 @@ export class ServersService {
        WHERE id=$1`,
       [serverId, info.hostname, info.os, info.arch, info.agentVersion],
     );
+  }
+}
+
+/**
+ * Confere o IP contra a allowlist da chave. O Postgres devolve inet como texto
+ * com máscara ("10.0.0.5/32") e conexões diretas chegam como "::ffff:10.0.0.5";
+ * a comparação antiga por string nunca casava e recusava o agent com o IP certo.
+ * Aceita IPs e redes CIDR (v4/v6). Com allowlist definida e IP desconhecido, recusa.
+ */
+function assertIpAllowed(ip: string | undefined, allowlist: string[]) {
+  if (!allowlist?.length) return;
+  const norm = (ip ?? '').trim().replace(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/i, '$1');
+  const fam = isIP(norm);
+  if (!fam) throw new UnauthorizedException('IP de origem desconhecido e a chave exige allowlist');
+  const bl = new BlockList();
+  for (const entry of allowlist) {
+    const [addrRaw, maskRaw] = String(entry).trim().split('/');
+    const addr = addrRaw.replace(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/i, '$1');
+    const f = isIP(addr);
+    if (!f) continue;
+    const type = f === 6 ? 'ipv6' : 'ipv4';
+    const prefix = maskRaw !== undefined ? parseInt(maskRaw, 10) : (f === 6 ? 128 : 32);
+    try { bl.addSubnet(addr, prefix, type); } catch { /* entrada inválida: ignora */ }
+  }
+  if (!bl.check(norm, fam === 6 ? 'ipv6' : 'ipv4')) {
+    throw new UnauthorizedException(`IP ${norm} not in allowlist`);
   }
 }

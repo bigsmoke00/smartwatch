@@ -19,7 +19,9 @@ export class ApiKeyGuard implements CanActivate {
         ? req.headers['authorization'].slice(7)
         : undefined);
     if (!raw) throw new UnauthorizedException('Missing API key');
-    const ip = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.ip;
+    // req.ip já respeita 'trust proxy' (último hop adicionado pelo NOSSO proxy).
+    // O 1º valor do X-Forwarded-For é controlado pelo cliente e não serve para allowlist.
+    const ip = req.ip;
     const server = await this.servers.validateApiKey(String(raw), ip);
     req.server = server;
     return true;

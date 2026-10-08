@@ -31,6 +31,7 @@ type Tab = 'containers' | 'images' | 'volumes' | 'deploy';
 export default function DockerPage() {
   const [serverId, setServerId] = useState<string>('');
   const [online, setOnline] = useState<boolean>(false);
+  const [link, setLink] = useState<AgentLink | null>(null);
   const [tab, setTab] = useState<Tab>('containers');
   // Carregado uma vez aqui no topo e repassado pras abas — controla se os
   // botões de ação (start/stop/restart/remove/pull/deploy) aparecem. Ações
@@ -48,8 +49,9 @@ export default function DockerPage() {
 
   useEffect(() => {
     if (!serverId) return;
-    const ping = () => apiFetch<{ online: boolean }>(`/docker/${serverId}/status`)
-      .then((r) => setOnline(!!r?.online))
+    setLink(null);
+    const ping = () => apiFetch<AgentLink>(`/docker/${serverId}/status`)
+      .then((r) => { setOnline(!!r?.online); setLink(r ?? null); })
       .catch(() => setOnline(false));
     ping();
     const t = setInterval(ping, 5_000);
@@ -102,10 +104,7 @@ export default function DockerPage() {
         {!serverId ? (
           <Card className="p-6 text-sm text-muted">Selecione um servidor.</Card>
         ) : !online ? (
-          <Card className="p-6 text-sm text-muted">
-            Agent offline neste servidor. Garanta que o container <code>logwatch-agent</code> está
-            rodando e conseguindo conectar no backend.
-          </Card>
+          <AgentOfflineCard link={link} />
         ) : tab === 'containers' ? (
           <ContainersTab serverId={serverId} canControl={canControl} canDestroy={canDestroy} />
         ) : tab === 'images' ? (
@@ -553,4 +552,51 @@ function fmtBytes(b: number) {
   const u = ['B', 'KB', 'MB', 'GB', 'TB']; let v = b; let i = 0;
   while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
   return `${v.toFixed(1)} ${u[i]}`;
+}
+
+interface AgentLink {
+  online: boolean;
+  connections?: number;
+  connectedAt?: string | null;
+  disconnectedAt?: string | null;
+  disconnectReason?: string | null;
+  authError?: string | null;
+  authErrorAt?: string | null;
+}
+
+const REASON_HELP: Record<string, string> = {
+  'ping timeout': 'o agent parou de responder ao ping: rede instável, servidor travado ou proxy derrubando WebSocket ocioso',
+  'transport close': 'a conexão TCP foi fechada (reinício do agent/backend, proxy ou rede)',
+  'transport error': 'erro no transporte, geralmente uma mensagem maior que o limite',
+  'server namespace disconnect': 'o backend encerrou a conexão',
+  'client namespace disconnect': 'o próprio agent encerrou a conexão',
+};
+
+function AgentOfflineCard({ link }: { link: AgentLink | null }) {
+  const when = (iso?: string | null) => (iso ? new Date(iso).toLocaleString() : null);
+  const reason = link?.disconnectReason ?? null;
+  return (
+    <Card className="p-6 text-sm text-muted space-y-2">
+      <div className="text-text font-medium">O canal de controle com o agent deste servidor está fechado.</div>
+      {link?.authError ? (
+        <div className="text-danger">
+          O backend recusou a conexão do agent: {link.authError}
+          {link.authErrorAt && <span className="text-mutedFaint"> ({when(link.authErrorAt)})</span>}.
+          {' '}Confira a API key do agent (Servidores → chaves) e a allowlist de IP.
+        </div>
+      ) : link?.disconnectedAt ? (
+        <div>
+          Última queda: <span className="text-text">{when(link.disconnectedAt)}</span>
+          {reason && <> · motivo <code>{reason}</code>{REASON_HELP[reason] && <span className="text-mutedFaint">: {REASON_HELP[reason]}</span>}</>}.
+          {' '}O agent tenta reconectar sozinho a partir da versão 0.7.4. Se continuar offline, reinicie o container <code>logwatch-agent</code>.
+        </div>
+      ) : (
+        <div>
+          O agent ainda não conectou desde o último reinício do backend. Logs e métricas podem continuar chegando,
+          porque usam outro canal (HTTP). Confira se o container <code>logwatch-agent</code> está rodando e se o proxy
+          libera WebSocket em <code>/socket.io/</code>.
+        </div>
+      )}
+    </Card>
+  );
 }

@@ -159,7 +159,7 @@ export class ScriptsService {
     const exec = r.rows[0];
     if (!isProd) {
       // Dispara já que não é prod
-      void this.runExecution(exec.id);
+      this.runExecution(exec.id).catch((err) => this.logger?.error?.(`script exec ${exec.id}: ${err?.message}`));
     }
     return { id: exec.id, status: exec.status, requiresApproval: isProd };
   }
@@ -171,7 +171,7 @@ export class ScriptsService {
       [execId, approverId],
     );
     if (!r.rowCount) throw new NotFoundException('execution not found or not pending');
-    void this.runExecution(execId);
+    this.runExecution(execId).catch((err) => this.logger?.error?.(`script exec ${execId}: ${err?.message}`));
     return { ok: true };
   }
 

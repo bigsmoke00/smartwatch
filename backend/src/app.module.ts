@@ -12,6 +12,7 @@ import { AuditModule } from './audit/audit.module';
 import { UsersModule } from './users/users.module';
 import { RolesModule } from './roles/roles.module';
 import { EnvironmentsModule } from './environments/environments.module';
+import { UsageModule } from './usage/usage.module';
 import { ServersModule } from './servers/servers.module';
 import { LogsModule } from './logs/logs.module';
 import { MetricsModule } from './metrics/metrics.module';
@@ -107,6 +108,7 @@ import { BootstrapService } from './bootstrap.service';
     DeployModule,
     MonitorModule,
     CertModule,
+    UsageModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: ThrottlerGuard },

@@ -15,12 +15,18 @@ class DeployAppDto {
   @IsString() name!: string;
   @IsString() sistema!: string;
   @IsString() componente!: string;
-  @IsOptional() @IsIn(['production', 'staging', 'development', 'sandbox']) environment?: string;
+  @IsOptional() @IsIn(['production', 'staging', 'development', 'sandbox', 'lab']) environment?: string;
   @IsString() serverId!: string;
   @IsString() workingDir!: string;
   @IsOptional() @IsIn(['compose_env', 'compose_image', 'script']) strategy?: string;
   @IsOptional() @IsObject() config?: Record<string, any>;
   @IsOptional() @IsString() imageRepo?: string;
+  // componente_id (UUID) do catálogo do SmartOne — é por ele que o webhook acha o alvo
+  @IsOptional() @IsString() smartoneComponentId?: string;
+  // script padrão dentro do diretório (ex.: unity.sh); o SmartOne também manda no payload
+  @IsOptional() @IsString() script?: string;
+  // env_variables_required=true: 'block' recusa; 'script' deixa o script aplicar (GMUD_ENV_DESCRIPTION)
+  @IsOptional() @IsIn(['block', 'script']) envMode?: string;
 }
 
 class TriggerDto {

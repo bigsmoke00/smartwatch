@@ -1,3 +1,4 @@
+import { RequirePermission } from '../auth/permissions.decorator';
 import {
   Body,
   Controller,
@@ -34,6 +35,7 @@ export class MetricsController {
   }
 
   @ApiBearerAuth()
+  @RequirePermission('metrics:read')
   @Get('metrics/host/:serverId/series')
   series(
     @Req() req: Request,
@@ -49,12 +51,14 @@ export class MetricsController {
   }
 
   @ApiBearerAuth()
+  @RequirePermission('metrics:read')
   @Get('metrics/host/:serverId/last')
   last(@Req() req: Request) {
     return this.metrics.last((req.params as any).serverId);
   }
 
   @ApiBearerAuth()
+  @RequirePermission('metrics:read')
   @Get('metrics/fleet')
   fleet() {
     return this.metrics.fleetSummary();

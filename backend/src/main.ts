@@ -5,7 +5,34 @@ import { Logger as PinoLogger } from 'nestjs-pino';
 import helmet from 'helmet';
 import compression from 'compression';
 import { json, urlencoded } from 'express';
+import { IoAdapter } from '@nestjs/platform-socket.io';
+import type { ServerOptions } from 'socket.io';
 import { AppModule } from './app.module';
+
+/**
+ * Opções do socket.io para TODOS os gateways (canal de controle dos agents,
+ * terminal, capturas, scan de logs).
+ *  - maxHttpBufferSize (16 MB): o padrão do socket.io é 1 MB, e qualquer mensagem maior
+ *    DERRUBA o socket. O agent responde fs.readFile (até 5 MB), journalctl,
+ *    inspect e lotes de scan acima disso, e cada resposta grande desconectava o agent.
+ *  - pingInterval/pingTimeout: detecta conexão meio-aberta (NAT/LB) em < 1 min.
+ */
+class AppIoAdapter extends IoAdapter {
+  createIOServer(port: number, options?: ServerOptions): any {
+    return super.createIOServer(port, {
+      ...options,
+      maxHttpBufferSize: parseInt(process.env.WS_MAX_MESSAGE_BYTES ?? String(16 * 1024 * 1024), 10),
+      pingInterval: 20_000,
+      pingTimeout: 30_000,
+    } as ServerOptions);
+  }
+}
+
+// Rede de segurança: uma promise rejeitada sem .catch derrubava o processo inteiro
+// (Node >= 15), levando junto o canal de TODOS os agents.
+process.on('unhandledRejection', (reason: any) => {
+  new Logger('Process').error(`unhandledRejection: ${reason?.stack ?? reason}`);
+});
 
 async function bootstrap() {
   // bodyParser:false pra registrar o parser JSON com limite próprio. O default
@@ -15,6 +42,7 @@ async function bootstrap() {
   // entity too large" e o agent dropava TODOS os logs ("dropped N lines").
   const app = await NestFactory.create(AppModule, { bufferLogs: true, bodyParser: false });
   app.useLogger(app.get(PinoLogger));
+  app.useWebSocketAdapter(new AppIoAdapter(app));
 
   // Atrás do reverse-proxy (nginx/haproxy): confia no primeiro hop pra que
   // `req.ip` reflita o X-Forwarded-For real do cliente. Sem isto, TODAS as

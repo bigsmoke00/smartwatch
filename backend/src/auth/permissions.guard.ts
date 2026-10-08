@@ -48,8 +48,15 @@ export class PermissionsGuard implements CanActivate {
 
     // Autorização escopada: permissões globais (environment_id NULL) + as do
     // ambiente ativo. Um usuário admin só no Lab não passa em rotas de Prod.
-    const perms = await this.roles.permissionsOf(user.sub, req.environmentId ?? null);
-    const ok = required.some((k) => perms.has(k));
+    const needsGlobal = required.some(isGlobalOnlyPermission);
+    const [perms, globalPerms] = await Promise.all([
+      this.roles.permissionsOf(user.sub, req.environmentId ?? null),
+      needsGlobal ? this.roles.permissionsOf(user.sub, null) : Promise.resolve(null),
+    ]);
+    // Permissões de administração da plataforma só valem se concedidas no escopo GLOBAL.
+    // Sem isso, um admin só do Lab (users:write/roles:write no Lab) se concedia papel global
+    // e virava Super Admin de Prod.
+    const ok = required.some((k) => (isGlobalOnlyPermission(k) ? globalPerms!.has(k) : perms.has(k)));
     if (!ok) {
       throw new ForbiddenException(
         `Missing permission: ${required.join(' OR ')}`,
@@ -57,4 +64,14 @@ export class PermissionsGuard implements CanActivate {
     }
     return true;
   }
+}
+
+/**
+ * Permissões que só valem quando concedidas no escopo GLOBAL (environment_id NULL).
+ * Administração de identidades, papéis, ambientes, vault, auditoria e métricas de uso
+ * é da plataforma inteira, não de um ambiente.
+ */
+const GLOBAL_ONLY_PREFIXES = ['users:', 'roles:', 'environments:', 'secrets:', 'audit:', 'usage:', 'credrot:'];
+export function isGlobalOnlyPermission(key: string): boolean {
+  return GLOBAL_ONLY_PREFIXES.some((p) => key.startsWith(p));
 }

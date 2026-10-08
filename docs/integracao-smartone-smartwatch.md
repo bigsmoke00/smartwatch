@@ -1,5 +1,7 @@
 # Integração SmartOne → SmartGard (módulo CD)
 
+> **Obsoleto.** Este era o nosso rascunho de contrato (payload plano com `servidor`/`diretorio`). O contrato oficial é o documento do SmartOne v1.0 (array `componentes`, callback por componente, eventos de preparação e de teste). Nossa resposta está em [`resposta-smartone-integracao.md`](./resposta-smartone-integracao.md). O formato plano abaixo continua aceito só para smoke test manual.
+
 Lado **SmartGard** da integração descrita em `integracao_smartwatch.md`. É o que você passa pro dev do SmartOne + o checklist de configuração da nossa infra.
 
 ## Visão geral do fluxo

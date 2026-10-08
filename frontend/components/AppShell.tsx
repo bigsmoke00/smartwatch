@@ -35,11 +35,13 @@ import {
   ChevronRight,
   Search,
   Layers,
+  BarChart3,
   User as UserIcon,
 } from 'lucide-react';
 import { Auth, apiFetch } from '@/lib/api';
 import { loadMyPermissions, hasPerm } from '@/lib/perms';
 import { EnvironmentSwitcher } from '@/components/EnvironmentSwitcher';
+import { startUsageTracking, trackView } from '@/lib/usage';
 import { cn } from '@/lib/utils';
 
 interface NavItem {
@@ -79,6 +81,7 @@ const NAV_GROUPS: { title: string; items: NavItem[] }[] = [
       { href: '/deploy', label: 'Deploys (CD)', icon: Rocket, perms: ['deploy:read'] },
       { href: '/exports', label: 'Log exports', icon: Download, perms: ['logs:download'] },
       { href: '/audit', label: 'Audit log', icon: History, perms: ['audit:read'] },
+      { href: '/usage', label: 'Uso da plataforma', icon: BarChart3, perms: ['usage:read'] },
     ],
   },
   {
@@ -189,6 +192,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       })
       .catch(() => {});
   }, [router]);
+
+  // Métricas de uso: tempo ativo (batimento/min) e telas visitadas.
+  useEffect(() => {
+    if (!user) return;
+    startUsageTracking();
+    trackView(pathname);
+  }, [user, pathname]);
 
   useEffect(() => {
     if (mfaSetupRequired && pathname !== '/settings') {

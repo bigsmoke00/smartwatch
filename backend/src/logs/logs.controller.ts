@@ -1,3 +1,4 @@
+import { RequirePermission } from '../auth/permissions.decorator';
 import {
   Body,
   Controller,
@@ -96,6 +97,7 @@ export class LogsController {
   }
 
   @ApiBearerAuth()
+  @RequirePermission('logs:read')
   @Get('logs')
   query(
     @Query('serverId') serverId?: string,
@@ -140,6 +142,7 @@ export class LogsController {
    * clamps de pageSize/interval nos outros endpoints desse controller).
    */
   @ApiBearerAuth()
+  @RequirePermission('logs:read')
   @Get('logs/calls')
   listRecentCalls(
     @Query('serverId') serverId: string,
@@ -159,6 +162,7 @@ export class LogsController {
 
   /** Containers já vistos nos logs desse servidor — popula o seletor de container específico. */
   @ApiBearerAuth()
+  @RequirePermission('logs:read')
   @Get('logs/containers')
   listContainers(@Query('serverId') serverId: string) {
     if (!serverId) return [];
@@ -167,6 +171,7 @@ export class LogsController {
 
   /** Arquivos de /var/log já vistos nos logs "host" desse servidor — popula o seletor de arquivo. */
   @ApiBearerAuth()
+  @RequirePermission('logs:read')
   @Get('logs/files')
   listFiles(@Query('serverId') serverId: string) {
     if (!serverId) return [];
@@ -174,6 +179,7 @@ export class LogsController {
   }
 
   @ApiBearerAuth()
+  @RequirePermission('logs:read')
   @Get('logs/histogram')
   histogram(
     @Query('serverId') serverId?: string,
@@ -187,6 +193,7 @@ export class LogsController {
 
   /** Export CSV (stream). */
   @ApiBearerAuth()
+  @RequirePermission('logs:export', 'logs:download')
   @Get('logs/export.csv')
   async exportCsv(
     @Res() res: Response,

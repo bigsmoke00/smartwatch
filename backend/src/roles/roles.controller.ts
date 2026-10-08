@@ -14,6 +14,7 @@ import { RolesService } from './roles.service';
 import { RequirePermission } from '../auth/permissions.decorator';
 import { CurrentUser, JwtUserPayload } from '../auth/current-user.decorator';
 import { ActiveEnvironment } from '../auth/active-environment.decorator';
+import { isGlobalOnlyPermission } from '../auth/permissions.guard';
 import { Audit } from '../audit/audit.decorator';
 
 class CreateRoleDto {
@@ -106,7 +107,12 @@ export class RolesController {
     @CurrentUser() user: JwtUserPayload,
     @ActiveEnvironment() envId: string | null,
   ) {
-    const set = await this.svc.permissionsOf(user.sub, envId);
-    return { permissions: Array.from(set), environmentId: envId };
+    const [set, global] = await Promise.all([
+      this.svc.permissionsOf(user.sub, envId),
+      this.svc.permissionsOf(user.sub, null),
+    ]);
+    // Permissões de administração só aparecem se concedidas globalmente (o guard exige isso).
+    const permissions = Array.from(set).filter((k) => !isGlobalOnlyPermission(k) || global.has(k));
+    return { permissions, environmentId: envId };
   }
 }

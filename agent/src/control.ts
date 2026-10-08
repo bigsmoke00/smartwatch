@@ -28,6 +28,32 @@ import { runLogScan, stopLogScan } from './log-scan.js';
 let socket: Socket | null = null;
 const activeTermStreams = new Map<string, NodeJS.ReadWriteStream>();
 
+// Respostas acima disso viram erro em vez de derrubar o socket (o backend aceita até 16 MB
+// por padrão, WS_MAX_MESSAGE_BYTES). Ajustável por LOGWATCH_MAX_REPLY_BYTES.
+const MAX_REPLY_BYTES = parseInt(process.env.LOGWATCH_MAX_REPLY_BYTES ?? String(12 * 1024 * 1024), 10);
+
+let reconnectTimer: NodeJS.Timeout | null = null;
+let manualAttempts = 0;
+let stableTimer: NodeJS.Timeout | null = null;
+
+/**
+ * Reconexão manual. O socket.io-client NÃO reconecta sozinho quando:
+ *  - o servidor derruba a conexão (motivo "io server disconnect"), ou
+ *  - o handshake é recusado (connect_error com socket.active=false).
+ * Antes, nesses casos o canal de controle morria e só voltava reiniciando o agent,
+ * mesmo com logs/métricas (HTTP) funcionando, e a UI mostrava "agent offline".
+ */
+function scheduleReconnect(why: string) {
+  if (!socket || socket.connected || reconnectTimer) return;
+  const delay = Math.min(60_000, 2_000 * 2 ** Math.min(manualAttempts, 5)) + Math.floor(Math.random() * 1_000);
+  manualAttempts++;
+  console.warn(`[agent] control channel: reconectando em ${Math.round(delay / 1000)}s (${why})`);
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
+    if (socket && !socket.connected) socket.connect();
+  }, delay);
+}
+
 export function startControlChannel(docker: Docker) {
   // baseUrl ex: https://logwatch.example.com/api → ws base sem /api
   const wsBase = config.ingestUrl.replace(/\/api\/.*$/, '').replace(/\/api$/, '');
@@ -38,15 +64,47 @@ export function startControlChannel(docker: Docker) {
     reconnectionDelay: 1000,
     reconnectionDelayMax: 30_000,
     randomizationFactor: 0.5,
+    timeout: 20_000,
   });
 
-  socket.on('connect', () => console.log('[agent] control channel connected'));
-  socket.on('disconnect', () => console.log('[agent] control channel disconnected'));
-  socket.on('connect_error', (e) => console.warn(`[agent] control connect error: ${e.message}`));
+  socket.on('connect', () => {
+    console.log('[agent] control channel connected');
+    // Só zera o backoff se a conexão sobreviver 30s. Com chave inválida o backend aceita o
+    // transporte e derruba logo depois; zerar no 'connect' fazia o agent bater a cada 2s pra sempre.
+    if (stableTimer) clearTimeout(stableTimer);
+    stableTimer = setTimeout(() => { if (socket?.connected) manualAttempts = 0; }, 30_000);
+  });
+  socket.on('disconnect', (reason) => {
+    if (stableTimer) { clearTimeout(stableTimer); stableTimer = null; }
+    console.warn(`[agent] control channel disconnected: ${reason}`);
+    // "io server disconnect": o servidor derrubou -> o client não tenta de novo sozinho.
+    if (reason === 'io server disconnect') scheduleReconnect(reason);
+  });
+  socket.on('connect_error', (e) => {
+    console.warn(`[agent] control connect error: ${e.message}`);
+    if (!socket?.active) scheduleReconnect(`connect_error: ${e.message}`);
+  });
+
+  // Watchdog: se por qualquer motivo o canal ficou parado (nem conectado nem tentando), reabre.
+  setInterval(() => {
+    if (socket && !socket.connected && !socket.active) scheduleReconnect('watchdog');
+  }, 60_000).unref();
 
   socket.on('docker:invoke', async (msg: { reqId: string; op: string; args: any }) => {
-    const reply = (ok: boolean, result?: any, error?: string) =>
+    const reply = (ok: boolean, result?: any, error?: string) => {
+      if (ok) {
+        let size = 0;
+        try { size = Buffer.byteLength(JSON.stringify(result ?? null)); } catch { /* ignore */ }
+        if (size > MAX_REPLY_BYTES) {
+          socket!.emit('docker:reply', {
+            reqId: msg.reqId, ok: false,
+            error: `resposta de ${msg.op} muito grande (${Math.round(size / 1048576)} MB > ${Math.round(MAX_REPLY_BYTES / 1048576)} MB)`,
+          });
+          return;
+        }
+      }
       socket!.emit('docker:reply', { reqId: msg.reqId, ok, result, error });
+    };
 
     try {
       const result = await dispatch(docker, msg.op, msg.args, msg.reqId);

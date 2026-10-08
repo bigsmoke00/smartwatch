@@ -150,6 +150,7 @@ export class DockerManagerController {
   @RequirePermission('containers:read')
   @Get('status')
   status(@Param('serverId') serverId: string) {
-    return { online: this.ctrl.isOnline(serverId) };
+    // online + diagnóstico (quando conectou/caiu, motivo, erro de autenticação)
+    return this.ctrl.status(serverId);
   }
 }
