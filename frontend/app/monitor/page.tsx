@@ -20,8 +20,9 @@ import {
   HeartPulse, Plus, Upload, Play, Trash2, RefreshCw, X, ArrowLeft, CheckCircle2,
   XCircle, LayoutGrid, List as ListIcon, Copy,
 } from 'lucide-react';
+import { apiBaseAbsolute } from '@/lib/endpoints';
 
-const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api';
+
 
 interface EndpointSummary {
   id: string; name: string; groupName: string | null; type: string; target: string;
@@ -237,7 +238,7 @@ export default function MonitorPage() {
             <div className="text-2xs text-mutedFaint mb-2">Públicos, mas só funcionam com <span className="font-mono">MONITOR_BADGE_TOKEN</span> definido no backend. Troque <span className="font-mono">SEU_TOKEN</span>.</div>
             <div className="space-y-1.5">
               {badges.map((k) => {
-                const url = `${API}/monitor/endpoints/${detail.id}/badge/${k}.svg?token=SEU_TOKEN`;
+                const url = `${apiBaseAbsolute()}/monitor/endpoints/${detail.id}/badge/${k}.svg?token=SEU_TOKEN`;
                 return (
                   <div key={k} className="flex items-center gap-2">
                     <span className="text-2xs text-muted w-24 shrink-0">{k}</span>

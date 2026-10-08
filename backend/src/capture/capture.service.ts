@@ -5,6 +5,7 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  OnApplicationBootstrap,
 } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { createWriteStream, promises as fsp } from 'fs';
@@ -51,14 +52,70 @@ export interface CaptureSessionRow {
  * plataforma.
  */
 @Injectable()
-export class CaptureService {
+export class CaptureService implements OnApplicationBootstrap {
   private readonly logger = new Logger('CaptureService');
+  /**
+   * Sessões com captura realmente em andamento NESTE processo. O estado da captura
+   * (promise do agent, arquivo aberto) vive só em memória: se o backend reinicia,
+   * uma sessão 'running' do banco que não está aqui é órfã e nunca vai terminar.
+   */
+  private readonly live = new Set<string>();
 
   constructor(
     @Inject(PG_POOL) private readonly pool: Pool,
     private readonly control: ControlGateway,
     private readonly gateway: CaptureGateway,
   ) {}
+
+  /** No boot, nada está em andamento: tudo que ficou running/pending é órfão. */
+  async onApplicationBootstrap() {
+    try {
+      const r = await this.pool.query(
+        `UPDATE capture_sessions
+            SET status = CASE WHEN status = 'running' THEN 'failed' ELSE 'expired' END,
+                error_text = CASE WHEN status = 'running'
+                  THEN 'captura interrompida: o SmartGard reiniciou durante a captura'
+                  ELSE 'não iniciou (pedido antigo sem captura em andamento)' END,
+                finished_at = coalesce(finished_at, now())
+          WHERE status IN ('running','pending','approved')`,
+      );
+      if (r.rowCount) this.logger.warn(`${r.rowCount} sessão(ões) de captura órfã(s) encerrada(s) no boot`);
+    } catch (e: any) {
+      this.logger.error(`limpeza de capturas órfãs falhou: ${e?.message}`);
+    }
+  }
+
+  /**
+   * Vigia: encerra sessões que passaram do prazo sem resposta do agent (duração + 3 min)
+   * e pedidos que nunca iniciaram. Não toca nas que estão vivas e dentro do prazo.
+   */
+  @Cron(CronExpression.EVERY_MINUTE)
+  async reapStale() {
+    try {
+      const r = await this.pool.query(
+        `SELECT id FROM capture_sessions
+          WHERE status = 'running'
+            AND coalesce(started_at, created_at) + (duration_seconds + 180) * interval '1 second' < now()`,
+      );
+      for (const row of r.rows) {
+        this.live.delete(row.id);
+        await this.pool.query(
+          `UPDATE capture_sessions SET status='failed', finished_at=now(),
+                  error_text='sem resposta do agent após o fim previsto da captura (conexão com o agent caiu?)'
+            WHERE id=$1 AND status='running'`,
+          [row.id],
+        );
+        this.gateway.forwardDone(row.id, { ok: false, error: 'sem resposta do agent após o fim previsto da captura' });
+      }
+      await this.pool.query(
+        `UPDATE capture_sessions SET status='expired', finished_at=now(),
+                error_text=coalesce(error_text, 'não iniciou')
+          WHERE status IN ('pending','approved') AND created_at < now() - interval '10 minutes'`,
+      );
+    } catch (e: any) {
+      this.logger.warn(`vigia de capturas falhou: ${e?.message}`);
+    }
+  }
 
   async listServersBasic() {
     const r = await this.pool.query(`SELECT id, name FROM servers ORDER BY name`);
@@ -83,6 +140,19 @@ export class CaptureService {
        LIMIT 200`,
       params,
     );
+    // Estado real do .pcap (o que a tela mostra): salvo, expirado pela retenção,
+    // arquivo sumido do disco (ex.: volume de capturas recriado) ou nunca salvo.
+    await Promise.all(r.rows.map(async (row: any) => {
+      row.live = this.live.has(row.id);
+      if (row.kind === 'ping' || row.status !== 'completed') return;
+      if (row.pcap_stored) {
+        const ok = await fsp.stat(this.pcapPath(row.id)).then((st) => st.isFile() && st.size > 0).catch(() => false);
+        row.pcap_state = ok ? 'stored' : 'missing';
+      } else {
+        const ageDays = row.finished_at ? (Date.now() - new Date(row.finished_at).getTime()) / 86_400_000 : 0;
+        row.pcap_state = ageDays >= PCAP_RETENTION_DAYS ? 'expired' : 'not_saved';
+      }
+    }));
     return r.rows;
   }
 
@@ -96,6 +166,11 @@ export class CaptureService {
     }
     if (opts.kind === 'tcpdump' && !opts.filterExpr) {
       throw new BadRequestException('filterExpr é obrigatório para captura tcpdump genérica (ex.: "host 1.2.3.4 and port 443")');
+    }
+    // Checa o agent ANTES de gravar: antes a sessão era criada como 'pending', o pedido
+    // era recusado por agent offline e a linha ficava pendurada para sempre.
+    if (!this.control.isOnline(opts.serverId)) {
+      throw new ForbiddenException('o agent deste servidor está offline: a captura não foi iniciada');
     }
     const r = await this.pool.query(
       `INSERT INTO capture_sessions
@@ -113,10 +188,15 @@ export class CaptureService {
     // logo após receber o id; o buffer de catch-up do gateway cobre a corrida
     // do WS vs. o agent já começar a mandar bytes.
     const s = await this.getOrThrow(id);
-    if (!this.control.isOnline(s.server_id)) {
-      throw new ForbiddenException('agent deste servidor está offline');
+    try {
+      await this.startSession(s, opts.userId);
+    } catch (e: any) {
+      await this.pool.query(
+        `UPDATE capture_sessions SET status='failed', error_text=$2, finished_at=now() WHERE id=$1`,
+        [id, `não foi possível iniciar: ${e?.message ?? e}`],
+      );
+      throw e;
     }
-    await this.startSession(s, opts.userId);
     return { id, autoStarted: true };
   }
 
@@ -159,6 +239,15 @@ export class CaptureService {
   async stop(id: string) {
     const s = await this.getOrThrow(id);
     if (s.status !== 'running') throw new BadRequestException('captura não está em andamento');
+    if (!this.live.has(id)) {
+      // Órfã (backend reiniciou): não há o que parar no agent; só encerra o registro.
+      await this.pool.query(
+        `UPDATE capture_sessions SET status='failed', error_text='encerrada manualmente (captura não estava mais em andamento)', finished_at=now() WHERE id=$1 AND status='running'`,
+        [id],
+      );
+      this.gateway.forwardDone(id, { ok: false, error: 'captura não estava mais em andamento' });
+      return { ok: true, orphan: true };
+    }
     try {
       await this.control.invoke(s.server_id, 'capture.stop', { sessionId: id }, { timeoutMs: 10_000 });
     } catch {
@@ -176,6 +265,15 @@ export class CaptureService {
     );
 
     const timeoutMs = (s.duration_seconds + 30) * 1000;
+    this.live.add(id);
+    const friendly = (e: any) => {
+      const m = String(e?.message ?? e);
+      if (/agent timeout after/.test(m)) {
+        return `o agent não confirmou o fim da captura em ${s.duration_seconds + 30}s (conexão com o agent caiu ou o servidor está sobrecarregado)`;
+      }
+      if (/agent offline/.test(m)) return 'o agent deste servidor está offline';
+      return m;
+    };
     const args = {
       sessionId: id, kind: s.kind, iface: s.iface, filterExpr: s.filter_expr ?? undefined,
       targetHost: s.target_host ?? undefined, durationSeconds: s.duration_seconds, maxPackets: s.max_packets,
@@ -185,6 +283,7 @@ export class CaptureService {
       // Texto curto, sem stream — resolve direto na resposta do invoke().
       this.control.invoke(s.server_id, 'capture.run', args, { timeoutMs })
         .then(async (result: any) => {
+          this.live.delete(id);
           await this.pool.query(
             `UPDATE capture_sessions SET status=$2, result_text=$3, error_text=$4, finished_at=now() WHERE id=$1 AND status='running'`,
             [id, result?.ok ? 'completed' : 'failed', result?.resultText ?? null, result?.error ?? null],
@@ -192,12 +291,13 @@ export class CaptureService {
           this.gateway.forwardDone(id, { ok: !!result?.ok, resultText: result?.resultText, error: result?.error });
         })
         .catch(async (e: any) => {
+          this.live.delete(id);
           this.logger.warn(`capture.run (ping) falhou (session ${id.slice(0, 8)}): ${e.message}`);
           await this.pool.query(
             `UPDATE capture_sessions SET status='failed', error_text=$2, finished_at=now() WHERE id=$1 AND status='running'`,
-            [id, e.message],
+            [id, friendly(e)],
           );
-          this.gateway.forwardDone(id, { ok: false, error: e.message });
+          this.gateway.forwardDone(id, { ok: false, error: friendly(e) });
         });
       return { ok: true, status: 'running' };
     }
@@ -208,15 +308,32 @@ export class CaptureService {
     const filePath = this.pcapPath(id);
     let fileStream: ReturnType<typeof createWriteStream> | null = null;
     let wroteBytes = 0;
+    let saveError: string | null = null;
     // IMPORTANTE: abre o arquivo ANTES de disparar a captura (await). Se isso
     // fosse assíncrono/paralelo, os primeiros chunks — inclusive o CABEÇALHO
-    // global do .pcap — chegavam antes do stream existir e se perdiam, salvando
-    // um arquivo corrompido (ou nada, em captura curta → "pcap indisponível").
+    // global do .pcap — chegavam antes do stream existir e se perdiam.
+    //
+    // Abre com fsp.open (o erro de permissão/disco cai AQUI, no try) e só então cria o
+    // WriteStream sobre o fd, COM listener de 'error'. Antes era createWriteStream(path)
+    // sem listener: o EACCES chegava assíncrono como 'error' não tratado e DERRUBAVA O
+    // BACKEND INTEIRO (502 para todos) — foi o que aconteceu com o backend rodando como
+    // usuário 'node' e a pasta ./capturas_sip pertencendo ao root.
     try {
       await fsp.mkdir(CAPTURE_STORAGE_DIR, { recursive: true });
-      fileStream = createWriteStream(filePath);
+      const fh = await fsp.open(filePath, 'w');
+      fileStream = createWriteStream(filePath, { fd: fh.fd, autoClose: true });
+      fileStream.on('error', (e: any) => {
+        // Ex.: disco cheio no meio da captura. A captura segue ao vivo; só para de salvar.
+        saveError = `não foi possível gravar o .pcap: ${e?.code ?? e?.message}`;
+        this.logger.error(`captura ${id.slice(0, 8)}: ${saveError}`);
+        try { fileStream?.destroy(); } catch { /* ignore */ }
+        fileStream = null;
+      });
     } catch (e: any) {
-      this.logger.warn(`não foi possível abrir arquivo de captura ${id.slice(0, 8)}: ${e?.message}`);
+      saveError = e?.code === 'EACCES'
+        ? `sem permissão para gravar em ${CAPTURE_STORAGE_DIR} (no host: chown -R 1000:1000 ./capturas_sip)`
+        : `não foi possível abrir o arquivo do .pcap: ${e?.code ?? e?.message}`;
+      this.logger.error(`captura ${id.slice(0, 8)}: ${saveError} — seguindo só ao vivo`);
       fileStream = null;
     }
 
@@ -229,25 +346,29 @@ export class CaptureService {
       }
     }, timeoutMs)
       .then(async (result: any) => {
+        this.live.delete(id);
         const status = result?.ok ? 'completed' : 'failed';
         // Fecha o arquivo e decide se mantém: só persiste captura ok e não-vazia.
-        const stored = await this.finalizePcap(fileStream, filePath, !!result?.ok && wroteBytes > 0);
+        const stored = !saveError && await this.finalizePcap(fileStream, filePath, !!result?.ok && wroteBytes > 0);
+        if (saveError) await this.finalizePcap(fileStream, filePath, false);
         await this.pool.query(
           `UPDATE capture_sessions SET status=$2, packet_count=$3, file_size_bytes=$4, error_text=$5, pcap_stored=$6, finished_at=now() WHERE id=$1 AND status='running'`,
-          [id, status, result?.packetCount ?? null, result?.fileSizeBytes ?? wroteBytes ?? null, result?.error ?? null, stored],
+          [id, status, result?.packetCount ?? null, result?.fileSizeBytes ?? wroteBytes ?? null, result?.error ?? saveError ?? null, stored],
         );
         this.gateway.forwardDone(id, {
           ok: !!result?.ok, packetCount: result?.packetCount, fileSizeBytes: result?.fileSizeBytes, error: result?.error,
         });
       })
       .catch(async (e: any) => {
+        this.live.delete(id);
         this.logger.warn(`capture.run falhou (session ${id.slice(0, 8)}): ${e.message}`);
-        await this.finalizePcap(fileStream, filePath, false);
+        // Mantém o que já foi gravado em disco se veio algo (captura parcial ainda é útil).
+        const stored = !saveError && await this.finalizePcap(fileStream, filePath, wroteBytes > 0);
         await this.pool.query(
-          `UPDATE capture_sessions SET status='failed', error_text=$2, pcap_stored=false, finished_at=now() WHERE id=$1 AND status='running'`,
-          [id, e.message],
+          `UPDATE capture_sessions SET status='failed', error_text=$2, pcap_stored=$3, file_size_bytes=$4, finished_at=now() WHERE id=$1 AND status='running'`,
+          [id, friendly(e) + (stored ? ' — o que foi capturado até a falha foi salvo' : ''), stored, wroteBytes || null],
         );
-        this.gateway.forwardDone(id, { ok: false, error: e.message });
+        this.gateway.forwardDone(id, { ok: false, error: friendly(e) });
       });
 
     return { ok: true, status: 'running' };
@@ -263,7 +384,7 @@ export class CaptureService {
     filePath: string,
     keep: boolean,
   ): Promise<boolean> {
-    if (stream) await new Promise<void>((res) => stream.end(() => res()));
+    if (stream && !stream.destroyed) await new Promise<void>((res) => { stream.end(() => res()); stream.once('error', () => res()); });
     if (keep) return true;
     try { await fsp.unlink(filePath); } catch { /* não existia */ }
     return false;

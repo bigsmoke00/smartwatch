@@ -14,6 +14,7 @@ import { apiFetch, Auth, handleUnauthorized } from '@/lib/api';
 import { LEVEL_COLOR, fmtTime, safeArray } from '@/lib/utils';
 import { Pause, Play, Search, RefreshCw, Wifi, WifiOff, Server as ServerIcon, Container as ContainerIcon, FileText, ScrollText, ChevronDown } from 'lucide-react';
 import { TimeRangePicker, DEFAULT_RANGE, TimeRange } from '@/components/ui/TimeRangePicker';
+import { wsBase } from '@/lib/endpoints';
 
 interface LogHit {
   id: string;
@@ -234,10 +235,10 @@ function LogsPageInner() {
       setWsStatus('offline');
       return;
     }
-    const wsBase = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:4000';
+    const wsUrl = wsBase();
     setWsStatus('connecting');
 
-    const s = io(`${wsBase}/ws/logs`, {
+    const s = io(`${wsUrl}/ws/logs`, {
       transports: ['websocket'],
       auth: { token: Auth.token() },
       reconnection: true,

@@ -5,6 +5,7 @@ import { io, Socket } from 'socket.io-client';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
+import { wsBase } from '@/lib/endpoints';
 
 interface Props {
   token: string;
@@ -46,8 +47,8 @@ export default function TerminalView({ token, sessionId, target = 'host', contai
     // sudo/usuário do SO já foram fixados no pedido/aprovação e o backend
     // os resolve a partir do banco — o cliente não tem como mudar isso
     // mandando outro payload aqui (era essa a brecha de escalonamento).
-    const wsBase = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:4000';
-    const s = io(`${wsBase}/ws/terminal`, {
+    const wsUrl = wsBase();
+    const s = io(`${wsUrl}/ws/terminal`, {
       transports: ['websocket'],
       auth: { token, sessionId },
     });

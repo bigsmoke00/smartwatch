@@ -1,8 +1,9 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import { apiBase } from '@/lib/endpoints';
 
-const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api';
+
 
 interface PubEndpoint {
   name: string; groupName: string | null; type: string;
@@ -21,7 +22,7 @@ export default function PublicStatusPage() {
     const t = new URLSearchParams(window.location.search).get('token') || '';
     setToken(t);
     const fetchit = () => {
-      fetch(`${API}/monitor/public/status?token=${encodeURIComponent(t)}`)
+      fetch(`${apiBase()}/monitor/public/status?token=${encodeURIComponent(t)}`)
         .then((r) => r.json())
         .then(setData)
         .catch(() => setData({ enabled: false }));

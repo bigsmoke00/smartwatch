@@ -11,6 +11,7 @@ import { PageHeader } from '@/components/ui/PageHeader';
 import { apiFetch, Auth } from '@/lib/api';
 import { ArrowLeft, Copy, Key, Trash2, Server as ServerIcon } from 'lucide-react';
 import { fmtTime, safeArray } from '@/lib/utils';
+import { apiBaseAbsolute } from '@/lib/endpoints';
 
 interface Detail {
   id: string;
@@ -57,8 +58,7 @@ export default function ServerDetail() {
 
   if (!detail) return <AppShell><div className="p-6">Carregando…</div></AppShell>;
 
-  const apiBase =
-    process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api';
+  const apiBase = apiBaseAbsolute();
 
   return (
     <AppShell>

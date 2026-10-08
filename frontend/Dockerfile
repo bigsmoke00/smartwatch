@@ -3,10 +3,10 @@ WORKDIR /app
 COPY package*.json ./
 RUN npm install
 COPY . .
-ARG NEXT_PUBLIC_API_URL
-ARG NEXT_PUBLIC_WS_URL
-ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
-ENV NEXT_PUBLIC_WS_URL=$NEXT_PUBLIC_WS_URL
+# Sem URLs no build: a imagem é genérica. O endereço da API/WebSocket é lido
+# QUANDO O CONTAINER SOBE (SMARTGARD_API_URL / NEXT_PUBLIC_API_URL do .env, ou o
+# próprio domínio se não houver nada) — ver lib/runtime-config.ts e /runtime-config.js.
+ENV NEXT_TELEMETRY_DISABLED=1
 RUN npm run build
 
 FROM node:20-alpine AS runner
@@ -27,8 +27,9 @@ COPY --from=builder --chown=nextjs:nextjs /app/public ./public
 USER nextjs
 EXPOSE 3000
 
-# Healthcheck básico (Next responde em "/" mesmo sem auth).
+ENV NEXT_TELEMETRY_DISABLED=1
+# /healthz também mostra a configuração efetiva (para onde o frontend aponta).
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-  CMD wget -qO- http://127.0.0.1:3000/ >/dev/null 2>&1 || exit 1
+  CMD wget -qO- http://127.0.0.1:3000/healthz >/dev/null 2>&1 || exit 1
 
 CMD ["node", "server.js"]

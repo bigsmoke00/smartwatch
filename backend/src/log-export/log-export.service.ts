@@ -68,6 +68,9 @@ export class LogExportService {
     const archive = archiver('zip', { zlib: { level: 9 } });
     res.setHeader('Content-Type', 'application/zip');
     res.setHeader('Content-Disposition', `attachment; filename="logs-${serverId.slice(0, 8)}-${Date.now()}.zip"`);
+    // Erro do archiver sem listener derrubaria o processo inteiro: encerra só este download.
+    archive.on('error', (e: any) => { try { res.destroy(e); } catch { /* ignore */ } });
+    archive.on('warning', () => undefined);
     archive.pipe(res);
 
     // Lista containers conhecidos

@@ -1,6 +1,8 @@
 'use client';
 
-const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api';
+import { apiBase } from './endpoints';
+
+
 
 export class ApiError extends Error {
   constructor(public status: number, public payload: any) {
@@ -63,7 +65,7 @@ async function refresh(): Promise<boolean> {
     const r = getRefresh();
     if (!r) return false;
     try {
-      const res = await fetch(`${API}/auth/refresh`, {
+      const res = await fetch(`${apiBase()}/auth/refresh`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ refreshToken: r }),
@@ -115,7 +117,7 @@ export async function apiFetch<T = any>(
 
   let res: Response;
   try {
-    res = await fetch(`${API}${path}`, { ...init, headers });
+    res = await fetch(`${apiBase()}${path}`, { ...init, headers });
   } catch (e) {
     // Falha de rede — propaga sem redirecionar
     throw new ApiError(0, { message: (e as Error).message });

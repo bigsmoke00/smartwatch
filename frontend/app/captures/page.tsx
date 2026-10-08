@@ -15,6 +15,7 @@ import { fmtTime, safeArray } from '@/lib/utils';
 import { PcapStreamParser, ParsedPacket } from '@/lib/pcap';
 import CaptureLiveView from '@/components/CaptureLiveView';
 import { Radar } from 'lucide-react';
+import { apiBase, wsBase } from '@/lib/endpoints';
 
 interface ServerRow { id: string; name: string }
 type Kind = 'sip' | 'tcpdump' | 'ping';
@@ -26,12 +27,34 @@ interface Session {
   requested_by_email?: string; approved_by_email?: string;
   file_size_bytes: number | null; packet_count: number | null;
   result_text: string | null; error_text: string | null; created_at: string;
+  started_at?: string | null; finished_at?: string | null;
   pcap_stored?: boolean;
+  pcap_state?: 'stored' | 'missing' | 'expired' | 'not_saved';
+  live?: boolean;
+}
+
+const STATUS_LABEL: Record<string, string> = {
+  pending: 'aguardando', approved: 'aprovada', running: 'em execução', completed: 'concluída',
+  rejected: 'recusada', failed: 'falhou', expired: 'expirada',
+};
+
+const PCAP_STATE_TEXT: Record<string, string> = {
+  stored: '.pcap salvo (7 dias), dá pra ver e baixar',
+  missing: 'o .pcap não foi encontrado no disco do servidor (volume de capturas recriado?)',
+  expired: '.pcap removido pela retenção de 7 dias',
+  not_saved: 'o .pcap não foi salvo',
+};
+
+function remaining(s: { started_at?: string | null; duration_seconds: number }): string | null {
+  if (!s.started_at) return null;
+  const left = Math.round((new Date(s.started_at).getTime() + s.duration_seconds * 1000 - Date.now()) / 1000);
+  if (left <= 0) return 'finalizando…';
+  return left >= 60 ? `restam ${Math.floor(left / 60)}min ${left % 60}s` : `restam ${left}s`;
 }
 
 // Base da API pra baixar/re-carregar o .pcap persistido (fetch cru com o token,
 // porque é download binário, não JSON).
-const CAPTURES_API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api';
+
 
 const STATUS_TONE: Record<string, 'default' | 'accent' | 'success' | 'warn' | 'danger' | 'info'> = {
   pending: 'warn',
@@ -229,7 +252,6 @@ export default function CapturesPage() {
         loadSessions();
       } else {
         loadSessions();
-        alert('Pedido registrado — um aprovador vai revisar.');
       }
     } catch (e) {
       alert(e instanceof ApiError ? e.message : 'erro ao registrar pedido');
@@ -241,14 +263,17 @@ export default function CapturesPage() {
    * É essencial chamar isso ANTES de aprovar, senão os primeiros chunks do
    * stream se perdem — a captura é só em tempo real, sem replay/sem disco.
    */
-  function watchSession(id: string, kind: Kind) {
+  async function watchSession(id: string, kind: Kind) {
     if (socketsRef.current.has(id)) return;
+    // Renova o access token antes de abrir o WS (o handshake não passa pelo refresh do apiFetch;
+    // com token expirado a conexão era recusada e a tela ficava em "conectando..." para sempre).
+    await apiFetch('/auth/me').catch(() => {});
     chunksRef.current.set(id, []);
     if (kind !== 'ping') parsersRef.current.set(id, new PcapStreamParser());
     setWatch((w) => ({ ...w, [id]: { kind, connected: false, done: false, bytesReceived: 0, packets: [] } }));
 
-    const wsBase = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:4000';
-    const s = io(`${wsBase}/ws/captures`, {
+    const wsUrl = wsBase();
+    const s = io(`${wsUrl}/ws/captures`, {
       transports: ['websocket'],
       auth: { token: Auth.token() ?? '', sessionId: id },
     });
@@ -273,7 +298,7 @@ export default function CapturesPage() {
       // acumulador acima e só entram no state no flush periódico.
       setWatch((w) => ({
         ...w,
-        [id]: { ...w[id], bytesReceived: (w[id]?.bytesReceived ?? 0) + b64.length },
+        [id]: { ...w[id], bytesReceived: (w[id]?.bytesReceived ?? 0) + Math.floor((b64.length * 3) / 4) },
       }));
     });
     s.on('done', (meta: { ok: boolean; packetCount?: number; fileSizeBytes?: number; resultText?: string; error?: string }) => {
@@ -304,6 +329,12 @@ export default function CapturesPage() {
     s.on('error', (e: any) => {
       setWatch((w) => ({ ...w, [id]: { ...w[id], connected: false, error: e?.message || 'erro de conexão' } }));
     });
+    s.on('connect_error', (e: any) => {
+      setWatch((w) => ({
+        ...w,
+        [id]: { ...w[id], connected: false, error: `não foi possível conectar ao stream ao vivo (${e?.message || 'WebSocket bloqueado?'}). A captura continua e o .pcap é salvo no servidor.` },
+      }));
+    });
     s.on('disconnect', () => {
       setWatch((w) => (w[id] ? { ...w, [id]: { ...w[id], connected: false } } : w));
     });
@@ -328,7 +359,7 @@ export default function CapturesPage() {
   // Em 401 (token expirado) refresca e tenta de novo — como o apiFetch faz —
   // porque este fetch manual não passa pelo interceptor de refresh.
   async function fetchStoredPcap(id: string, retried = false): Promise<Blob | null> {
-    const res = await fetch(`${CAPTURES_API}/captures/${id}/pcap`, {
+    const res = await fetch(`${apiBase()}/captures/${id}/pcap`, {
       headers: { Authorization: `Bearer ${Auth.token() ?? ''}` },
     });
     if (res.status === 401 && !retried) {
@@ -349,7 +380,7 @@ export default function CapturesPage() {
     try {
       const { token } = await apiFetch<{ token: string }>(`/captures/${id}/pcap/token`);
       const a = document.createElement('a');
-      a.href = `${CAPTURES_API}/captures/${id}/pcap/download?dt=${encodeURIComponent(token)}`;
+      a.href = `${apiBase()}/captures/${id}/pcap/download?dt=${encodeURIComponent(token)}`;
       a.download = `capture-${id.slice(0, 8)}.pcap`;
       document.body.appendChild(a);
       a.click();
@@ -486,7 +517,7 @@ export default function CapturesPage() {
                 </div>
 
                 <div className="md:col-span-2">
-                  <Button onClick={submit}>Enviar pedido para aprovação</Button>
+                  <Button onClick={submit}>Iniciar captura</Button>
                 </div>
               </div>
             )}
@@ -533,7 +564,7 @@ export default function CapturesPage() {
                     <td className="px-3 py-1.5 text-xs">{s.requested_by_email}</td>
                     <td className="px-3 py-1.5 text-xs text-muted max-w-xs truncate" title={s.reason}>{s.reason}</td>
                     <td className="px-3 py-1.5">
-                      <Badge tone={STATUS_TONE[s.status] ?? 'default'}>{s.status}</Badge>
+                      <Badge tone={STATUS_TONE[s.status] ?? 'default'}>{STATUS_LABEL[s.status] ?? s.status}</Badge>
 
                       {s.status === 'running' && w && !w.done && (
                         <div className="mt-1 flex flex-wrap items-center gap-2">
@@ -543,7 +574,10 @@ export default function CapturesPage() {
                                 <span className="w-1.5 h-1.5 rounded-full bg-current animate-pulseSoft shrink-0" />
                                 capturando
                               </Badge>
-                              <span className="text-[10px] text-accent">assistindo ao vivo — {fmtBytes(w.bytesReceived)} recebidos</span>
+                              <span className="text-[10px] text-accent">
+                                assistindo ao vivo · {w.bytesReceived ? `${fmtBytes(w.bytesReceived)} recebidos` : 'aguardando pacotes que casem com o filtro…'}
+                                {remaining(s) ? ` · ${remaining(s)}` : ''}
+                              </span>
                             </>
                           ) : (
                             <span className="text-[10px] text-muted">conectando ao stream...</span>
@@ -551,11 +585,10 @@ export default function CapturesPage() {
                         </div>
                       )}
                       {s.status === 'running' && !w && (
-                        <div className="text-[10px] text-muted mt-0.5">em execução — abra "assistir" pra acompanhar (sem replay depois)</div>
-                      )}
-                      {s.status === 'pending' && w && !w.done && (
                         <div className="text-[10px] text-muted mt-0.5">
-                          {w.connected ? 'conectado — aguardando aprovação para iniciar a captura...' : 'conectando ao stream...'}
+                          {s.live === false
+                            ? 'a captura não está mais em andamento no servidor; use "parar" para encerrar o registro'
+                            : `em execução${remaining(s) ? ` · ${remaining(s)}` : ''}. Abra "assistir" para ver ao vivo; o .pcap fica salvo para baixar depois`}
                         </div>
                       )}
 
@@ -577,7 +610,7 @@ export default function CapturesPage() {
 
                       {s.status === 'completed' && s.kind !== 'ping' && !w && (
                         <div className="text-[10px] text-muted mt-0.5">
-                          {fmtBytes(s.file_size_bytes)} · {s.packet_count ?? '?'} pacotes — {s.pcap_stored ? '.pcap salvo (7 dias) — dá pra ver e baixar' : 'conteúdo não disponível (expirado ou falhou ao salvar)'}
+                          {fmtBytes(s.file_size_bytes)} · {s.packet_count ?? '?'} pacotes · {PCAP_STATE_TEXT[s.pcap_state ?? (s.pcap_stored ? 'stored' : 'not_saved')]}
                         </div>
                       )}
                       {s.status === 'completed' && s.kind === 'ping' && s.result_text && !w && (
@@ -586,7 +619,7 @@ export default function CapturesPage() {
                       {s.error_text && !w && <div className="text-[10px] text-danger mt-0.5">{s.error_text}</div>}
                     </td>
                     <td className="px-3 py-1.5 text-right whitespace-nowrap space-x-2">
-                      {(s.status === 'pending' || s.status === 'running') && !w && s.kind !== 'ping' && (
+                      {s.status === 'running' && s.live !== false && !w && s.kind !== 'ping' && (
                         <button onClick={() => watchSession(s.id, s.kind)} className="text-accent hover:underline text-xs">assistir</button>
                       )}
                       {/* Parar manualmente uma captura em andamento (sip/tcpdump). */}
@@ -601,11 +634,11 @@ export default function CapturesPage() {
                         </button>
                       )}
                       {/* Persistida mas não está em memória: carrega do disco ao clicar. */}
-                      {s.status === 'completed' && s.kind !== 'ping' && s.pcap_stored && (w?.packets?.length ?? 0) === 0 && (
+                      {s.status === 'completed' && s.kind !== 'ping' && s.pcap_stored && s.pcap_state !== 'missing' && (w?.packets?.length ?? 0) === 0 && (
                         <button onClick={() => viewStoredCapture(s.id, s.kind)} className="text-accent hover:underline text-xs">ver captura</button>
                       )}
                       {/* Download: prioriza o arquivo salvo no servidor (vale após reload); senão o blob em memória. */}
-                      {s.status === 'completed' && s.kind !== 'ping' && s.pcap_stored ? (
+                      {(s.status === 'completed' || s.status === 'failed') && s.kind !== 'ping' && s.pcap_stored && s.pcap_state !== 'missing' ? (
                         <button onClick={() => downloadStoredPcap(s.id)} className="text-accent hover:underline text-xs">baixar .pcap</button>
                       ) : w?.done && w.ok && w.blobUrl ? (
                         <button onClick={() => saveCapture(s.id, w.blobUrl!)} className="text-accent hover:underline text-xs">salvar .pcap</button>

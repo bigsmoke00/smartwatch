@@ -13,13 +13,14 @@ import { ServerPicker } from '@/components/ServerPicker';
 import { apiFetch, Auth, handleUnauthorized } from '@/lib/api';
 import { cn, fmtTime, safeArray } from '@/lib/utils';
 import { Download, Package, Calendar, Trash2 } from 'lucide-react';
+import { apiBase } from '@/lib/endpoints';
 
 interface Schedule {
   id: string; name: string; format: string; scheduleCron: string;
   destination: any; enabled: boolean; lastRunAt?: string; lastStatus?: string;
 }
 
-const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api';
+
 
 export default function ExportsPage() {
   const [schedules, setSchedules] = useState<Schedule[]>([]);
@@ -55,7 +56,7 @@ export default function ExportsPage() {
     if (opts.source === 'container' && opts.containerName) qp.set('containerName', opts.containerName);
     if (opts.source === 'host' && opts.fileName) qp.set('fileName', opts.fileName);
     qp.set('from', opts.from); qp.set('to', opts.to); qp.set('format', opts.format);
-    const res = await authedFetch(`${API}/logs/export?${qp}`);
+    const res = await authedFetch(`${apiBase()}/logs/export?${qp}`);
     if (!res.ok) { alert(`Falha (${res.status})`); return; }
     triggerDownload(await res.blob(), filenameFromHeader(res.headers.get('content-disposition')));
   }
@@ -63,7 +64,7 @@ export default function ExportsPage() {
   async function downloadBundle(serverId: string, from: string, to: string) {
     const qp = new URLSearchParams();
     if (from) qp.set('from', from); if (to) qp.set('to', to);
-    const res = await authedFetch(`${API}/servers/${serverId}/logs/bundle?${qp}`);
+    const res = await authedFetch(`${apiBase()}/servers/${serverId}/logs/bundle?${qp}`);
     if (!res.ok) { alert(`Falha (${res.status})`); return; }
     triggerDownload(await res.blob(), `logs-${serverId.slice(0, 8)}.zip`);
   }

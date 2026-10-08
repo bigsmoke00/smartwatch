@@ -6,3 +6,15 @@ dist/
 .DS_Store
 coverage/
 *.tsbuildinfo
+
+# segredos e dados locais (nunca versionar)
+.env.*
+!.env.example
+capturas_sip/
+*.pcap
+*.pem
+*.key
+
+# lixo de editor/sistema de arquivos
+.fuse_hidden*
+*.swp

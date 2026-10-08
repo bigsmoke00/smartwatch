@@ -91,7 +91,9 @@ export class CaptureGateway implements OnGatewayConnection, OnGatewayDisconnect 
       const sess = r.rows[0];
 
       const perms = await this.roles.permissionsOf(payload.sub);
-      const canWatch = sess.requested_by === payload.sub || perms.has('capture:approve');
+      // capture:approve deixou de existir (migration 026): exigir essa permissão impedia
+      // QUALQUER pessoa (inclusive admin) de acompanhar captura iniciada por outro usuário.
+      const canWatch = sess.requested_by === payload.sub || perms.has('capture:request');
       if (!canWatch) throw new Error('sem permissão para acompanhar esta sessão');
 
       (client.data as any).sessionId = sessionId;

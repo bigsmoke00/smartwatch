@@ -11,6 +11,7 @@ import { ServerPicker } from '@/components/ServerPicker';
 import { apiFetch, ApiError, Auth } from '@/lib/api';
 import { type TimeRange } from '@/components/ui/TimeRangePicker';
 import { PhoneCall, Search, Copy, Download, Eraser, PhoneOutgoing, Info, Maximize2, Minimize2, RefreshCw } from 'lucide-react';
+import { wsBase } from '@/lib/endpoints';
 
 /**
  * Página /unity — scan SOB DEMANDA dos arquivos de log do Unity/FreeSWITCH
@@ -192,7 +193,7 @@ interface ScanState {
   filesScanned?: number;
 }
 
-const WS_BASE = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:4000';
+
 
 export default function UnityPage() {
   const [serverId, setServerId] = useState('');
@@ -285,7 +286,7 @@ export default function UnityPage() {
   function watchCallsSession(sessionId: string) {
     callsSessionRef.current = sessionId;
     setCallsScan({ sessionId, connected: false, done: false });
-    const s = io(`${WS_BASE}/ws/logscan`, {
+    const s = io(`${wsBase()}/ws/logscan`, {
       transports: ['websocket'],
       auth: { token: Auth.token() ?? '', sessionId },
     });
@@ -345,7 +346,7 @@ export default function UnityPage() {
   function watchSearchSession(sessionId: string) {
     searchSessionRef.current = sessionId;
     setSearchScan({ sessionId, connected: false, done: false });
-    const s = io(`${WS_BASE}/ws/logscan`, {
+    const s = io(`${wsBase()}/ws/logscan`, {
       transports: ['websocket'],
       auth: { token: Auth.token() ?? '', sessionId },
     });

@@ -58,8 +58,20 @@ async function bootstrap() {
   app.setGlobalPrefix('api');
   app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
   app.use(compression());
+  // CORS só importa quando o frontend fica em OUTRO domínio; atrás do nginx no mesmo
+  // domínio (o padrão) não há requisição cross-origin. Loga a configuração efetiva.
+  const corsOrigins = (process.env.CORS_ORIGIN ?? '').split(',').map((o) => o.trim()).filter(Boolean);
+  const bootLog = new Logger('Config');
+  if (!corsOrigins.length) {
+    bootLog.warn('CORS_ORIGIN não definido: só o mesmo domínio (e http://localhost:3000) acessam a API. Defina CORS_ORIGIN se o frontend estiver em outro domínio.');
+  } else {
+    bootLog.log(`CORS liberado para: ${corsOrigins.join(', ')}`);
+    if (process.env.NODE_ENV === 'production' && corsOrigins.some((o) => /localhost|127\.0\.0\.1/.test(o))) {
+      bootLog.warn('CORS_ORIGIN contém localhost em produção: confira o .env');
+    }
+  }
   app.enableCors({
-    origin: process.env.CORS_ORIGIN?.split(',') ?? ['http://localhost:3000'],
+    origin: corsOrigins.length ? corsOrigins : ['http://localhost:3000'],
     credentials: true,
   });
   app.useGlobalPipes(
